@@ -127,3 +127,17 @@ Uses UIE contracts for patient intelligence, clinical research, treatment resear
 pip install -e '.[dev]'
 pytest -q
 ```
+
+
+## Human-controlled self-improvement governance
+
+UIE is designed so that the intelligence layer may **propose** algorithm or policy improvements, but it cannot authorize or activate them itself.
+
+Activation is fail-closed behind an Ed25519 human authorization gate. The engine verifies a signature over the exact change proposal, including benchmark, security, and regression results. The private signing key remains outside the engine and under the human operator's control.
+
+Configure:
+- `UIE_GOVERNANCE_PUBLIC_KEY`: base64-encoded Ed25519 public key used only for verification.
+
+The governance boundary itself is not self-modifiable. Proposed changes should be sandboxed, benchmarked, security-tested, regression-tested, signed by the human operator, versioned, and auditable before activation.
+
+**Important:** never place the private signing key in the repository, mobile app, or AI runtime.
