@@ -1,4 +1,4 @@
-"""Minimal orchestration kernel for the Universal Intelligence Engine."""
+"""Orchestration kernel for the Universal Intelligence Engine."""
 
 from .contracts import (
     Evaluator,
@@ -8,10 +8,11 @@ from .contracts import (
     LearningStore,
     ReasoningProvider,
 )
+from .knowledge import rank_evidence
 
 
 class UniversalIntelligenceEngine:
-    """Coordinate knowledge retrieval, reasoning, evaluation, and feedback."""
+    """Coordinate retrieval, evidence fusion, reasoning, evaluation, and feedback."""
 
     def __init__(
         self,
@@ -26,7 +27,8 @@ class UniversalIntelligenceEngine:
         self.learning_store = learning_store
 
     def run(self, request: IntelligenceRequest) -> IntelligenceResponse:
-        evidence = tuple(self.knowledge.search(request))
+        raw_evidence = tuple(self.knowledge.search(request))
+        evidence = tuple(rank_evidence(raw_evidence))
         response = self.reasoning.reason(request, evidence)
 
         evaluation = self.evaluator.evaluate(response) if self.evaluator else None
@@ -42,11 +44,11 @@ class UniversalIntelligenceEngine:
                 }
             )
 
-        if evaluation is None:
-            return response
-
         metadata = dict(response.metadata)
-        metadata["evaluation"] = evaluation
+        metadata["evidence_count"] = len(evidence)
+        metadata["raw_evidence_count"] = len(raw_evidence)
+        if evaluation is not None:
+            metadata["evaluation"] = evaluation
 
         return IntelligenceResponse(
             answer=response.answer,
