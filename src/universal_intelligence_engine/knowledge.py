@@ -1,12 +1,30 @@
-"""Knowledge-provider helpers, evidence fusion, and deterministic ranking."""
+"""Knowledge-provider helpers, multi-source fusion, and deterministic ranking."""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from typing import Any
 
-from .contracts import Evidence
+from .contracts import Evidence, IntelligenceRequest, KnowledgeProvider
 from .provenance import ProvenanceRecord
+
+
+class CompositeKnowledgeProvider:
+    """Query multiple independent providers without coupling the engine to one vendor."""
+
+    def __init__(self, providers: Sequence[KnowledgeProvider]):
+        self.providers = tuple(providers)
+
+    def search(self, request: IntelligenceRequest) -> list[Evidence]:
+        results: list[Evidence] = []
+        for provider in self.providers:
+            try:
+                results.extend(provider.search(request))
+            except Exception:
+                # One provider outage must not take down the whole research pass.
+                continue
+        return rank_evidence(results)
 
 
 def _text_key(value: str) -> str:
@@ -14,7 +32,7 @@ def _text_key(value: str) -> str:
 
 
 def _provenance(item: Evidence) -> ProvenanceRecord:
-    raw = item.metadata.get("provenance", {}) if item.metadata else {}
+    raw: Any = item.metadata.get("provenance", {}) if item.metadata else {}
     if isinstance(raw, ProvenanceRecord):
         return raw
     if isinstance(raw, dict):
@@ -41,8 +59,16 @@ def evidence_score(item: Evidence) -> float:
     provenance = _provenance(item)
     trust = provenance.trust_score()
     freshness = provenance.freshness_hours
-    freshness_score = 0.5 if freshness is None else max(0.0, min(1.0, 1.0 / (1.0 + freshness / 168.0)))
-    explicit_confidence = 0.5 if item.confidence is None else max(0.0, min(1.0, float(item.confidence)))
+    freshness_score = (
+        0.5
+        if freshness is None
+        else max(0.0, min(1.0, 1.0 / (1.0 + freshness / 168.0)))
+    )
+    explicit_confidence = (
+        0.5
+        if item.confidence is None
+        else max(0.0, min(1.0, float(item.confidence)))
+    )
     return round(
         (trust * 0.55) + (explicit_confidence * 0.30) + (freshness_score * 0.15),
         6,
