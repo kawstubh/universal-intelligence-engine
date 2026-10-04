@@ -1,5 +1,6 @@
 """Public API for the Universal Intelligence Engine."""
 
+from .algorithm import AdaptiveReasoningCore
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
@@ -13,6 +14,7 @@ from .service import IntelligenceService
 __version__ = "0.3.0"
 
 __all__ = [
+    "AdaptiveReasoningCore",
     "BasicResponseEvaluator",
     "BraveSearchProvider",
     "CompositeKnowledgeProvider",
