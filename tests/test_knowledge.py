@@ -59,3 +59,23 @@ def test_engine_reasons_over_ranked_evidence():
 
     assert result.answer == "strong"
     assert result.metadata["evidence_count"] == 2
+
+
+class FailingProvider:
+    def search(self, request):
+        raise RuntimeError("temporary provider outage")
+
+
+class HealthyProvider:
+    def search(self, request):
+        return [make_evidence("healthy", authority=0.8, confidence=0.8)]
+
+
+def test_composite_provider_survives_one_provider_failure():
+    from universal_intelligence_engine.knowledge import CompositeKnowledgeProvider
+
+    provider = CompositeKnowledgeProvider([FailingProvider(), HealthyProvider()])
+
+    result = provider.search(IntelligenceRequest(goal="research"))
+
+    assert [item.source for item in result] == ["healthy"]
