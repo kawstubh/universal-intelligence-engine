@@ -1,70 +1,129 @@
 # Universal Intelligence Engine
 
-A domain-agnostic intelligence engine for research, reasoning, knowledge, agents, learning, tools, and real-world applications.
+A domain-agnostic AI intelligence engine for research, reasoning, knowledge, agents, learning, tools, and real-world applications.
 
-## Vision
-The Universal Intelligence Engine (UIE) is a reusable intelligence layer that can power applications across industries rather than being tied to one product or vertical.
+## Current architecture
 
-## Core capabilities
-- Knowledge acquisition and research orchestration
-- Source provenance and freshness tracking
-- Reasoning and planning interfaces
-- Tool and agent orchestration
-- Multilingual and regional intelligence
-- Controlled memory and outcome-based learning
-- Evaluation and quality control
-- Domain adapters with explicit permissions and policies
-
-## Architecture
 ```
-Universal Intelligence Engine
-        |
-   +----+----+----------------+
-   |         |                |
-Knowledge  Reasoning        Memory
-   |         |                |
-Research   Planning        Context
-Sources    Analysis        Learning
-Evidence   Agents          Feedback
-   +---------+----------------+
-             |
-       Tool Orchestration
-             |
-     Domain Applications
-       /        |        \
-  CueScene    Dental    Future Apps
+Application
+    |
+    v
+UIE HTTP API
+    |
+    +--> Knowledge providers --> Evidence
+    |
+    +--> Evidence fusion / provenance / ranking
+    |
+    +--> Reasoning provider
+    |
+    +--> Evaluation
+    |
+    +--> Controlled learning memory
+    |
+    v
+IntelligenceResponse
 ```
 
-## Design principles
-1. Domain agnostic
-2. Provider agnostic
-3. Evidence aware
-4. Human controlled learning
-5. Privacy by design
-6. Multilingual by architecture
-7. Composable application adapters
+The same engine can serve CueScene, Dr. Pranali Dental, and future domain applications.
 
-## Initial integration targets
+## Live providers
+
+The first production adapters are intentionally replaceable:
+
+- **BraveSearchProvider**: live web research using `BRAVE_SEARCH_API_KEY`
+- **OpenAIResponsesReasoningProvider**: reasoning using `OPENAI_API_KEY` and `OPENAI_MODEL`
+
+No credentials are stored in source control.
+
+## HTTP API
+
+Install:
+
+```bash
+pip install .
+```
+
+Run locally:
+
+```bash
+uvicorn universal_intelligence_engine.api:app --reload --port 8000
+```
+
+Health:
+
+```
+GET /health
+```
+
+Intelligence:
+
+```
+POST /v1/intelligence/run
+Authorization: Bearer <UIE_API_KEY>
+Content-Type: application/json
+```
+
+Example body:
+
+```json
+{
+  "goal": "Find the latest dental composite materials available in Maharashtra",
+  "language": "en",
+  "locale": "IN-MH",
+  "context": {
+    "domain": "dental"
+  },
+  "constraints": {
+    "require_sources": true
+  }
+}
+```
+
+The response contains the answer, ranked evidence, confidence, actions, provider metadata, evaluation, and evidence counts.
+
+## Configuration
+
+Copy `.env.example` and configure:
+
+- `OPENAI_API_KEY`
+- `BRAVE_SEARCH_API_KEY`
+- `UIE_API_KEY`
+- `OPENAI_MODEL` (defaults to `gpt-6-luna`)
+- `UIE_MEMORY_PATH`
+
+The API fails closed for intelligence requests when `UIE_API_KEY` is missing.
+
+## Learning and evaluation
+
+Learning is append-only and controlled. The engine does not rewrite its own source code or silently change policy.
+
+Every completed request can record:
+
+- capability
+- outcome
+- reward/score
+- goal
+- locale/language
+- evidence count
+- evaluation result
+
+The baseline evaluator checks response completeness and evidence grounding. This is a starting point for production evaluation, not a claim of factual correctness.
+
+## Deployment
+
+A Render blueprint is included in `render.yaml`. Configure the three secret environment variables in Render; do not commit them.
+
+## Domain adapters
+
 ### CueScene
-Global research, truth/provenance, creative planning, production orchestration, audience intelligence, and learning.
+Uses UIE for global research, evidence, provenance, and intelligence orchestration before its video-generation pipeline.
 
 ### Dr. Pranali Dental
-Doctor-facing evidence retrieval, patient intelligence, treatment research, product/supplier intelligence, practice analytics, and regional intelligence.
+Uses UIE contracts for patient intelligence, clinical research, treatment research, product intelligence, supplier intelligence, practice intelligence, and referral intelligence. Clinical decisions remain under clinician control.
 
-## Roadmap
-- [x] Repository initialized
-- [ ] Core engine contracts
-- [ ] Knowledge and provenance layer
-- [ ] Reasoning/planning interface
-- [ ] Tool registry
-- [ ] Memory and controlled learning
-- [ ] Evaluation framework
-- [ ] Locale and regional intelligence
-- [ ] Public API
-- [ ] CueScene adapter
-- [ ] Dental adapter
-- [ ] Security and permissions
-- [ ] Production deployment
+## Development
 
-## Status
-Early development. Production readiness and safety controls will be validated incrementally.
+```bash
+pip install -e '.[dev]'
+pytest -q
+```
