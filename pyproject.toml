@@ -1,12 +1,13 @@
 [project]
 name = "universal-intelligence-engine"
-version = "0.3.0"
+version = "0.4.0"
 description = "Domain-agnostic intelligence engine for research, reasoning, tools, agents, memory, and learning."
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
+    "cryptography>=43.0",
 ]
 
 [build-system]
