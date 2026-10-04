@@ -34,13 +34,18 @@ class UniversalIntelligenceEngine:
         evaluation = self.evaluator.evaluate(response) if self.evaluator else None
 
         if self.learning_store is not None:
+            evaluation_map = dict(evaluation or {})
+            reward = float(evaluation_map.get("score", 0.0) or 0.0)
             self.learning_store.record(
                 {
+                    "capability": request.context.get("capability", "intelligence"),
+                    "outcome": "passed" if evaluation_map.get("passed") else "completed",
+                    "reward": reward,
                     "goal": request.goal,
                     "locale": request.locale,
                     "language": request.language,
                     "evidence_count": len(evidence),
-                    "evaluation": evaluation or {},
+                    "evaluation": evaluation_map,
                 }
             )
 
