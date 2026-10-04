@@ -2,6 +2,8 @@
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from .engine import UniversalIntelligenceEngine
+from .dental import DENTAL_POLICY, dental_policy, dental_request
+from .dental_care import CareDraft, ReferralDraft, draft_care_pathway, draft_referral
 from .evaluation import BasicResponseEvaluator
 from .knowledge import CompositeKnowledgeProvider, deduplicate_evidence, rank_evidence
 from .locale import LocaleContext, resolve_locale
