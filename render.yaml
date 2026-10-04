@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: universal-intelligence-engine
+    runtime: python
+    buildCommand: pip install .
+    startCommand: uvicorn universal_intelligence_engine.api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: BRAVE_SEARCH_API_KEY
+        sync: false
+      - key: UIE_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-6-luna
+      - key: UIE_MEMORY_PATH
+        value: /var/data/learning.jsonl
+    disk:
+      name: uie-memory
+      mountPath: /var/data
+      sizeGB: 1
