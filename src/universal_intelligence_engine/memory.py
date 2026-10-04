@@ -4,10 +4,10 @@ The engine learns from explicit outcomes and feedback. It does not rewrite
 source code or silently change application policy.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -22,10 +22,23 @@ class LearningMemory:
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def record(self, event: LearningEvent) -> None:
+    def record(self, event: LearningEvent | Mapping[str, Any]) -> None:
+        """Persist a normalized learning event without allowing code mutation."""
+        if isinstance(event, LearningEvent):
+            normalized = asdict(event)
+        else:
+            evaluation = event.get("evaluation", {})
+            if not isinstance(evaluation, Mapping):
+                evaluation = {}
+            normalized = {
+                "capability": str(event.get("capability") or event.get("goal") or "unknown"),
+                "outcome": str(event.get("outcome") or ("success" if evaluation.get("passed") else "completed")),
+                "reward": float(event.get("reward", evaluation.get("score", 0.0)) or 0.0),
+                "context": dict(event),
+            }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(asdict(event), ensure_ascii=False) + "\n")
+            handle.write(json.dumps(normalized, ensure_ascii=False) + "\n")
 
     def summarize(self) -> dict[str, Any]:
         totals: dict[str, dict[str, float]] = {}
