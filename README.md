@@ -53,18 +53,22 @@ Doctor-facing evidence retrieval, patient intelligence, treatment research, prod
 
 ## Roadmap
 - [x] Repository initialized
-- [ ] Core engine contracts
-- [ ] Knowledge and provenance layer
-- [ ] Reasoning/planning interface
-- [ ] Tool registry
-- [ ] Memory and controlled learning
-- [ ] Evaluation framework
-- [ ] Locale and regional intelligence
+- [x] Core engine contracts
+- [x] Knowledge and provenance layer
+- [x] Reasoning/planning interface
+- [x] Tool registry
+- [x] Memory and controlled learning
+- [x] Evaluation framework
+- [x] Locale and regional intelligence
 - [ ] Public API
 - [ ] CueScene adapter
-- [ ] Dental adapter
-- [ ] Security and permissions
+- [x] Dental adapter
+- [x] Security and permissions
 - [ ] Production deployment
 
 ## Status
 Early development. Production readiness and safety controls will be validated incrementally.
+
+
+## Dental safety boundary
+The Dental adapter is intentionally scoped by policy. Only explicitly permitted dental context domains are passed into the engine; blocked or unknown domains are removed. Consequential dental actions are returned with a human-approval requirement. The engine does not diagnose, prescribe, order care, or choose referrals autonomously.
