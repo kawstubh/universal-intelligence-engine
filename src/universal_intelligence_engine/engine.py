@@ -3,16 +3,18 @@
 from .algorithm import AdaptiveReasoningCore
 from .contracts import Evaluator, IntelligenceRequest, IntelligenceResponse, KnowledgeProvider, LearningStore, ReasoningProvider
 from .knowledge import rank_evidence
+from .reasoning import NativeReasoningProvider
 
 
 class UniversalIntelligenceEngine:
     """Run UIE's native cognitive-control algorithm around replaceable providers."""
 
-    def __init__(self, knowledge: KnowledgeProvider, reasoning: ReasoningProvider,
+    def __init__(self, knowledge: KnowledgeProvider, reasoning: ReasoningProvider | None = None,
                  evaluator: Evaluator | None = None, learning_store: LearningStore | None = None,
                  algorithm: AdaptiveReasoningCore | None = None) -> None:
         self.knowledge = knowledge
-        self.reasoning = reasoning
+        # Native reasoning is the fail-safe baseline; external providers are optional accelerators.
+        self.reasoning = reasoning or NativeReasoningProvider()
         self.evaluator = evaluator
         self.learning_store = learning_store
         self.algorithm = algorithm or AdaptiveReasoningCore()
