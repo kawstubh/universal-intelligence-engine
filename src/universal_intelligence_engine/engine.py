@@ -33,7 +33,7 @@ class UniversalIntelligenceEngine:
                 "outcome": "passed" if evaluation_map.get("passed") else "completed",
                 "reward": reward, "goal": request.goal, "locale": request.locale,
                 "language": request.language, "evidence_count": len(evidence),
-                "evaluation": evaluation_map, "algorithm": "ARC", "algorithm_version": "0.1.0",
+                "evaluation": evaluation_map, "algorithm": "ARC", "algorithm_version": "0.2.0",
                 "decision": decision.action, "decision_confidence": decision.confidence,
                 "decision_signals": decision.signals,
             })
@@ -43,7 +43,7 @@ class UniversalIntelligenceEngine:
             "evidence_count": len(evidence),
             "raw_evidence_count": len(raw_evidence),
             "algorithm": "ARC",
-            "algorithm_version": "0.1.0",
+            "algorithm_version": "0.2.0",
             "decision": decision.action,
             "decision_confidence": decision.confidence,
             "decision_signals": decision.signals,
