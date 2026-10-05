@@ -61,3 +61,94 @@ class UniversalIntelligenceEngine:
             confidence=response.confidence if response.confidence is not None else decision.confidence,
             metadata=metadata,
         )
+
+    def run_autonomous(
+        self,
+        request: IntelligenceRequest,
+        *,
+        max_iterations: int = 3,
+        target_confidence: float = 0.72,
+    ) -> IntelligenceResponse:
+        """Run a bounded observe→reason→verify→replan loop.
+
+        The control layer remains deterministic and bounded: each iteration
+        records observations, low-confidence results trigger another evidence
+        pass, and the run stops at a confidence target or iteration budget.
+        """
+        budget = max(1, min(int(max_iterations), 8))
+        target = max(0.0, min(float(target_confidence), 1.0))
+        current = request
+        trajectory: list[dict[str, object]] = []
+        best: IntelligenceResponse | None = None
+
+        for iteration in range(1, budget + 1):
+            try:
+                result = self.run(current)
+            except Exception as exc:
+                trajectory.append({
+                    "iteration": iteration,
+                    "status": "failed",
+                    "error": str(exc),
+                    "replanned": iteration < budget,
+                })
+                if best is not None:
+                    metadata = dict(best.metadata)
+                    metadata.update({
+                        "autonomous": True,
+                        "trajectory": trajectory,
+                        "recovered": True,
+                    })
+                    return IntelligenceResponse(
+                        best.answer, best.evidence, best.actions,
+                        best.confidence, metadata,
+                    )
+                raise
+
+            score = float(result.confidence or 0.0)
+            evaluation = result.metadata.get("evaluation") or {}
+            passed = bool(evaluation.get("passed", False))
+            decision = str(result.metadata.get("decision", ""))
+            best = result if best is None or score >= float(best.confidence or 0.0) else best
+            should_stop = (
+                score >= target
+                and decision != "research"
+                and (passed or self.evaluator is None)
+            )
+            trajectory.append({
+                "iteration": iteration,
+                "status": "completed",
+                "confidence": score,
+                "decision": decision,
+                "evidence_count": len(result.evidence),
+                "replanned": not should_stop and iteration < budget,
+            })
+            if should_stop or iteration >= budget:
+                metadata = dict(best.metadata)
+                metadata.update({
+                    "autonomous": True,
+                    "iterations": iteration,
+                    "trajectory": trajectory,
+                    "termination": "target_reached" if should_stop else "budget_exhausted",
+                })
+                return IntelligenceResponse(
+                    best.answer, best.evidence, best.actions,
+                    best.confidence, metadata,
+                )
+
+            prior = dict(current.context)
+            prior.update({
+                "autonomous_iteration": iteration,
+                "previous_decision": decision,
+                "previous_confidence": score,
+                "previous_evidence_count": len(result.evidence),
+                "replan_reason": "confidence_below_target_or_research_required",
+            })
+            current = IntelligenceRequest(
+                goal=request.goal,
+                context=prior,
+                locale=request.locale,
+                language=request.language,
+                constraints=request.constraints,
+            )
+
+        return best or self.run(request)
