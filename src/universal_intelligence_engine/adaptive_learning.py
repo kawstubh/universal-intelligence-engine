@@ -75,7 +75,10 @@ class AdaptiveStrategyEngine:
         def score(strategy: str) -> float:
             profile = profiles.get(strategy)
             if profile is None:
-                return 1.0 + self.exploration
+                # Give unseen strategies an optimistic prior that scales with
+                # the amount of evidence already collected. This preserves
+                # exploration even when an observed strategy has a high reward.
+                return 1.0 + self.exploration * sqrt(2.0 * (total_trials + 1.0))
             uncertainty = sqrt(
                 2.0 * (total_trials + 1.0) / (profile.trials + 1.0)
             )
