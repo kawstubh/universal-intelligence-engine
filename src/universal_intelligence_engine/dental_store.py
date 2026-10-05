@@ -39,6 +39,22 @@ CREATE TABLE IF NOT EXISTS dental_chart_entries (
     note TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS dental_screenings (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    external_id TEXT NOT NULL UNIQUE,
+    patient_id TEXT,
+    screening_id TEXT,
+    occurred_at TEXT,
+    risk_score REAL,
+    findings_json TEXT NOT NULL DEFAULT '[]',
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    raw_result_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dental_screenings_patient ON dental_screenings(patient_id);
+CREATE INDEX IF NOT EXISTS idx_dental_screenings_source ON dental_screenings(source);
+
 CREATE TABLE IF NOT EXISTS dental_ai_events (
     id TEXT PRIMARY KEY,
     patient_id TEXT,
@@ -159,6 +175,35 @@ class DentalStore:
             if self.database_url else
             "INSERT INTO dental_chart_entries(id,patient_id,tooth_fdi,status,note,created_at) VALUES (?,?,?,?,?,?)",
             tuple(item[k] for k in ("id","patient_id","tooth_fdi","status","note","created_at")),
+        )
+        return item
+
+    def record_screening(self, data: dict[str, Any]) -> dict[str, Any]:
+        item = {
+            "id": _id(),
+            "source": data["source"],
+            "external_id": data["external_id"],
+            "patient_id": data.get("patient_id"),
+            "screening_id": data.get("screening_id"),
+            "occurred_at": data.get("occurred_at"),
+            "risk_score": data.get("risk_score"),
+            "findings": data.get("findings", []),
+            "evidence": data.get("evidence", []),
+            "raw_result": data.get("raw_result", {}),
+            "created_at": _now(),
+        }
+        self._execute(
+            "INSERT INTO dental_screenings(id,source,external_id,patient_id,screening_id,occurred_at,risk_score,findings_json,evidence_json,raw_result_json,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+            if self.database_url else
+            "INSERT INTO dental_screenings(id,source,external_id,patient_id,screening_id,occurred_at,risk_score,findings_json,evidence_json,raw_result_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                item["id"], item["source"], item["external_id"], item["patient_id"],
+                item["screening_id"], item["occurred_at"], item["risk_score"],
+                json.dumps(item["findings"], ensure_ascii=False),
+                json.dumps(item["evidence"], ensure_ascii=False),
+                json.dumps(item["raw_result"], ensure_ascii=False),
+                item["created_at"],
+            ),
         )
         return item
 

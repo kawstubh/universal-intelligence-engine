@@ -7,11 +7,12 @@ app = FastAPI()
 app.include_router(router)
 
 
-def test_dental_api_requires_auth(monkeypatch):
+def test_dental_health_is_public(monkeypatch):
     monkeypatch.setenv("DENTAL_API_KEY", "test-key")
     client = TestClient(app)
     response = client.get("/v1/dental/health")
-    assert response.status_code == 401
+    assert response.status_code == 200
+    assert response.json()["service"] == "dental-api"
 
 
 def test_chart_tooth_validation(monkeypatch):
@@ -37,7 +38,8 @@ def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp
             "phone": "9876543210",
             "starts_at": "2026-10-06 10:00 AM",
             "treatment_type": "Dental Check-up",
-            "note": "New patient",
+            "note": None,
+            "intelligence_request": False,
         },
     )
     assert response.status_code == 200
@@ -45,3 +47,34 @@ def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp
     assert body["status"] == "requested"
     assert body["appointment"]["status"] == "requested"
     assert body["appointment"]["treatment_type"] == "Dental Check-up"
+
+
+def test_scano_screening_integration_requires_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "dental.sqlite3"))
+    monkeypatch.setenv("SCANO_INTEGRATION_KEY", "scano-test-key")
+    from universal_intelligence_engine import dental_api
+
+    dental_api._store = None
+    client = TestClient(app)
+    payload = {
+        "external_id": "scan-001",
+        "screening_id": "screening-001",
+        "risk_score": 0.72,
+        "findings": [{"condition": "calculus", "confidence": 0.91}],
+        "evidence": [{"type": "image", "id": "img-001"}],
+        "raw_result": {"provider": "scanO", "version": "sandbox"},
+    }
+    denied = client.post("/v1/dental/integrations/scano/screening", json=payload)
+    assert denied.status_code == 401
+
+    accepted = client.post(
+        "/v1/dental/integrations/scano/screening",
+        headers={"Authorization": "Bearer scano-test-key"},
+        json=payload,
+    )
+    assert accepted.status_code == 200
+    body = accepted.json()
+    assert body["status"] == "accepted"
+    assert body["screening"]["source"] == "scanO"
+    assert body["screening"]["external_id"] == "scan-001"
+    assert body["screening"]["findings"][0]["condition"] == "calculus"

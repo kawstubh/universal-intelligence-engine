@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import os
+import secrets
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .dental_auth import require_doctor
@@ -34,8 +35,20 @@ class PublicAppointmentIn(BaseModel):
     phone: str = Field(min_length=7, max_length=40)
     starts_at: str = Field(min_length=5, max_length=80)
     treatment_type: str = Field(default="General dental consultation", min_length=1, max_length=120)
-    note: str = Field(default="", max_length=2000)
-    intelligence_request: dict[str, Any] | None = None
+    note: str | None = Field(default=None, max_length=2000)
+    intelligence_request: bool = False
+
+
+class ScanOScreeningIn(BaseModel):
+    """Provider-neutral envelope for scanO screening results."""
+    external_id: str = Field(min_length=1, max_length=200)
+    patient_id: str | None = None
+    screening_id: str | None = Field(default=None, max_length=200)
+    occurred_at: str | None = Field(default=None, max_length=80)
+    risk_score: float | None = None
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    raw_result: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChartEntryIn(BaseModel):
@@ -58,6 +71,33 @@ async def dental_health():
     store = get_dental_store()
     return {"status": "ok", "service": "dental-api", "database": store.backend,
             "uie_configured": bool(os.getenv("UIE_API_URL") and os.getenv("UIE_API_KEY"))}
+
+
+@router.post("/integrations/scano/screening")
+async def ingest_scano_screening(
+    body: ScanOScreeningIn,
+    authorization: str | None = Header(default=None),
+):
+    """Ingest a scanO screening result into the dental intelligence layer."""
+    expected = os.getenv("SCANO_INTEGRATION_KEY")
+    supplied = authorization.removeprefix("Bearer ").strip() if authorization else ""
+    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="scanO integration authorization required")
+
+    store = get_dental_store()
+    item = store.record_screening({
+        "source": "scanO",
+        "external_id": body.external_id,
+        "patient_id": body.patient_id,
+        "screening_id": body.screening_id,
+        "occurred_at": body.occurred_at,
+        "risk_score": body.risk_score,
+        "findings": body.findings,
+        "evidence": body.evidence,
+        "raw_result": body.raw_result,
+    })
+    store.audit("scanO-integration", "ingest", "screening", item["id"])
+    return {"status": "accepted", "screening": item}
 
 
 @router.get("/patients")
