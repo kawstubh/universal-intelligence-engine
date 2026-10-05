@@ -38,7 +38,8 @@ def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp
             "phone": "9876543210",
             "starts_at": "2026-10-06 10:00 AM",
             "treatment_type": "Dental Check-up",
-            "note": "New patient",
+            "note": None,
+            "intelligence_request": false,
         },
     )
     assert response.status_code == 200
