@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS dental_appointments (
     patient_id TEXT NOT NULL,
     starts_at TEXT NOT NULL,
     treatment_type TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'scheduled',
     created_at TEXT NOT NULL
 );
@@ -94,10 +95,15 @@ class DentalStore:
                     statement = statement.strip()
                     if statement:
                         conn.execute(statement)
+                conn.execute("ALTER TABLE dental_appointments ADD COLUMN IF NOT EXISTS note TEXT NOT NULL DEFAULT ''")
                 conn.commit()
         else:
             with self._sqlite() as conn:
                 conn.executescript(SCHEMA)
+                try:
+                    conn.execute("ALTER TABLE dental_appointments ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+                except sqlite3.OperationalError as exc:
+                    if 'duplicate column name' not in str(exc).lower(): raise
                 conn.commit()
 
     def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -135,12 +141,12 @@ class DentalStore:
         return self._execute("SELECT * FROM dental_appointments ORDER BY starts_at ASC")
 
     def create_appointment(self, data: dict[str, Any]) -> dict[str, Any]:
-        item = {"id": _id(), **data, "created_at": _now()}
+        item = {"id": _id(), "note": "", **data, "created_at": _now()}
         self._execute(
-            "INSERT INTO dental_appointments(id,patient_id,starts_at,treatment_type,status,created_at) VALUES (%s,%s,%s,%s,%s,%s)"
+            "INSERT INTO dental_appointments(id,patient_id,starts_at,treatment_type,note,status,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)"
             if self.database_url else
-            "INSERT INTO dental_appointments(id,patient_id,starts_at,treatment_type,status,created_at) VALUES (?,?,?,?,?,?)",
-            tuple(item[k] for k in ("id","patient_id","starts_at","treatment_type","status","created_at")),
+            "INSERT INTO dental_appointments(id,patient_id,starts_at,treatment_type,note,status,created_at) VALUES (?,?,?,?,?,?,?)",
+            tuple(item[k] for k in ("id","patient_id","starts_at","treatment_type","note","status","created_at")),
         )
         return item
 

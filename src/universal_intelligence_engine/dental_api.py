@@ -24,6 +24,7 @@ class AppointmentIn(BaseModel):
     patient_id: str
     starts_at: str
     treatment_type: str = Field(min_length=1, max_length=120)
+    note: str = Field(default="", max_length=2000)
     status: str = "scheduled"
 
 
@@ -86,6 +87,7 @@ async def create_public_appointment(body: PublicAppointmentIn):
         "patient_id": patient["id"],
         "starts_at": body.starts_at.strip(),
         "treatment_type": body.treatment_type.strip(),
+        "note": (body.note or "").strip(),
         "status": "requested",
     })
     store.audit("public-intake", "request", "appointment", appointment["id"])
