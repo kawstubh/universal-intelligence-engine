@@ -45,3 +45,34 @@ def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp
     assert body["status"] == "requested"
     assert body["appointment"]["status"] == "requested"
     assert body["appointment"]["treatment_type"] == "Dental Check-up"
+
+
+def test_scano_screening_integration_requires_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "dental.sqlite3"))
+    monkeypatch.setenv("SCANO_INTEGRATION_KEY", "scano-test-key")
+    from universal_intelligence_engine import dental_api
+
+    dental_api._store = None
+    client = TestClient(app)
+    payload = {
+        "external_id": "scan-001",
+        "screening_id": "screening-001",
+        "risk_score": 0.72,
+        "findings": [{"condition": "calculus", "confidence": 0.91}],
+        "evidence": [{"type": "image", "id": "img-001"}],
+        "raw_result": {"provider": "scanO", "version": "sandbox"},
+    }
+    denied = client.post("/v1/dental/integrations/scano/screening", json=payload)
+    assert denied.status_code == 401
+
+    accepted = client.post(
+        "/v1/dental/integrations/scano/screening",
+        headers={"Authorization": "Bearer scano-test-key"},
+        json=payload,
+    )
+    assert accepted.status_code == 200
+    body = accepted.json()
+    assert body["status"] == "accepted"
+    assert body["screening"]["source"] == "scanO"
+    assert body["screening"]["external_id"] == "scan-001"
+    assert body["screening"]["findings"][0]["condition"] == "calculus"
