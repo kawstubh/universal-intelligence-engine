@@ -7,11 +7,12 @@ app = FastAPI()
 app.include_router(router)
 
 
-def test_dental_api_requires_auth(monkeypatch):
+def test_dental_health_is_public(monkeypatch):
     monkeypatch.setenv("DENTAL_API_KEY", "test-key")
     client = TestClient(app)
     response = client.get("/v1/dental/health")
-    assert response.status_code == 401
+    assert response.status_code == 200
+    assert response.json()["service"] == "dental-api"
 
 
 def test_chart_tooth_validation(monkeypatch):
