@@ -27,6 +27,17 @@ class AppointmentIn(BaseModel):
     status: str = "scheduled"
 
 
+
+
+class PublicAppointmentIn(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+    phone: str = Field(min_length=7, max_length=40)
+    starts_at: str = Field(min_length=5, max_length=80)
+    treatment_type: str = Field(default="General dental consultation", min_length=1, max_length=120)
+    note: str = Field(default="", max_length=2000)
+    intelligence_request: dict[str, Any] | None = None
+
+
 class ChartEntryIn(BaseModel):
     patient_id: str
     tooth_fdi: str = Field(pattern=r"^(1[1-8]|2[1-8]|3[1-8]|4[1-8])$")
@@ -60,6 +71,25 @@ async def create_patient(body: PatientIn, actor: dict = Depends(require_doctor))
     item = store.create_patient(body.model_dump())
     store.audit(actor.get("user_id"), "create", "patient", item["id"])
     return item
+
+
+@router.post("/public/appointments")
+async def create_public_appointment(body: PublicAppointmentIn):
+    """Create a patient appointment request without exposing doctor credentials.
+
+    Public intake deliberately creates a limited requested appointment. It does
+    not run AI, expose patient/doctor records, or accept an actor/admin identity.
+    """
+    store = get_dental_store()
+    patient = store.create_patient({"name": body.name.strip(), "phone": body.phone.strip(), "age": ""})
+    appointment = store.create_appointment({
+        "patient_id": patient["id"],
+        "starts_at": body.starts_at.strip(),
+        "treatment_type": body.treatment_type.strip(),
+        "status": "requested",
+    })
+    store.audit("public-intake", "request", "appointment", appointment["id"])
+    return {"status": "requested", "appointment": appointment}
 
 
 @router.get("/appointments")
