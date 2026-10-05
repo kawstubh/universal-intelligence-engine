@@ -34,8 +34,8 @@ class PublicAppointmentIn(BaseModel):
     phone: str = Field(min_length=7, max_length=40)
     starts_at: str = Field(min_length=5, max_length=80)
     treatment_type: str = Field(default="General dental consultation", min_length=1, max_length=120)
-    note: str = Field(default="", max_length=2000)
-    intelligence_request: dict[str, Any] | None = None
+    note: str | None = Field(default=None, max_length=2000)
+    intelligence_request: bool = False
 
 
 class ChartEntryIn(BaseModel):
