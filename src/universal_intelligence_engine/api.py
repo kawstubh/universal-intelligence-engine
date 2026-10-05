@@ -22,6 +22,9 @@ class IntelligenceRunBody(BaseModel):
     locale: str | None = None
     language: str | None = None
     constraints: dict[str, Any] = Field(default_factory=dict)
+    autonomous: bool = False
+    max_iterations: int = Field(default=3, ge=1, le=8)
+    target_confidence: float = Field(default=0.72, ge=0.0, le=1.0)
 
 
 def build_service() -> IntelligenceService:
@@ -41,7 +44,7 @@ def build_service() -> IntelligenceService:
 
 app = FastAPI(
     title="Universal Intelligence Engine",
-    version="0.3.0",
+    version="0.4.1",
     description="Shared intelligence API for research, reasoning, applications and agents.",
 )
 service = build_service()
@@ -63,7 +66,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
-        "version": "0.3.0",
+        "version": "0.4.1",
         "providers": {
             "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
             "reasoning": bool(os.getenv("OPENAI_API_KEY")),
@@ -78,14 +81,21 @@ def run_intelligence(
 ) -> dict[str, Any]:
     _authorize(authorization)
     try:
-        result = service.execute(
-            IntelligenceRequest(
-                goal=body.goal,
-                context=body.context,
-                locale=body.locale,
-                language=body.language,
-                constraints=body.constraints,
+        request = IntelligenceRequest(
+            goal=body.goal,
+            context=body.context,
+            locale=body.locale,
+            language=body.language,
+            constraints=body.constraints,
+        )
+        result = (
+            service.engine.run_autonomous(
+                request,
+                max_iterations=body.max_iterations,
+                target_confidence=body.target_confidence,
             )
+            if body.autonomous
+            else service.execute(request)
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
