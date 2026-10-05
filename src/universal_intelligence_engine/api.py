@@ -11,6 +11,7 @@ from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
 from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
 from .service import IntelligenceService
+from .scano_api import router as scano_router
 
 class IntelligenceRunBody(BaseModel):
     goal: str = Field(min_length=1, max_length=12000)
@@ -38,6 +39,7 @@ app = FastAPI(
 )
 service = build_service()
 app.include_router(dental_router)
+app.include_router(scano_router)
 
 def _authorize(authorization: str | None) -> None:
     expected = os.getenv("UIE_API_KEY")
