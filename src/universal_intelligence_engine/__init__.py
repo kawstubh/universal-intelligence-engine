@@ -10,12 +10,17 @@ from .locale import LocaleContext, resolve_locale
 from .memory import LearningEvent, LearningMemory
 from .provenance import ProvenanceRecord
 from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
+from .reasoning import NativeReasoningProvider
+from .agent import AgentRun, AgentStep, AutonomousAgent
 from .service import IntelligenceService
 
 __version__ = "0.4.0"
 
 __all__ = [
     "AdaptiveReasoningCore",
+    "AgentRun",
+    "AgentStep",
+    "AutonomousAgent",
     "BasicResponseEvaluator",
     "BraveSearchProvider",
     "ChangeProposal",
@@ -29,6 +34,7 @@ __all__ = [
     "LearningEvent",
     "LearningMemory",
     "LocaleContext",
+    "NativeReasoningProvider",
     "OpenAIResponsesReasoningProvider",
     "ProvenanceRecord",
     "UniversalIntelligenceEngine",
