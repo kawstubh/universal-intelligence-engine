@@ -12,12 +12,14 @@ from .provenance import ProvenanceRecord
 from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
 from .reasoning import NativeReasoningProvider
 from .agent import AgentRun, AgentStep, AutonomousAgent
+from .planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
 from .service import IntelligenceService
 
 __version__ = "0.4.0"
 
 __all__ = [
     "AdaptiveReasoningCore",
+    "AdaptivePlanner",
     "AgentRun",
     "AgentStep",
     "AutonomousAgent",
@@ -37,8 +39,12 @@ __all__ = [
     "NativeReasoningProvider",
     "OpenAIResponsesReasoningProvider",
     "ProvenanceRecord",
+    "Plan",
+    "PlanStep",
     "UniversalIntelligenceEngine",
     "deduplicate_evidence",
     "rank_evidence",
     "resolve_locale",
+    "topological_steps",
+    "validate_plan",
 ]
