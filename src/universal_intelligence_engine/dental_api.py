@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .dental_auth import require_doctor
+from .dental_auth import require_doctor, request_otp, verify_otp
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
@@ -16,9 +16,13 @@ from .whatsapp_adapter import get_whatsapp_adapter
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
 
-class DoctorLoginIn(BaseModel):
-    email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=6, max_length=200)
+class DoctorOtpRequestIn(BaseModel):
+    phone: str = Field(min_length=7, max_length=40)
+
+class DoctorOtpVerifyIn(BaseModel):
+    phone: str = Field(min_length=7, max_length=40)
+    challenge_id: str = Field(min_length=10, max_length=200)
+    otp: str = Field(min_length=6, max_length=6)
 
 
 class PatientIn(BaseModel):
@@ -86,36 +90,18 @@ class WhatsAppTemplateIn(BaseModel):
     components: list[dict[str, Any]] = Field(default_factory=list)
 
 
-@router.post("/auth/login")
-async def doctor_login(body: DoctorLoginIn):
-    # Temporary controlled pilot login so the delivered Doctor App is usable
-    # immediately while production Supabase account provisioning is finalized.
-    demo_email = os.getenv("DENTAL_DEMO_EMAIL")
-    demo_password = os.getenv("DENTAL_DEMO_PASSWORD")
-    demo_token = os.getenv("DENTAL_DEMO_TOKEN")
-    if demo_email and demo_password and demo_token and body.email.strip().lower() == demo_email.strip().lower() and body.password == demo_password:
-        actor = await require_doctor("Bearer " + demo_token)
-        return {"access_token": demo_token, "user": actor}
+@router.post("/auth/otp/request")
+async def doctor_otp_request(body: DoctorOtpRequestIn):
+    return await request_otp(body.phone)
 
-    base = os.getenv("SUPABASE_URL")
-    publishable = os.getenv("SUPABASE_PUBLISHABLE_KEY")
-    if not base or not publishable:
-        raise HTTPException(status_code=503, detail="Clinic authentication is not configured")
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(
-            f"{base.rstrip('/')}/auth/v1/token?grant_type=password",
-            headers={"apikey": publishable, "Content-Type": "application/json"},
-            json={"email": body.email.strip(), "password": body.password},
-        )
-    if response.status_code != 200:
-        raise HTTPException(status_code=401, detail="Invalid clinic email or password")
-    data = response.json()
-    access = data.get("access_token")
-    if not access:
-        raise HTTPException(status_code=401, detail="Clinic login did not return an access token")
-    actor = await require_doctor("Bearer " + access)
-    return {"access_token": access, "user": actor}
+@router.post("/auth/otp/verify")
+async def doctor_otp_verify(body: DoctorOtpVerifyIn):
+    return await verify_otp(body.phone, body.challenge_id, body.otp)
 
+@router.post("/auth/logout")
+async def doctor_logout(doctor=Depends(require_doctor)):
+    # Sessions are short-lived and can be invalidated later through the session store.
+    return {"ok": True}
 
 @router.get("/health")
 async def dental_health():

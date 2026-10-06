@@ -56,6 +56,23 @@ CREATE TABLE IF NOT EXISTS dental_ai_events (
     result_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS dental_otp_challenges (
+    id TEXT PRIMARY KEY,
+    phone TEXT NOT NULL,
+    otp_hash TEXT NOT NULL,
+    challenge_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    attempts TEXT NOT NULL DEFAULT '0',
+    consumed TEXT NOT NULL DEFAULT '0'
+);
+CREATE INDEX IF NOT EXISTS idx_dental_otp_phone ON dental_otp_challenges(phone);
+CREATE TABLE IF NOT EXISTS dental_sessions (
+    token_hash TEXT PRIMARY KEY,
+    doctor_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked TEXT NOT NULL DEFAULT '0'
+);
 CREATE TABLE IF NOT EXISTS dental_audit_events (
     id TEXT PRIMARY KEY,
     actor_id TEXT,
@@ -218,6 +235,30 @@ class DentalStore:
         item = {"id": _id(), "patient_id":patient_id, "tooth_fdi":tooth_fdi, "measurements":data.get("measurements",{}), "note":data.get("note",""), "created_at":_now()}
         self._execute("INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (%s,%s,%s,%s,%s,%s)" if self.database_url else "INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (?,?,?,?,?,?)", (item["id"],patient_id,tooth_fdi,json.dumps(item["measurements"],ensure_ascii=False),item["note"],item["created_at"]))
         return item
+
+    def latest_otp(self, phone: str):
+        rows = self._execute("SELECT * FROM dental_otp_challenges WHERE phone=%s ORDER BY created_at DESC LIMIT 1" if self.database_url else "SELECT * FROM dental_otp_challenges WHERE phone=? ORDER BY created_at DESC LIMIT 1", (phone,))
+        return rows[0] if rows else None
+
+    def create_otp(self, phone: str, otp_hash: str, challenge_id: str, created_at: int, expires_at: int):
+        self._execute("INSERT INTO dental_otp_challenges(id,phone,otp_hash,challenge_id,created_at,expires_at) VALUES (%s,%s,%s,%s,%s,%s)" if self.database_url else "INSERT INTO dental_otp_challenges(id,phone,otp_hash,challenge_id,created_at,expires_at) VALUES (?,?,?,?,?,?)", (_id(), phone, otp_hash, challenge_id, str(created_at), str(expires_at)))
+
+    def get_otp(self, phone: str, challenge_id: str):
+        rows = self._execute("SELECT * FROM dental_otp_challenges WHERE phone=%s AND challenge_id=%s AND consumed='0'" if self.database_url else "SELECT * FROM dental_otp_challenges WHERE phone=? AND challenge_id=? AND consumed='0'", (phone, challenge_id))
+        return rows[0] if rows else None
+
+    def increment_otp_attempt(self, row_id: str):
+        self._execute("UPDATE dental_otp_challenges SET attempts=attempts+1 WHERE id=%s" if self.database_url else "UPDATE dental_otp_challenges SET attempts=attempts+1 WHERE id=?", (row_id,))
+
+    def consume_otp(self, row_id: str):
+        self._execute("UPDATE dental_otp_challenges SET consumed='1' WHERE id=%s" if self.database_url else "UPDATE dental_otp_challenges SET consumed='1' WHERE id=?", (row_id,))
+
+    def create_session(self, doctor_id: str, token_hash: str, expires_at: int):
+        self._execute("INSERT INTO dental_sessions(token_hash,doctor_id,expires_at) VALUES (%s,%s,%s)" if self.database_url else "INSERT INTO dental_sessions(token_hash,doctor_id,expires_at) VALUES (?,?,?)", (token_hash, "doctor-" + doctor_id, str(expires_at)))
+
+    def get_session(self, token_hash: str):
+        rows = self._execute("SELECT * FROM dental_sessions WHERE token_hash=%s" if self.database_url else "SELECT * FROM dental_sessions WHERE token_hash=?", (token_hash,))
+        return rows[0] if rows else None
 
     def record_ai(self, patient_id: str | None, goal: str, result: dict[str, Any]) -> None:
         self._execute(
