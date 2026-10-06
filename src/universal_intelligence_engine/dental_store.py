@@ -40,7 +40,16 @@ CREATE TABLE IF NOT EXISTS dental_chart_entries (
     note TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS dental_periodontal_entries (\n    id TEXT PRIMARY KEY,\n    patient_id TEXT NOT NULL,\n    tooth_fdi TEXT NOT NULL,\n    measurements_json TEXT NOT NULL DEFAULT '{}',\n    note TEXT NOT NULL DEFAULT '',\n    created_at TEXT NOT NULL\n);\nCREATE INDEX IF NOT EXISTS idx_dental_periodontal_patient ON dental_periodontal_entries(patient_id);\nCREATE TABLE IF NOT EXISTS dental_ai_events (
+CREATE TABLE IF NOT EXISTS dental_periodontal_entries (
+    id TEXT PRIMARY KEY,
+    patient_id TEXT NOT NULL,
+    tooth_fdi TEXT NOT NULL,
+    measurements_json TEXT NOT NULL DEFAULT '{}',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dental_periodontal_patient ON dental_periodontal_entries(patient_id);
+CREATE TABLE IF NOT EXISTS dental_ai_events (
     id TEXT PRIMARY KEY,
     patient_id TEXT,
     goal TEXT NOT NULL,
@@ -193,7 +202,23 @@ class DentalStore:
         )
         return item
 
-    def periodontogram(self, patient_id: str) -> list[dict[str, Any]]:\n        rows = self._execute(\n            \"SELECT * FROM dental_periodontal_entries WHERE patient_id=%s ORDER BY tooth_fdi\" if self.database_url else\n            \"SELECT * FROM dental_periodontal_entries WHERE patient_id=? ORDER BY tooth_fdi\", (patient_id,),\n        )\n        for row in rows:\n            try: row[\"measurements\"] = json.loads(row.pop(\"measurements_json\"))\n            except Exception: row[\"measurements\"] = {}\n        return rows\n\n    def save_periodontogram(self, data: dict[str, Any]) -> dict[str, Any]:\n        patient_id, tooth_fdi = data[\"patient_id\"], data[\"tooth_fdi\"]\n        self._execute(\"DELETE FROM dental_periodontal_entries WHERE patient_id=%s AND tooth_fdi=%s\" if self.database_url else \"DELETE FROM dental_periodontal_entries WHERE patient_id=? AND tooth_fdi=?\", (patient_id, tooth_fdi))\n        item = {\"id\": _id(), \"patient_id\":patient_id, \"tooth_fdi\":tooth_fdi, \"measurements\":data.get(\"measurements\",{}), \"note\":data.get(\"note\",\"\"), \"created_at\":_now()}\n        self._execute(\"INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (%s,%s,%s,%s,%s,%s)\" if self.database_url else \"INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (?,?,?,?,?,?)\", (item[\"id\"],patient_id,tooth_fdi,json.dumps(item[\"measurements\"],ensure_ascii=False),item[\"note\"],item[\"created_at\"]))\n        return item\n\n    def record_ai(self, patient_id: str | None, goal: str, result: dict[str, Any]) -> None:
+    def periodontogram(self, patient_id: str) -> list[dict[str, Any]]:
+        rows = self._execute(
+            "SELECT * FROM dental_periodontal_entries WHERE patient_id=%s ORDER BY tooth_fdi" if self.database_url else
+            "SELECT * FROM dental_periodontal_entries WHERE patient_id=? ORDER BY tooth_fdi", (patient_id,),
+        )
+        for row in rows:
+            try: row["measurements"] = json.loads(row.pop("measurements_json"))
+            except Exception: row["measurements"] = {}
+        return rows
+
+    def save_periodontogram(self, data: dict[str, Any]) -> dict[str, Any]:
+        patient_id, tooth_fdi = data["patient_id"], data["tooth_fdi"]
+        self._execute("DELETE FROM dental_periodontal_entries WHERE patient_id=%s AND tooth_fdi=%s" if self.database_url else "DELETE FROM dental_periodontal_entries WHERE patient_id=? AND tooth_fdi=?", (patient_id, tooth_fdi))
+        item = {"id": _id(), "patient_id":patient_id, "tooth_fdi":tooth_fdi, "measurements":data.get("measurements",{}), "note":data.get("note",""), "created_at":_now()}
+        self._execute("INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (%s,%s,%s,%s,%s,%s)" if self.database_url else "INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (?,?,?,?,?,?)", (item["id"],patient_id,tooth_fdi,json.dumps(item["measurements"],ensure_ascii=False),item["note"],item["created_at"]))
+        return item
+\n    def record_ai(self, patient_id: str | None, goal: str, result: dict[str, Any]) -> None:
         self._execute(
             "INSERT INTO dental_ai_events(id,patient_id,goal,result_json,created_at) VALUES (%s,%s,%s,%s,%s)"
             if self.database_url else
