@@ -192,7 +192,9 @@ async def save_periodontogram(patient_id: str, body: PeriodontalEntryIn, actor: 
     item = get_dental_store().save_periodontogram(body.model_dump())
     get_dental_store().audit(actor.get("user_id"), "write", "periodontogram", item["id"])
     return item
-\n\n@router.post("/intelligence/run")
+
+
+@router.post("/intelligence/run")
 async def run_dental_intelligence(body: IntelligenceIn, actor: dict = Depends(require_doctor)):
     allowed = {"patient_context", "appointments", "dental_chart", "screening",
                "care_pathway", "referral", "practice"}
