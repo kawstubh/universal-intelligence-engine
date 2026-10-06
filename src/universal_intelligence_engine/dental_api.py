@@ -55,7 +55,7 @@ class ChartEntryIn(BaseModel):
     note: str = Field(default="", max_length=4000)
 
 
-class IntelligenceIn(BaseModel):
+class PeriodontalEntryIn(BaseModel):\n    patient_id: str\n    tooth_fdi: str = Field(pattern=r\"^(1[1-8]|2[1-8]|3[1-8]|4[1-8])$\")\n    measurements: dict[str, Any] = Field(default_factory=dict)\n    note: str = Field(default=\"\", max_length=4000)\n\n\nclass IntelligenceIn(BaseModel):
     goal: str = Field(min_length=1, max_length=12000)
     patient_id: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
@@ -173,7 +173,7 @@ async def save_chart(patient_id: str, body: ChartEntryIn, actor: dict = Depends(
     return item
 
 
-@router.post("/intelligence/run")
+@router.get("/patients/{patient_id}/periodontogram")\nasync def get_periodontogram(patient_id: str, _: dict = Depends(require_doctor)):\n    return get_dental_store().periodontogram(patient_id)\n\n\n@router.post("/patients/{patient_id}/periodontogram")\nasync def save_periodontogram(patient_id: str, body: PeriodontalEntryIn, actor: dict = Depends(require_doctor)):\n    if body.patient_id != patient_id:\n        raise HTTPException(status_code=400, detail=\"patient_id mismatch\")\n    item = get_dental_store().save_periodontogram(body.model_dump())\n    get_dental_store().audit(actor.get(\"user_id\"), \"write\", \"periodontogram\", item[\"id\"])\n    return item\n\n\n@router.post("/intelligence/run")
 async def run_dental_intelligence(body: IntelligenceIn, actor: dict = Depends(require_doctor)):
     allowed = {"patient_context", "appointments", "dental_chart", "screening",
                "care_pathway", "referral", "practice"}
