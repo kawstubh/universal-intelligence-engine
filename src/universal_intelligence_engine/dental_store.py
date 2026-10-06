@@ -218,7 +218,8 @@ class DentalStore:
         item = {"id": _id(), "patient_id":patient_id, "tooth_fdi":tooth_fdi, "measurements":data.get("measurements",{}), "note":data.get("note",""), "created_at":_now()}
         self._execute("INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (%s,%s,%s,%s,%s,%s)" if self.database_url else "INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (?,?,?,?,?,?)", (item["id"],patient_id,tooth_fdi,json.dumps(item["measurements"],ensure_ascii=False),item["note"],item["created_at"]))
         return item
-\n    def record_ai(self, patient_id: str | None, goal: str, result: dict[str, Any]) -> None:
+
+    def record_ai(self, patient_id: str | None, goal: str, result: dict[str, Any]) -> None:
         self._execute(
             "INSERT INTO dental_ai_events(id,patient_id,goal,result_json,created_at) VALUES (%s,%s,%s,%s,%s)"
             if self.database_url else
