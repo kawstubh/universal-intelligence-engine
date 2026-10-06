@@ -28,6 +28,10 @@ class AppointmentIn(BaseModel):
     status: str = "scheduled"
 
 
+class AppointmentUpdateIn(BaseModel):
+    status: str | None = Field(default=None, pattern=r"^(requested|confirmed|scheduled|completed|cancelled|rescheduled|no_show)$")
+    starts_at: str | None = Field(default=None, min_length=5, max_length=80)
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class PublicAppointmentIn(BaseModel):
@@ -96,7 +100,27 @@ async def create_public_appointment(body: PublicAppointmentIn):
 
 @router.get("/appointments")
 async def list_appointments(_: dict = Depends(require_doctor)):
-    return get_dental_store().appointments()
+    store = get_dental_store()
+    patients = {p["id"]: p for p in store.patients()}
+    return [
+        {**appointment,
+         "patient_name": patients.get(appointment["patient_id"], {}).get("name", ""),
+         "patient_phone": patients.get(appointment["patient_id"], {}).get("phone", "")}
+        for appointment in store.appointments()
+    ]
+
+
+@router.patch("/appointments/{appointment_id}")
+async def update_appointment(appointment_id: str, body: AppointmentUpdateIn, actor: dict = Depends(require_doctor)):
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not changes:
+        raise HTTPException(status_code=400, detail="At least one appointment field is required")
+    store = get_dental_store()
+    item = store.update_appointment(appointment_id, changes)
+    if not item:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    store.audit(actor.get("user_id"), "update", "appointment", appointment_id)
+    return item
 
 
 @router.post("/appointments")

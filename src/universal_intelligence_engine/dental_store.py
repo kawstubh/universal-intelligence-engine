@@ -150,6 +150,23 @@ class DentalStore:
         )
         return item
 
+    def update_appointment(self, appointment_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
+        allowed = {"status", "starts_at", "note"}
+        changes = {k: v for k, v in changes.items() if k in allowed}
+        if not changes:
+            return None
+        set_parts = []
+        params: list[Any] = []
+        for key, value in changes.items():
+            set_parts.append(f"{key}=%s" if self.database_url else f"{key}=?")
+            params.append(value)
+        params.append(appointment_id)
+        sql = f"UPDATE dental_appointments SET {', '.join(set_parts)} WHERE id=" + ("%s" if self.database_url else "?")
+        self._execute(sql, tuple(params))
+        query = "SELECT * FROM dental_appointments WHERE id=" + ("%s" if self.database_url else "?")
+        found = self._execute(query, (appointment_id,))
+        return found[0] if found else None
+
     def chart(self, patient_id: str) -> list[dict[str, Any]]:
         return self._execute(
             "SELECT * FROM dental_chart_entries WHERE patient_id=%s ORDER BY tooth_fdi"
