@@ -1,17 +1,18 @@
 from fastapi.testclient import TestClient
+from fastapi import FastAPI
 
 from universal_intelligence_engine.dental_api import router
-from fastapi import FastAPI
 
 app = FastAPI()
 app.include_router(router)
 
 
-def test_dental_api_requires_auth(monkeypatch):
+def test_dental_health_is_public(monkeypatch):
     monkeypatch.setenv("DENTAL_API_KEY", "test-key")
     client = TestClient(app)
     response = client.get("/v1/dental/health")
-    assert response.status_code == 401
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
 
 
 def test_chart_tooth_validation(monkeypatch):
@@ -20,9 +21,10 @@ def test_chart_tooth_validation(monkeypatch):
     response = client.post(
         "/v1/dental/patients/p1/chart",
         headers={"Authorization": "Bearer test-key"},
-        json={"patient_id":"p1","tooth_fdi":"99","status":"Cavity","note":""},
+        json={"patient_id": "p1", "tooth_fdi": "99", "status": "Cavity", "note": ""},
     )
     assert response.status_code == 422
+
 
 def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp_path):
     monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "dental.sqlite3"))
