@@ -8,6 +8,11 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Bearer access token required")
     token = authorization[7:]
+    # Controlled demo account for the current Doctor App pilot. Credentials/token
+    # are supplied only through deployment environment variables, never in source.
+    demo_token = os.getenv("DENTAL_DEMO_TOKEN")
+    if demo_token and token == demo_token:
+        return {"id": "demo-doctor", "email": os.getenv("DENTAL_DEMO_EMAIL", "doctor@drpranali.dental"), "role": "doctor", "demo": True}
     base = os.getenv("SUPABASE_URL")
     publishable = os.getenv("SUPABASE_PUBLISHABLE_KEY")
     if not base or not publishable:

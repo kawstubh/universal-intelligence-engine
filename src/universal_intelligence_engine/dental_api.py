@@ -88,6 +88,15 @@ class WhatsAppTemplateIn(BaseModel):
 
 @router.post("/auth/login")
 async def doctor_login(body: DoctorLoginIn):
+    # Temporary controlled pilot login so the delivered Doctor App is usable
+    # immediately while production Supabase account provisioning is finalized.
+    demo_email = os.getenv("DENTAL_DEMO_EMAIL")
+    demo_password = os.getenv("DENTAL_DEMO_PASSWORD")
+    demo_token = os.getenv("DENTAL_DEMO_TOKEN")
+    if demo_email and demo_password and demo_token and body.email.strip().lower() == demo_email.strip().lower() and body.password == demo_password:
+        actor = await require_doctor("Bearer " + demo_token)
+        return {"access_token": demo_token, "user": actor}
+
     base = os.getenv("SUPABASE_URL")
     publishable = os.getenv("SUPABASE_PUBLISHABLE_KEY")
     if not base or not publishable:
