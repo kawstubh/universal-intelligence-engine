@@ -14,6 +14,11 @@ from .dental_store import get_dental_store
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
 
+class DoctorLoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=6, max_length=200)
+
+
 class PatientIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     phone: str = Field(default="", max_length=40)
@@ -56,6 +61,28 @@ class IntelligenceIn(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     language: str | None = None
     locale: str | None = None
+
+
+@router.post("/auth/login")
+async def doctor_login(body: DoctorLoginIn):
+    base = os.getenv("SUPABASE_URL")
+    publishable = os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    if not base or not publishable:
+        raise HTTPException(status_code=503, detail="Clinic authentication is not configured")
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            f"{base.rstrip('/')}/auth/v1/token?grant_type=password",
+            headers={"apikey": publishable, "Content-Type": "application/json"},
+            json={"email": body.email.strip(), "password": body.password},
+        )
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid clinic email or password")
+    data = response.json()
+    access = data.get("access_token")
+    if not access:
+        raise HTTPException(status_code=401, detail="Clinic login did not return an access token")
+    actor = await require_doctor("Bearer " + access)
+    return {"access_token": access, "user": actor}
 
 
 @router.get("/health")
