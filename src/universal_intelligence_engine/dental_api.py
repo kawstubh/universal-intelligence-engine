@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 
 from .dental_auth import require_doctor
 from .dental_store import get_dental_store
+from .scano_adapter import get_scano_adapter
+from .whatsapp_adapter import get_whatsapp_adapter
 
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
@@ -68,6 +70,20 @@ class IntelligenceIn(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     language: str | None = None
     locale: str | None = None
+
+
+class ScanScreenIn(BaseModel):
+    patient_id: str | None = None
+    scan_reference: str = Field(min_length=1, max_length=4000)
+    scan_type: str = Field(default="oral_screening", min_length=1, max_length=100)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WhatsAppTemplateIn(BaseModel):
+    template_name: str = Field(min_length=1, max_length=200)
+    to: str = Field(min_length=7, max_length=40)
+    language_code: str = Field(default="en", min_length=2, max_length=20)
+    components: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @router.post("/auth/login")
@@ -130,6 +146,33 @@ async def create_public_appointment(body: PublicAppointmentIn):
     })
     store.audit("public-intake", "request", "appointment", appointment["id"])
     return {"status": "requested", "appointment": appointment}
+
+
+@router.post("/scans/screen")
+async def screen_scan(body: ScanScreenIn, actor: dict = Depends(require_doctor)):
+    adapter = get_scano_adapter()
+    try:
+        result = await adapter.screen({
+            "patient_id": body.patient_id,
+            "scan_reference": body.scan_reference,
+            "scan_type": body.scan_type,
+            "metadata": body.metadata,
+        })
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    get_dental_store().audit(actor.get("user_id"), "screen", "scan", body.patient_id)
+    return result
+
+
+@router.post("/whatsapp/template")
+async def send_whatsapp_template(body: WhatsAppTemplateIn, actor: dict = Depends(require_doctor)):
+    adapter = get_whatsapp_adapter()
+    try:
+        result = await adapter.send_template(body.to.strip(), body.template_name.strip(), body.language_code.strip(), body.components)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    get_dental_store().audit(actor.get("user_id"), "send", "whatsapp", body.to.strip())
+    return result
 
 
 @router.get("/appointments")
