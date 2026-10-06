@@ -176,6 +176,14 @@ class DentalStore:
         )
 
     def save_chart(self, data: dict[str, Any]) -> dict[str, Any]:
+        # One current entry per patient/tooth; saving again replaces the prior state.
+        patient_id, tooth_fdi = data["patient_id"], data["tooth_fdi"]
+        self._execute(
+            "DELETE FROM dental_chart_entries WHERE patient_id=%s AND tooth_fdi=%s"
+            if self.database_url else
+            "DELETE FROM dental_chart_entries WHERE patient_id=? AND tooth_fdi=?",
+            (patient_id, tooth_fdi),
+        )
         item = {"id": _id(), **data, "created_at": _now()}
         self._execute(
             "INSERT INTO dental_chart_entries(id,patient_id,tooth_fdi,status,note,created_at) VALUES (%s,%s,%s,%s,%s,%s)"
