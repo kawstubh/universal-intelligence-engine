@@ -299,6 +299,6 @@ async def run_dental_intelligence(body: IntelligenceIn, actor: dict = Depends(re
 
     result = response.json()
     store = get_dental_store()
-    store.record_ai(body.patient_id, body.goal, result)
+    store.record_ai(body.patient_id, body.goal, result, actor.get("clinic_id"))
     store.audit(actor.get("user_id"), "run", "dental_intelligence", body.patient_id)
     return result
