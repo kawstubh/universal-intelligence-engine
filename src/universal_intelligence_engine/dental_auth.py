@@ -1,6 +1,7 @@
 """Production authentication for the Dental Doctor App."""
 from __future__ import annotations
 import hashlib, os, secrets, time
+import httpx
 import base64
 from fastapi import Header, HTTPException
 from .dental_store import get_dental_store
@@ -48,6 +49,47 @@ async def login_password(email: str, password: str) -> dict:
     token = secrets.token_urlsafe(48)
     get_dental_store().create_session(doctor["id"], _hash(token), int(time.time()) + SESSION_TTL)
     return {"access_token": token, "expires_in": SESSION_TTL, "user": {"id": doctor["id"], "email": doctor["email"], "phone": doctor.get("phone", ""), "role": doctor.get("role", "doctor"), "clinic_id": doctor.get("clinic_id", "dr-pranali")}}
+
+async def login_google(access_token: str) -> dict:
+    """Exchange a Supabase Google session for the Dental API's short-lived doctor session."""
+    token = (access_token or "").strip()
+    if not token:
+        raise HTTPException(400, "Google access token is required")
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    publishable_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
+    allowed_email = os.getenv("DENTAL_GOOGLE_ALLOWED_EMAIL", "").strip().lower()
+    if not supabase_url or not publishable_key:
+        raise HTTPException(503, "Google authentication is not configured on the Dental API")
+    if not allowed_email:
+        raise HTTPException(503, "Set DENTAL_GOOGLE_ALLOWED_EMAIL for the clinic doctor account")
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(
+            f"{supabase_url}/auth/v1/user",
+            headers={"apikey": publishable_key, "Authorization": f"Bearer {token}"},
+        )
+    if response.status_code != 200:
+        raise HTTPException(401, "Invalid Google/Supabase session")
+    profile = response.json()
+    email = str(profile.get("email") or "").strip().lower()
+    if email != allowed_email:
+        raise HTTPException(403, "This Google account is not authorized for the doctor workspace")
+    doctor = get_dental_store().doctor_by_email(email)
+    if not doctor:
+        raise HTTPException(403, "Authorized Google account is not registered as a clinic doctor")
+    session_token = secrets.token_urlsafe(48)
+    doctor_id = "google-" + str(profile.get("id") or doctor["id"])
+    get_dental_store().create_session(doctor_id, _hash(session_token), int(time.time()) + SESSION_TTL)
+    return {
+        "access_token": session_token,
+        "expires_in": SESSION_TTL,
+        "user": {
+            "id": doctor_id,
+            "email": email,
+            "phone": doctor.get("phone", ""),
+            "role": doctor.get("role", "doctor"),
+            "clinic_id": doctor.get("clinic_id", "dr-pranali"),
+        },
+    }
 
 async def request_otp(phone: str) -> dict:
     phone = _phone(phone)
