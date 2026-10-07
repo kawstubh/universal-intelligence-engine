@@ -18,6 +18,7 @@ from typing import Any
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS dental_patients (
     id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
     name TEXT NOT NULL,
     phone TEXT NOT NULL DEFAULT '',
     age TEXT NOT NULL DEFAULT '',
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS dental_patients (
 );
 CREATE TABLE IF NOT EXISTS dental_appointments (
     id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
     patient_id TEXT NOT NULL,
     starts_at TEXT NOT NULL,
     treatment_type TEXT NOT NULL,
@@ -34,6 +36,7 @@ CREATE TABLE IF NOT EXISTS dental_appointments (
 );
 CREATE TABLE IF NOT EXISTS dental_chart_entries (
     id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
     patient_id TEXT NOT NULL,
     tooth_fdi TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -42,6 +45,7 @@ CREATE TABLE IF NOT EXISTS dental_chart_entries (
 );
 CREATE TABLE IF NOT EXISTS dental_periodontal_entries (
     id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
     patient_id TEXT NOT NULL,
     tooth_fdi TEXT NOT NULL,
     measurements_json TEXT NOT NULL DEFAULT '{}',
@@ -49,8 +53,14 @@ CREATE TABLE IF NOT EXISTS dental_periodontal_entries (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dental_periodontal_patient ON dental_periodontal_entries(patient_id);
+CREATE INDEX IF NOT EXISTS idx_dental_patients_clinic ON dental_patients(clinic_id);
+CREATE INDEX IF NOT EXISTS idx_dental_appointments_clinic ON dental_appointments(clinic_id);
+CREATE INDEX IF NOT EXISTS idx_dental_chart_clinic ON dental_chart_entries(clinic_id);
+CREATE INDEX IF NOT EXISTS idx_dental_periodontal_clinic ON dental_periodontal_entries(clinic_id);
+CREATE INDEX IF NOT EXISTS idx_dental_ai_clinic ON dental_ai_events(clinic_id);
 CREATE TABLE IF NOT EXISTS dental_ai_events (
     id TEXT PRIMARY KEY,
+    clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
     patient_id TEXT,
     goal TEXT NOT NULL,
     result_json TEXT NOT NULL,
@@ -121,11 +131,21 @@ class DentalStore:
                     statement = statement.strip()
                     if statement:
                         conn.execute(statement)
+                conn.execute("ALTER TABLE dental_patients ADD COLUMN IF NOT EXISTS clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'")
+                conn.execute("ALTER TABLE dental_appointments ADD COLUMN IF NOT EXISTS clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'")
+                conn.execute("ALTER TABLE dental_chart_entries ADD COLUMN IF NOT EXISTS clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'")
+                conn.execute("ALTER TABLE dental_periodontal_entries ADD COLUMN IF NOT EXISTS clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'")
+                conn.execute("ALTER TABLE dental_ai_events ADD COLUMN IF NOT EXISTS clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'")
                 conn.execute("ALTER TABLE dental_appointments ADD COLUMN IF NOT EXISTS note TEXT NOT NULL DEFAULT ''")
                 conn.commit()
         else:
             with self._sqlite() as conn:
                 conn.executescript(SCHEMA)
+                for table in ("dental_patients","dental_appointments","dental_chart_entries","dental_periodontal_entries","dental_ai_events"):
+                    try:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN clinic_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'")
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column name" not in str(exc).lower(): raise
                 try:
                     conn.execute("ALTER TABLE dental_appointments ADD COLUMN note TEXT NOT NULL DEFAULT ''")
                 except sqlite3.OperationalError as exc:
@@ -150,33 +170,43 @@ class DentalStore:
             conn.commit()
             return rows
 
-    def patients(self) -> list[dict[str, Any]]:
-        return self._execute("SELECT * FROM dental_patients ORDER BY created_at DESC")
+    def patients(self, clinic_id: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM dental_patients"
+        params: tuple[Any, ...] = ()
+        if clinic_id:
+            sql += " WHERE clinic_id=" + ("%s" if self.database_url else "?")
+            params=(clinic_id,)
+        return self._execute(sql+" ORDER BY created_at DESC", params)
 
-    def create_patient(self, data: dict[str, Any]) -> dict[str, Any]:
-        item = {"id": _id(), **data, "created_at": _now()}
+    def create_patient(self, data: dict[str, Any], clinic_id: str | None = None) -> dict[str, Any]:
+        clinic_id = clinic_id or data.get("clinic_id") or os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "00000000-0000-0000-0000-000000000001"
+        item = {"id": _id(), "clinic_id": clinic_id, **data, "created_at": _now()}
         self._execute(
-            "INSERT INTO dental_patients(id,name,phone,age,created_at) VALUES (%s,%s,%s,%s,%s)"
+            "INSERT INTO dental_patients(id,clinic_id,name,phone,age,created_at) VALUES (%s,%s,%s,%s,%s,%s)"
             if self.database_url else
-            "INSERT INTO dental_patients(id,name,phone,age,created_at) VALUES (?,?,?,?,?)",
-            tuple(item[k] for k in ("id","name","phone","age","created_at")),
+            "INSERT INTO dental_patients(id,clinic_id,name,phone,age,created_at) VALUES (?,?,?,?,?,?)",
+            tuple(item[k] for k in ("id","clinic_id","name","phone","age","created_at")),
         )
         return item
 
-    def appointments(self) -> list[dict[str, Any]]:
-        return self._execute("SELECT * FROM dental_appointments ORDER BY starts_at ASC")
+    def appointments(self, clinic_id: str | None = None) -> list[dict[str, Any]]:
+        sql="SELECT * FROM dental_appointments"; params: tuple[Any,...]=()
+        if clinic_id:
+            sql += " WHERE clinic_id=" + ("%s" if self.database_url else "?"); params=(clinic_id,)
+        return self._execute(sql+" ORDER BY starts_at ASC", params)
 
-    def create_appointment(self, data: dict[str, Any]) -> dict[str, Any]:
-        item = {"id": _id(), "note": "", **data, "created_at": _now()}
+    def create_appointment(self, data: dict[str, Any], clinic_id: str | None = None) -> dict[str, Any]:
+        clinic_id = clinic_id or data.get("clinic_id") or os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "00000000-0000-0000-0000-000000000001"
+        item={"id":_id(),"clinic_id":clinic_id,"note":"",**data,"created_at":_now()}
         self._execute(
-            "INSERT INTO dental_appointments(id,patient_id,starts_at,treatment_type,note,status,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)"
+            "INSERT INTO dental_appointments(id,clinic_id,patient_id,starts_at,treatment_type,note,status,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
             if self.database_url else
-            "INSERT INTO dental_appointments(id,patient_id,starts_at,treatment_type,note,status,created_at) VALUES (?,?,?,?,?,?,?)",
-            tuple(item[k] for k in ("id","patient_id","starts_at","treatment_type","note","status","created_at")),
+            "INSERT INTO dental_appointments(id,clinic_id,patient_id,starts_at,treatment_type,note,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            tuple(item[k] for k in ("id","clinic_id","patient_id","starts_at","treatment_type","note","status","created_at")),
         )
         return item
 
-    def update_appointment(self, appointment_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
+    def update_appointment(self, appointment_id: str, changes: dict[str, Any], clinic_id: str | None = None) -> dict[str, Any] | None:
         allowed = {"status", "starts_at", "note"}
         changes = {k: v for k, v in changes.items() if k in allowed}
         if not changes:
@@ -187,53 +217,55 @@ class DentalStore:
             set_parts.append(f"{key}=%s" if self.database_url else f"{key}=?")
             params.append(value)
         params.append(appointment_id)
-        sql = f"UPDATE dental_appointments SET {', '.join(set_parts)} WHERE id=" + ("%s" if self.database_url else "?")
-        self._execute(sql, tuple(params))
-        query = "SELECT * FROM dental_appointments WHERE id=" + ("%s" if self.database_url else "?")
-        found = self._execute(query, (appointment_id,))
+        where="id="+("%s" if self.database_url else "?")
+        if clinic_id:
+            where += " AND clinic_id="+("%s" if self.database_url else "?"); params.append(clinic_id)
+        self._execute(f"UPDATE dental_appointments SET {', '.join(set_parts)} WHERE {where}", tuple(params))
+        query="SELECT * FROM dental_appointments WHERE id="+("%s" if self.database_url else "?"); qparams=(appointment_id,)
+        if clinic_id:
+            query += " AND clinic_id="+("%s" if self.database_url else "?"); qparams=(appointment_id,clinic_id)
+        found=self._execute(query,qparams)
         return found[0] if found else None
 
-    def chart(self, patient_id: str) -> list[dict[str, Any]]:
+    def chart(self, patient_id: str, clinic_id: str | None = None) -> list[dict[str, Any]]:
         return self._execute(
-            "SELECT * FROM dental_chart_entries WHERE patient_id=%s ORDER BY tooth_fdi"
-            if self.database_url else
-            "SELECT * FROM dental_chart_entries WHERE patient_id=? ORDER BY tooth_fdi",
-            (patient_id,),
+            (("SELECT * FROM dental_chart_entries WHERE patient_id=%s AND clinic_id=%s ORDER BY tooth_fdi" if self.database_url else "SELECT * FROM dental_chart_entries WHERE patient_id=? AND clinic_id=? ORDER BY tooth_fdi"), (patient_id,clinic_id))
+            if clinic_id else
+            ("SELECT * FROM dental_chart_entries WHERE patient_id=%s ORDER BY tooth_fdi" if self.database_url else "SELECT * FROM dental_chart_entries WHERE patient_id=? ORDER BY tooth_fdi"), (patient_id,),
         )
 
-    def save_chart(self, data: dict[str, Any]) -> dict[str, Any]:
+    def save_chart(self, data: dict[str, Any], clinic_id: str | None = None) -> dict[str, Any]:
         # One current entry per patient/tooth; saving again replaces the prior state.
+        clinic_id = clinic_id or data.get("clinic_id") or os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "00000000-0000-0000-0000-000000000001"
+        clinic_id = clinic_id or data.get("clinic_id") or os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "00000000-0000-0000-0000-000000000001"
         patient_id, tooth_fdi = data["patient_id"], data["tooth_fdi"]
         self._execute(
-            "DELETE FROM dental_chart_entries WHERE patient_id=%s AND tooth_fdi=%s"
-            if self.database_url else
-            "DELETE FROM dental_chart_entries WHERE patient_id=? AND tooth_fdi=?",
-            (patient_id, tooth_fdi),
+            "DELETE FROM dental_chart_entries WHERE patient_id=%s AND tooth_fdi=%s AND clinic_id=%s" if self.database_url else "DELETE FROM dental_chart_entries WHERE patient_id=? AND tooth_fdi=? AND clinic_id=?",
+            (patient_id, tooth_fdi, clinic_id),
         )
-        item = {"id": _id(), **data, "created_at": _now()}
+        item = {"id": _id(), "clinic_id": clinic_id, **data, "created_at": _now()}
         self._execute(
-            "INSERT INTO dental_chart_entries(id,patient_id,tooth_fdi,status,note,created_at) VALUES (%s,%s,%s,%s,%s,%s)"
-            if self.database_url else
-            "INSERT INTO dental_chart_entries(id,patient_id,tooth_fdi,status,note,created_at) VALUES (?,?,?,?,?,?)",
-            tuple(item[k] for k in ("id","patient_id","tooth_fdi","status","note","created_at")),
+            "INSERT INTO dental_chart_entries(id,clinic_id,patient_id,tooth_fdi,status,note,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)" if self.database_url else "INSERT INTO dental_chart_entries(id,clinic_id,patient_id,tooth_fdi,status,note,created_at) VALUES (?,?,?,?,?,?,?)",
+            tuple(item[k] for k in ("id","clinic_id","patient_id","tooth_fdi","status","note","created_at")),
         )
         return item
 
-    def periodontogram(self, patient_id: str) -> list[dict[str, Any]]:
+    def periodontogram(self, patient_id: str, clinic_id: str | None = None) -> list[dict[str, Any]]:
         rows = self._execute(
-            "SELECT * FROM dental_periodontal_entries WHERE patient_id=%s ORDER BY tooth_fdi" if self.database_url else
-            "SELECT * FROM dental_periodontal_entries WHERE patient_id=? ORDER BY tooth_fdi", (patient_id,),
+            (("SELECT * FROM dental_periodontal_entries WHERE patient_id=%s AND clinic_id=%s ORDER BY tooth_fdi" if self.database_url else "SELECT * FROM dental_periodontal_entries WHERE patient_id=? AND clinic_id=? ORDER BY tooth_fdi"), (patient_id,clinic_id))
+            if clinic_id else
+            ("SELECT * FROM dental_periodontal_entries WHERE patient_id=%s ORDER BY tooth_fdi" if self.database_url else "SELECT * FROM dental_periodontal_entries WHERE patient_id=? ORDER BY tooth_fdi"), (patient_id,),
         )
         for row in rows:
             try: row["measurements"] = json.loads(row.pop("measurements_json"))
             except Exception: row["measurements"] = {}
         return rows
 
-    def save_periodontogram(self, data: dict[str, Any]) -> dict[str, Any]:
+    def save_periodontogram(self, data: dict[str, Any], clinic_id: str | None = None) -> dict[str, Any]:
         patient_id, tooth_fdi = data["patient_id"], data["tooth_fdi"]
-        self._execute("DELETE FROM dental_periodontal_entries WHERE patient_id=%s AND tooth_fdi=%s" if self.database_url else "DELETE FROM dental_periodontal_entries WHERE patient_id=? AND tooth_fdi=?", (patient_id, tooth_fdi))
-        item = {"id": _id(), "patient_id":patient_id, "tooth_fdi":tooth_fdi, "measurements":data.get("measurements",{}), "note":data.get("note",""), "created_at":_now()}
-        self._execute("INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (%s,%s,%s,%s,%s,%s)" if self.database_url else "INSERT INTO dental_periodontal_entries(id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (?,?,?,?,?,?)", (item["id"],patient_id,tooth_fdi,json.dumps(item["measurements"],ensure_ascii=False),item["note"],item["created_at"]))
+        self._execute("DELETE FROM dental_periodontal_entries WHERE patient_id=%s AND tooth_fdi=%s AND clinic_id=%s" if self.database_url else "DELETE FROM dental_periodontal_entries WHERE patient_id=? AND tooth_fdi=? AND clinic_id=?", (patient_id,tooth_fdi,clinic_id))
+        item={"id":_id(),"clinic_id":clinic_id,"patient_id":patient_id,"tooth_fdi":tooth_fdi,"measurements":data.get("measurements",{}),"note":data.get("note",""),"created_at":_now()}
+        self._execute("INSERT INTO dental_periodontal_entries(id,clinic_id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)" if self.database_url else "INSERT INTO dental_periodontal_entries(id,clinic_id,patient_id,tooth_fdi,measurements_json,note,created_at) VALUES (?,?,?,?,?,?,?)", (item["id"],clinic_id,patient_id,tooth_fdi,json.dumps(item["measurements"],ensure_ascii=False),item["note"],item["created_at"]))
         return item
 
     def latest_otp(self, phone: str):
@@ -260,12 +292,12 @@ class DentalStore:
         rows = self._execute("SELECT * FROM dental_sessions WHERE token_hash=%s" if self.database_url else "SELECT * FROM dental_sessions WHERE token_hash=?", (token_hash,))
         return rows[0] if rows else None
 
-    def record_ai(self, patient_id: str | None, goal: str, result: dict[str, Any]) -> None:
+    def record_ai(self, patient_id: str | None, goal: str, result: dict[str, Any], clinic_id: str | None = None) -> None:
+        clinic_id = clinic_id or os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "00000000-0000-0000-0000-000000000001"
         self._execute(
-            "INSERT INTO dental_ai_events(id,patient_id,goal,result_json,created_at) VALUES (%s,%s,%s,%s,%s)"
-            if self.database_url else
-            "INSERT INTO dental_ai_events(id,patient_id,goal,result_json,created_at) VALUES (?,?,?,?,?)",
-            (_id(), patient_id, goal, json.dumps(result, ensure_ascii=False), _now()),
+            "INSERT INTO dental_ai_events(id,clinic_id,patient_id,goal,result_json,created_at) VALUES (%s,%s,%s,%s,%s,%s)" if self.database_url else
+            "INSERT INTO dental_ai_events(id,clinic_id,patient_id,goal,result_json,created_at) VALUES (?,?,?,?,?,?)",
+            (_id(), clinic_id, patient_id, goal, json.dumps(result, ensure_ascii=False), _now()),
         )
 
     def audit(self, actor_id: str | None, action: str, resource_type: str, resource_id: str | None = None) -> None:
