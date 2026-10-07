@@ -90,7 +90,7 @@ async def create_order(clinic_id: str, plan_id: str, actor_id: str) -> dict:
     return {
         "free": False,
         "plan": plan,
-        "razorpay": {"key_id": key_id, "order_id": order["id"], "amount": order["amount"], "currency": order["currency"]},
+        "razorpay": {"key_id": key_id, "order_id": order["id"], "short_url": order.get("short_url"), "amount": order["amount"], "currency": order["currency"]},
     }
 
 def handle_webhook(raw_body: bytes, signature: str) -> dict:
