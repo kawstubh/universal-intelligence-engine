@@ -2,6 +2,8 @@
 
 A domain-agnostic AI intelligence engine for research, reasoning, knowledge, agents, learning, tools, and real-world applications.
 
+> **Proprietary technology:** This repository is available for technical evaluation and due diligence. Commercial use requires a separate written agreement. See `LICENSE`, `COMMERCIAL_IP.md`, and `NOTICE.md`.
+
 ## Current architecture
 
 ```
@@ -95,7 +97,7 @@ The API fails closed for intelligence requests when `UIE_API_KEY` is missing.
 
 ## Learning and evaluation
 
-Learning is append-only and controlled. The engine does not rewrite its own source code or silently change policy.
+Learning is append-only and controlled.
 
 Every completed request can record:
 
@@ -121,14 +123,6 @@ Uses UIE for global research, evidence, provenance, and intelligence orchestrati
 ### Dr. Pranali Dental
 Uses UIE contracts for patient intelligence, clinical research, treatment research, product intelligence, supplier intelligence, practice intelligence, and referral intelligence. Clinical decisions remain under clinician control.
 
-## Development
-
-```bash
-pip install -e '.[dev]'
-pytest -q
-```
-
-
 ## Human-controlled self-improvement governance
 
 UIE is designed so that the intelligence layer may **propose** algorithm or policy improvements, but it cannot authorize or activate them itself.
@@ -141,3 +135,27 @@ Configure:
 The governance boundary itself is not self-modifiable. Proposed changes should be sandboxed, benchmarked, security-tested, regression-tested, signed by the human operator, versioned, and auditable before activation.
 
 **Important:** never place the private signing key in the repository, mobile app, or AI runtime.
+
+## Commercial IP and licensing
+
+UIE is **not released under an open-source license**. The repository's proprietary source license permits evaluation and due diligence but does not grant unrestricted commercial deployment, redistribution, sublicensing, OEM, white-label, or derivative-product rights.
+
+Commercial paths are intentionally separated:
+
+1. **Commercial license** — defined use rights while ownership remains with the rights holder.
+2. **Enterprise/OEM license** — broader deployment, integration, white-label, or redistribution rights under contract.
+3. **Strategic acquisition** — transfer of agreed source code, assets, and IP rights under a definitive agreement.
+
+See:
+- `LICENSE` — repository use terms
+- `COMMERCIAL_IP.md` — licensing and buyer-package structure
+- `IP_INVENTORY.md` — technology/IP inventory and chain-of-title checklist
+- `THIRD_PARTY_NOTICES.md` — dependency licensing record
+- `NOTICE.md` — proprietary notice
+
+## Development
+
+```bash
+pip install -e '.[dev]'
+pytest -q
+```
