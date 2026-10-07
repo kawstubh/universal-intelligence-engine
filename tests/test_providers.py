@@ -1,3 +1,4 @@
+﻿
 from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from universal_intelligence_engine.evaluation import BasicResponseEvaluator
 
@@ -34,3 +35,26 @@ def test_request_contract_remains_provider_agnostic():
         constraints={"require_sources": True},
     )
     assert request.locale == "IN-MH"
+
+
+def test_missing_knowledge_provider_fails_closed(monkeypatch):
+    from universal_intelligence_engine.providers import BraveSearchProvider, ProviderNotConfiguredError
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    try:
+        BraveSearchProvider().search(IntelligenceRequest(goal="test"))
+        assert False, "expected provider configuration error"
+    except ProviderNotConfiguredError as exc:
+        assert exc.code == "PROVIDER_NOT_CONFIGURED"
+        assert exc.provider == "knowledge"
+
+
+def test_missing_reasoning_provider_fails_closed(monkeypatch):
+    from universal_intelligence_engine.providers import OpenAIResponsesReasoningProvider, ProviderNotConfiguredError
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    try:
+        OpenAIResponsesReasoningProvider().reason(IntelligenceRequest(goal="test"), [])
+        assert False, "expected provider configuration error"
+    except ProviderNotConfiguredError as exc:
+        assert exc.code == "PROVIDER_NOT_CONFIGURED"
+        assert exc.provider == "reasoning"

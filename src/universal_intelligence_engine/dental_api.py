@@ -1,3 +1,4 @@
+﻿
 """Dental application API with portable persistence and UIE adapter."""
 from __future__ import annotations
 
@@ -171,13 +172,12 @@ async def create_public_appointment(body: PublicAppointmentIn):
     master_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
     patient = store.create_patient({"name": body.name.strip(), "phone": body.phone.strip(), "age": ""}, master_clinic)
     appointment = store.create_appointment({
-        "clinic_id": master_clinic,
         "patient_id": patient["id"],
         "starts_at": body.starts_at.strip(),
         "treatment_type": body.treatment_type.strip(),
         "note": (body.note or "").strip(),
         "status": "requested",
-    })
+    }, master_clinic)
     store.audit("public-intake", "request", "appointment", appointment["id"])
     return {"status": "requested", "appointment": appointment}
 
@@ -274,32 +274,86 @@ async def save_periodontogram(patient_id: str, body: PeriodontalEntryIn, actor: 
 
 @router.post("/intelligence/run")
 async def run_dental_intelligence(body: IntelligenceIn, actor: dict = Depends(require_doctor)):
-    allowed = {"patient_context", "appointments", "dental_chart", "screening",
-               "care_pathway", "referral", "practice"}
-    safe_context = {k: v for k, v in body.context.items() if k in allowed}
-    safe_context.update({"domain": "dental", "patient_id": body.patient_id})
+    clinic_id = str(actor.get("clinic_id") or "").strip()
+    if not clinic_id:
+        raise HTTPException(status_code=403, detail={"message": "Doctor clinic context is required", "code": "CLINIC_CONTEXT_REQUIRED"})
+
+    patient = None
+    if body.patient_id:
+        patient = get_dental_store().get_patient(body.patient_id, clinic_id)
+        if not patient:
+            raise HTTPException(
+                status_code=403,
+                detail={"message": "Patient is not accessible from this clinic", "code": "PATIENT_CLINIC_ACCESS_DENIED"},
+            )
 
     uie_url, uie_key = os.getenv("UIE_API_URL"), os.getenv("UIE_API_KEY")
     if not uie_url or not uie_key:
-        raise HTTPException(status_code=503, detail="UIE backend is not configured")
+        raise HTTPException(
+            status_code=503,
+            detail={"message": "UIE bridge is not configured", "code": "UIE_BACKEND_NOT_CONFIGURED"},
+        )
+
+    # Minimum necessary context is built server-side from the authenticated clinic.
+    # The app never sends patient phone/name/free-form chart notes to UIE.
+    safe_context: dict[str, Any] = {"domain": "dental"}
+    if patient:
+        store = get_dental_store()
+        safe_context["patient"] = {"patient_id": patient["id"], "age": patient.get("age", "")}
+        safe_context["dental_chart"] = [
+            {"tooth_fdi": row["tooth_fdi"], "status": row["status"]}
+            for row in store.chart(patient["id"], clinic_id)
+        ]
+        safe_context["periodontogram"] = [
+            {"tooth_fdi": row["tooth_fdi"], "measurements": row.get("measurements", {})}
+            for row in store.periodontogram(patient["id"], clinic_id)
+        ]
+        safe_context["appointments"] = [
+            {"starts_at": row["starts_at"], "treatment_type": row["treatment_type"], "status": row["status"]}
+            for row in store.appointments(clinic_id, patient["id"])
+        ]
+        safe_context["patient_id"] = patient["id"]
 
     payload = {
-        "goal": body.goal, "language": body.language, "locale": body.locale,
+        "goal": body.goal.strip(),
+        "language": body.language,
+        "locale": body.locale,
         "context": safe_context,
-        "constraints": {"require_sources": True, "human_approval_required": True,
-                        "domain": "dental"},
+        "constraints": {
+            "require_sources": True,
+            "human_approval_required": True,
+            "do_not_write_records": True,
+            "domain": "dental",
+        },
     }
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            f"{uie_url.rstrip('/')}/v1/intelligence/run",
-            headers={"Authorization": f"Bearer {uie_key}", "Content-Type": "application/json"},
-            json=payload,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            response = await client.post(
+                f"{uie_url.rstrip('/')}/v1/intelligence/run",
+                headers={"Authorization": f"Bearer {uie_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail={"message": "Clinical AI took too long to respond. Please retry.", "code": "UIE_TIMEOUT"}) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail={"message": "Clinical AI service could not be reached. Please retry.", "code": "UIE_UNREACHABLE"}) from exc
+
     if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"UIE request failed: {response.text[:500]}")
+        try:
+            upstream = response.json()
+        except ValueError:
+            upstream = None
+        detail = upstream.get("detail") if isinstance(upstream, dict) else None
+        if isinstance(detail, dict) and detail.get("code") == "PROVIDER_NOT_CONFIGURED":
+            raise HTTPException(status_code=503, detail=detail)
+        raise HTTPException(
+            status_code=502,
+            detail={"message": "Clinical AI service returned an error. Please retry.", "code": "UIE_REQUEST_FAILED"},
+        )
 
     result = response.json()
     store = get_dental_store()
-    store.record_ai(body.patient_id, body.goal, result, actor.get("clinic_id"))
-    store.audit(actor.get("user_id"), "run", "dental_intelligence", body.patient_id)
+    if body.patient_id:
+        store.record_ai(body.patient_id, body.goal, result, clinic_id)
+    store.audit(actor.get("id"), "run", "dental_intelligence", body.patient_id)
     return result

@@ -1,3 +1,4 @@
+﻿
 """Live provider adapters for UIE.
 
 Providers are environment-configured and vendor-replaceable. No API secrets are
@@ -49,6 +50,14 @@ def _json_request(
     return value
 
 
+class ProviderNotConfiguredError(RuntimeError):
+    """Raised when a live provider cannot run because its credentials/config are absent."""
+    def __init__(self, provider: str, message: str):
+        self.provider = provider
+        self.code = "PROVIDER_NOT_CONFIGURED"
+        super().__init__(message)
+
+
 class BraveSearchProvider:
     """Live web search through Brave Search API."""
 
@@ -58,7 +67,7 @@ class BraveSearchProvider:
 
     def search(self, request: IntelligenceRequest) -> list[Evidence]:
         if not self.api_key:
-            raise RuntimeError("BRAVE_SEARCH_API_KEY is not configured")
+            raise ProviderNotConfiguredError("knowledge", "Knowledge provider is not configured: BRAVE_SEARCH_API_KEY is missing")
         query = request.goal.strip()
         if request.locale:
             query = f"{query} region:{request.locale}"
@@ -108,7 +117,7 @@ class OpenAIResponsesReasoningProvider:
         base_url: str | None = None,
     ):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-6-luna")
+        self.model = model or os.getenv("OPENAI_MODEL")
         self.base_url = (base_url or os.getenv(
             "OPENAI_BASE_URL", "https://api.openai.com/v1"
         )).rstrip("/")
@@ -119,7 +128,9 @@ class OpenAIResponsesReasoningProvider:
         evidence: list[Evidence] | tuple[Evidence, ...],
     ) -> IntelligenceResponse:
         if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY is not configured")
+            raise ProviderNotConfiguredError("reasoning", "Reasoning provider is not configured: OPENAI_API_KEY is missing")
+        if not self.model:
+            raise ProviderNotConfiguredError("reasoning", "Reasoning provider is not configured: OPENAI_MODEL is missing")
 
         evidence_block = "\n\n".join(
             f"[{idx}] {item.title}\nSource: {item.source}\nURL: {item.url or 'n/a'}\n"
@@ -174,3 +185,4 @@ class OpenAIResponsesReasoningProvider:
                 "usage": data.get("usage", {}),
             },
         )
+

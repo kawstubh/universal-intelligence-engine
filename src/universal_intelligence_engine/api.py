@@ -1,3 +1,4 @@
+﻿
 """HTTP API for the Universal Intelligence Engine and Dental application layer."""
 from __future__ import annotations
 import os
@@ -9,7 +10,7 @@ from .dental_api import router as dental_router
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
-from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
+from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider, ProviderNotConfiguredError
 from .service import IntelligenceService
 
 class IntelligenceRunBody(BaseModel):
@@ -54,7 +55,9 @@ def health() -> dict[str, Any]:
         "version": "0.5.0",
         "providers": {
             "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
-            "reasoning": bool(os.getenv("OPENAI_API_KEY")),
+            "reasoning": bool(os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_MODEL")),
+            "knowledge_provider": "brave-search",
+            "reasoning_provider": "openai-responses",
         },
         "dental_api": True,
     }
@@ -67,8 +70,10 @@ def run_intelligence(body: IntelligenceRunBody, authorization: str | None = Head
             goal=body.goal, context=body.context, locale=body.locale,
             language=body.language, constraints=body.constraints
         ))
+    except ProviderNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail={"message": str(exc), "code": exc.code, "provider": exc.provider}) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail={"message": str(exc), "code": "PROVIDER_REQUEST_FAILED"}) from exc
     return {
         "answer": result.answer,
         "evidence": [item.__dict__ for item in result.evidence],
@@ -76,3 +81,4 @@ def run_intelligence(body: IntelligenceRunBody, authorization: str | None = Head
         "confidence": result.confidence,
         "metadata": dict(result.metadata),
     }
+
