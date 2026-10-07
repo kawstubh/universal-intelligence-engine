@@ -68,12 +68,14 @@ async def create_order(clinic_id: str, plan_id: str, actor_id: str) -> dict:
     payload = {
         "amount": plan["price_inr"] * 100,
         "currency": "INR",
-        "receipt": receipt,
+        'description': f"Dental Platform {plan['name']} membership",
+        "reference_id": receipt,
+        "expire_by": int(time.time()) + 86400,
         "notes": {"clinic_id": clinic_id, "plan_id": plan_id, "actor_id": actor_id},
     }
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.post(
-            "https://api.razorpay.com/v1/orders",
+            "https://api.razorpay.com/v1/payment_links",
             auth=(key_id, key_secret),
             json=payload,
         )
