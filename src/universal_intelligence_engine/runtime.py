@@ -31,4 +31,20 @@ class SenseActRuntime:
             {"method":result.method,"status_code":result.status_code,"attempts":result.attempts}))
         return result
 
+    def register_tools(self, registry) -> None:
+        """Expose eyes/hands through UIE's existing capability policy boundary."""
+        from .tools import ToolSpec
+        registry.register(ToolSpec(
+            "web.observe",
+            "Observe an HTTP(S) resource without mutating it.",
+            lambda url, **_: self.observe_url(str(url)),
+        ))
+        registry.register(ToolSpec(
+            "http.execute",
+            "Execute an explicitly allowlisted HTTP action; mutations still require approval.",
+            lambda method, url, body=None, headers=None, approved=False, **_: self.execute_http(
+                method=str(method), url=str(url), body=body, headers=headers, approved=bool(approved)
+            ),
+        ))
+
     def audit(self)->tuple[RuntimeEvent,...]: return tuple(self.events)
