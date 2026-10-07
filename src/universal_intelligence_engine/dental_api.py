@@ -19,6 +19,7 @@ router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
 class DoctorGoogleLoginIn(BaseModel):
     access_token: str = Field(min_length=20, max_length=10000)
+    google_id_token: str = Field(min_length=20, max_length=10000)
 
 class DoctorOtpRequestIn(BaseModel):
     phone: str = Field(min_length=7, max_length=40)
@@ -124,7 +125,7 @@ async def membership_webhook(request: Request, x_razorpay_signature: str = Heade
 
 @router.post("/auth/google")
 async def doctor_google_login(body: DoctorGoogleLoginIn):
-    return await login_google(body.access_token)
+    return await login_google(body.access_token, body.google_id_token)
 
 @router.post("/auth/otp/request")
 async def doctor_otp_request(body: DoctorOtpRequestIn):

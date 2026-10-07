@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib, os, secrets, time
 import httpx
 import base64
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from fastapi import Header, HTTPException
 from .dental_store import get_dental_store
 
@@ -50,21 +52,66 @@ async def login_password(email: str, password: str) -> dict:
     get_dental_store().create_session(doctor["id"], _hash(token), int(time.time()) + SESSION_TTL)
     return {"access_token": token, "expires_in": SESSION_TTL, "user": {"id": doctor["id"], "email": doctor["email"], "phone": doctor.get("phone", ""), "role": doctor.get("role", "doctor"), "clinic_id": doctor.get("clinic_id", "dr-pranali")}}
 
-async def login_google(access_token: str) -> dict:
-    """Authenticate a Supabase user and resolve active dental clinic memberships."""
+GOOGLE_WEB_CLIENT_ID = os.getenv("DENTAL_GOOGLE_WEB_CLIENT_ID", "").strip()
+
+
+def _verify_google_id_token(google_token: str) -> dict:
+    if not GOOGLE_WEB_CLIENT_ID:
+        raise HTTPException(503, detail={
+            "message": "Google authentication is not configured on the Dental API",
+            "code": "GOOGLE_WEB_CLIENT_ID_MISSING",
+        })
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            google_token,
+            google_requests.Request(),
+            GOOGLE_WEB_CLIENT_ID,
+        )
+    except ValueError as exc:
+        raise HTTPException(401, detail={
+            "message": "Google ID token rejected: " + str(exc),
+            "code": "GOOGLE_ID_TOKEN_INVALID",
+            "google_status": 401,
+        }) from exc
+    except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        raise HTTPException(502, detail={
+            "message": "Google token verification could not be completed: " + str(exc),
+            "code": "GOOGLE_VERIFICATION_ERROR",
+            "google_status": status,
+        }) from exc
+    return claims
+
+
+async def login_google(access_token: str, google_token: str) -> dict:
+    """Verify the Google ID token audience, then authenticate the matching Supabase user."""
+    google_claims = _verify_google_id_token((google_token or "").strip())
     token = (access_token or "").strip()
     if not token:
         raise HTTPException(400, "Google access token is required")
     supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
     publishable_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
     if not supabase_url or not publishable_key:
-        raise HTTPException(503, "Google authentication is not configured on the Dental API")
+        raise HTTPException(503, detail={"message": "Google authentication is not configured on the Dental API", "code": "SUPABASE_CONFIG_MISSING"})
     headers = {"apikey": publishable_key, "Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(timeout=10) as client:
         user_response = await client.get(f"{supabase_url}/auth/v1/user", headers=headers)
         if user_response.status_code != 200:
-            raise HTTPException(401, "Invalid Google/Supabase session")
+            raise HTTPException(401, detail={
+                "message": "Supabase rejected the authenticated Google session",
+                "code": "SUPABASE_SESSION_INVALID",
+                "status": user_response.status_code,
+                "google_status": 200,
+            })
         profile = user_response.json()
+        google_email = str(google_claims.get("email") or "").strip().lower()
+        profile_email = str(profile.get("email") or "").strip().lower()
+        if google_email and profile_email and google_email != profile_email:
+            raise HTTPException(401, detail={
+                "message": "Google identity does not match the Supabase identity",
+                "code": "GOOGLE_SUPABASE_IDENTITY_MISMATCH",
+                "google_status": 200,
+            })
         user_id = str(profile.get("id") or "").strip()
         if not user_id:
             raise HTTPException(401, "Supabase user id is missing")
@@ -79,7 +126,12 @@ async def login_google(access_token: str) -> dict:
             headers=headers,
         )
     if membership_response.status_code != 200:
-        raise HTTPException(503, "Unable to resolve clinic membership")
+        raise HTTPException(503, detail={
+            "message": "Unable to resolve clinic membership",
+            "code": "CLINIC_MEMBERSHIP_LOOKUP_FAILED",
+            "status": membership_response.status_code,
+            "google_status": 200,
+        })
     memberships = [
         m for m in membership_response.json()
         if m.get("dental_clinics", {}).get("active", True)
