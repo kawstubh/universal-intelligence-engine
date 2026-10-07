@@ -28,7 +28,8 @@ def test_hand_denies_unallowlisted_method(server):
 
 def test_hand_executes_allowlisted_action(server):
     u=f"http://127.0.0.1:{server.server_port}/"; h=HttpHand(allowed_hosts={"127.0.0.1"},allowed_methods={"POST"})
-    r=h.execute(method="POST",url=u,body={"x":1}); assert r.status=="completed" and r.status_code==204
+    with pytest.raises(PermissionError): h.execute(method="POST",url=u,body={"x":1})
+    r=h.execute(method="POST",url=u,body={"x":1},approved=True); assert r.status=="completed" and r.status_code==204
 
 def test_runtime_audits_observation(server):
     u=f"http://127.0.0.1:{server.server_port}/"; rt=SenseActRuntime(); rt.observe_url(u)
