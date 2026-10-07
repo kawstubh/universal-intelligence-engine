@@ -8,13 +8,16 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .dental_auth import require_doctor, request_otp, verify_otp
+from .dental_auth import login_google, require_doctor, request_otp, verify_otp
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
 
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
+
+class DoctorGoogleLoginIn(BaseModel):
+    access_token: str = Field(min_length=20, max_length=10000)
 
 class DoctorOtpRequestIn(BaseModel):
     phone: str = Field(min_length=7, max_length=40)
@@ -89,6 +92,10 @@ class WhatsAppTemplateIn(BaseModel):
     language_code: str = Field(default="en", min_length=2, max_length=20)
     components: list[dict[str, Any]] = Field(default_factory=list)
 
+
+@router.post("/auth/google")
+async def doctor_google_login(body: DoctorGoogleLoginIn):
+    return await login_google(body.access_token)
 
 @router.post("/auth/otp/request")
 async def doctor_otp_request(body: DoctorOtpRequestIn):
