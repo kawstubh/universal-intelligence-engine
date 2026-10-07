@@ -113,6 +113,17 @@ The baseline evaluator checks response completeness and evidence grounding. This
 
 A Render blueprint is included in `render.yaml`. Configure the three secret environment variables in Render; do not commit them.
 
+## Eyes and hands
+
+UIE now has a governed sense-act runtime separating cognition from external-world I/O:
+
+- Eyes: bounded HTTP observation with time/size limits, content hashing, provenance metadata, and structured observation results.
+- Hands: explicit HTTP execution with host/method allowlists, bounded request/response sizes, idempotent retries, and human approval required for mutating methods.
+- Audit: every observation/action produces a structured runtime event.
+- Capability boundary: eyes and hands can be registered with the existing ToolRegistry, so domain adapters inherit the same policy boundary.
+
+Browser/computer-control adapters can implement the same runtime boundary later without changing UIE's reasoning/planning core.
+
 ## Domain adapters
 
 ### CueScene
