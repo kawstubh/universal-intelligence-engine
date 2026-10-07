@@ -11,36 +11,20 @@ from .dental_store import get_dental_store
 
 PLANS = [
     {
-        "id": "starter",
-        "name": "Starter",
-        "price_inr": 999,
-        "period": "month",
-        "tagline": "For a solo clinic starting digital operations",
-        "features": ["1 doctor", "Appointments", "Patient records", "Basic dental chart", "WhatsApp-ready workflows"],
-    },
-    {
-        "id": "professional",
-        "name": "Professional",
-        "price_inr": 2499,
-        "period": "month",
-        "tagline": "For growing clinics that need the full workflow",
-        "features": ["Up to 3 doctors", "All Starter features", "Dental chart + periodontogram", "Treatment planning", "AI clinical workspace", "Reports"],
-    },
-    {
         "id": "clinic",
         "name": "Clinic",
         "price_inr": 4999,
         "period": "month",
-        "tagline": "For multi-doctor clinics and advanced operations",
-        "features": ["Up to 10 doctors", "All Professional features", "Staff roles", "Advanced AI modules", "Scan/WhatsApp integrations", "Priority support"],
+        "tagline": "Full dental platform for growing clinics",
+        "features": ["Up to 10 doctors", "Appointments & patient records", "Dental chart + periodontogram", "Treatment planning", "AI clinical workspace", "Staff roles", "Scan/WhatsApp integrations", "Priority support"],
     },
     {
         "id": "enterprise",
         "name": "Enterprise",
         "price_inr": 9999,
         "period": "month",
-        "tagline": "For groups, chains and custom requirements",
-        "features": ["Unlimited clinic staff", "Multi-location support", "Custom integrations", "Dedicated onboarding", "Custom limits and SLA"],
+        "tagline": "For groups, chains and multi-location operations",
+        "features": ["Unlimited clinic staff", "Multi-location support", "Advanced AI", "Custom integrations", "Dedicated onboarding", "Custom limits and SLA"],
     },
 ]
 
