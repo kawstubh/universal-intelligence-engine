@@ -1,120 +1,105 @@
-"""Production authentication for the Dental Doctor App."""
+"""Production Google-only authentication for the Dental Doctor App."""
 from __future__ import annotations
-import hashlib, os, secrets, time
+
+import hashlib
+import os
+import secrets
+import time
+
 import httpx
-import base64
+from fastapi import Header, HTTPException
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
-from fastapi import Header, HTTPException
+
 from .dental_store import get_dental_store
 
-DOCTOR_PHONE = os.getenv("DENTAL_DOCTOR_PHONE", "9820373350")
-DEMO_AUTH = os.getenv("DENTAL_DEMO_AUTH", "false").lower() == "true"
-DEMO_OTP = os.getenv("DENTAL_DEMO_OTP", "123456")
-OTP_TTL = 300
 SESSION_TTL = 60 * 60 * 24 * 30
-
-def _phone(v: str) -> str:
-    digits = "".join(c for c in str(v) if c.isdigit())
-    if digits.startswith("91") and len(digits) == 12: digits = digits[2:]
-    if len(digits) != 10: raise HTTPException(400, "Enter a valid 10-digit mobile number")
-    return digits
-
-def _hash(v: str) -> str:
-    return hashlib.sha256(v.encode()).hexdigest()
-
-_PASSWORD_ITERATIONS = 310_000
-
-def _password_hash(password: str) -> str:
-    salt = secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PASSWORD_ITERATIONS)
-    return f"pbkdf2_sha256${_PASSWORD_ITERATIONS}${base64.urlsafe_b64encode(salt).decode()}${base64.urlsafe_b64encode(digest).decode()}"
-
-def _password_verify(password: str, encoded: str) -> bool:
-    try:
-        scheme, iterations, salt_b64, digest_b64 = encoded.split("$", 3)
-        if scheme != "pbkdf2_sha256": return False
-        salt = base64.urlsafe_b64decode(salt_b64.encode())
-        expected = base64.urlsafe_b64decode(digest_b64.encode())
-        actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iterations))
-        return secrets.compare_digest(actual, expected)
-    except Exception:
-        return False
-
-async def login_password(email: str, password: str) -> dict:
-    email = email.strip().lower()
-    if not email or not password:
-        raise HTTPException(400, "Email and password are required")
-    doctor = get_dental_store().doctor_by_email(email)
-    if not doctor or not _password_verify(password, doctor["password_hash"]):
-        raise HTTPException(401, "Invalid clinic login credentials")
-    token = secrets.token_urlsafe(48)
-    get_dental_store().create_session(doctor["id"], _hash(token), int(time.time()) + SESSION_TTL)
-    return {"access_token": token, "expires_in": SESSION_TTL, "user": {"id": doctor["id"], "email": doctor["email"], "phone": doctor.get("phone", ""), "role": doctor.get("role", "doctor"), "clinic_id": doctor.get("clinic_id", "dr-pranali")}}
-
 GOOGLE_WEB_CLIENT_ID = os.getenv("DENTAL_GOOGLE_WEB_CLIENT_ID", "").strip()
+
+
+def _hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 def _verify_google_id_token(google_token: str) -> dict:
     if not GOOGLE_WEB_CLIENT_ID:
-        raise HTTPException(503, detail={
-            "message": "Google authentication is not configured on the Dental API",
-            "code": "GOOGLE_WEB_CLIENT_ID_MISSING",
-        })
+        raise HTTPException(
+            503,
+            detail={
+                "message": "Google authentication is not configured on the Dental API",
+                "code": "GOOGLE_WEB_CLIENT_ID_MISSING",
+            },
+        )
     try:
-        claims = google_id_token.verify_oauth2_token(
+        return google_id_token.verify_oauth2_token(
             google_token,
             google_requests.Request(),
             GOOGLE_WEB_CLIENT_ID,
         )
     except ValueError as exc:
-        raise HTTPException(401, detail={
-            "message": "Google ID token rejected: " + str(exc),
-            "code": "GOOGLE_ID_TOKEN_INVALID",
-            "google_status": 401,
-        }) from exc
+        raise HTTPException(
+            401,
+            detail={
+                "message": "Google ID token rejected",
+                "code": "GOOGLE_ID_TOKEN_INVALID",
+            },
+        ) from exc
     except Exception as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        raise HTTPException(502, detail={
-            "message": "Google token verification could not be completed: " + str(exc),
-            "code": "GOOGLE_VERIFICATION_ERROR",
-            "google_status": status,
-        }) from exc
-    return claims
+        raise HTTPException(
+            502,
+            detail={
+                "message": "Google token verification could not be completed",
+                "code": "GOOGLE_VERIFICATION_ERROR",
+                "google_status": status,
+            },
+        ) from exc
 
 
 async def login_google(access_token: str, google_token: str) -> dict:
-    """Verify the Google ID token audience, then authenticate the matching Supabase user."""
+    """Verify Google identity, then require an active clinic membership."""
     google_claims = _verify_google_id_token((google_token or "").strip())
     token = (access_token or "").strip()
     if not token:
         raise HTTPException(400, "Google access token is required")
+
     supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
     publishable_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
     if not supabase_url or not publishable_key:
-        raise HTTPException(503, detail={"message": "Google authentication is not configured on the Dental API", "code": "SUPABASE_CONFIG_MISSING"})
+        raise HTTPException(
+            503,
+            detail={
+                "message": "Google authentication is not configured on the Dental API",
+                "code": "SUPABASE_CONFIG_MISSING",
+            },
+        )
+
     headers = {"apikey": publishable_key, "Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(timeout=10) as client:
         user_response = await client.get(f"{supabase_url}/auth/v1/user", headers=headers)
         if user_response.status_code != 200:
-            raise HTTPException(401, detail={
-                "message": "Supabase rejected the authenticated Google session",
-                "code": "SUPABASE_SESSION_INVALID",
-                "status": user_response.status_code,
-                "google_status": 200,
-            })
+            raise HTTPException(
+                401,
+                detail={
+                    "message": "Supabase rejected the authenticated Google session",
+                    "code": "SUPABASE_SESSION_INVALID",
+                },
+            )
         profile = user_response.json()
         google_email = str(google_claims.get("email") or "").strip().lower()
         profile_email = str(profile.get("email") or "").strip().lower()
         if google_email and profile_email and google_email != profile_email:
-            raise HTTPException(401, detail={
-                "message": "Google identity does not match the Supabase identity",
-                "code": "GOOGLE_SUPABASE_IDENTITY_MISMATCH",
-                "google_status": 200,
-            })
+            raise HTTPException(
+                401,
+                detail={
+                    "message": "Google identity does not match the Supabase identity",
+                    "code": "GOOGLE_SUPABASE_IDENTITY_MISMATCH",
+                },
+            )
         user_id = str(profile.get("id") or "").strip()
         if not user_id:
             raise HTTPException(401, "Supabase user id is missing")
+
         membership_response = await client.get(
             f"{supabase_url}/rest/v1/dental_clinic_memberships",
             params={
@@ -125,24 +110,35 @@ async def login_google(access_token: str, google_token: str) -> dict:
             },
             headers=headers,
         )
+
     if membership_response.status_code != 200:
-        raise HTTPException(503, detail={
-            "message": "Unable to resolve clinic membership",
-            "code": "CLINIC_MEMBERSHIP_LOOKUP_FAILED",
-            "status": membership_response.status_code,
-            "google_status": 200,
-        })
+        raise HTTPException(
+            503,
+            detail={
+                "message": "Unable to resolve clinic membership",
+                "code": "CLINIC_MEMBERSHIP_LOOKUP_FAILED",
+            },
+        )
+
     memberships = [
         m for m in membership_response.json()
         if m.get("dental_clinics", {}).get("active", True)
     ]
     if not memberships:
         raise HTTPException(403, "Your Google account is not yet authorized for a dental clinic")
-    clinics = [{"clinic_id": m["clinic_id"], "role": m["role"], "clinic": m.get("dental_clinics") or {}} for m in memberships]
+
+    clinics = [
+        {"clinic_id": m["clinic_id"], "role": m["role"], "clinic": m.get("dental_clinics") or {}}
+        for m in memberships
+    ]
     selected = clinics[0]
     session_token = secrets.token_urlsafe(48)
-    session_identity = f"{user_id}|{selected['clinic_id']}|{selected['role']}"
-    get_dental_store().create_session(session_identity, _hash(session_token), int(time.time()) + SESSION_TTL)
+    identity = f"{user_id}|{selected['clinic_id']}|{selected['role']}"
+    get_dental_store().create_session(
+        identity,
+        _hash(session_token),
+        int(time.time()) + SESSION_TTL,
+    )
     metadata = profile.get("user_metadata") or {}
     return {
         "access_token": session_token,
@@ -157,68 +153,32 @@ async def login_google(access_token: str, google_token: str) -> dict:
         "clinics": clinics,
     }
 
-async def request_otp(phone: str) -> dict:
-    phone = _phone(phone)
-    if phone != DOCTOR_PHONE:
-        raise HTTPException(403, "This mobile number is not registered for a doctor account")
-    store = get_dental_store()
-    now = int(time.time())
-    recent = store.latest_otp(phone)
-    if recent and now - int(recent["created_at"]) < 30:
-        raise HTTPException(429, "Please wait 30 seconds before requesting another OTP")
-    code = DEMO_OTP if DEMO_AUTH else f"{secrets.randbelow(1000000):06d}"
-    challenge = secrets.token_urlsafe(18)
-    store.create_otp(phone, _hash(code), challenge, now, now + OTP_TTL)
-    # Demo mode is temporary and must be explicitly enabled by a server-side environment flag.
-    if DEMO_AUTH:
-        return {"challenge_id": challenge, "expires_in": OTP_TTL, "message": "Demo OTP ready"}
-    # Production delivery uses the configured official SMS/WhatsApp gateway.
-    delivered = await _deliver_otp(phone, code)
-    if not delivered:
-        raise HTTPException(503, "OTP delivery is not configured yet. Add the clinic SMS/WhatsApp provider credentials.")
-    return {"challenge_id": challenge, "expires_in": OTP_TTL, "message": "OTP sent"}
 
-async def _deliver_otp(phone: str, code: str) -> bool:
-    # Provider-neutral production hook. No OTP is returned to the app.
-    url = os.getenv("OTP_SMS_WEBHOOK_URL")
-    if not url:
-        return False
-    import httpx
-    payload = {"to": phone, "otp": code, "message": f"Your Dr. Pranali Dental verification code is {code}. It expires in 5 minutes."}
-    secret = os.getenv("OTP_SMS_WEBHOOK_SECRET")
-    headers = {"Authorization": f"Bearer {secret}"} if secret else {}
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(url, json=payload, headers=headers)
-    return 200 <= r.status_code < 300
+async def logout_doctor(authorization: str | None) -> None:
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+        if token:
+            get_dental_store().revoke_session(_hash(token))
 
-async def verify_otp(phone: str, challenge_id: str, otp: str) -> dict:
-    phone = _phone(phone)
-    row = get_dental_store().get_otp(phone, challenge_id)
-    if not row or int(row["expires_at"]) < int(time.time()) or int(row["attempts"]) >= 5:
-        raise HTTPException(401, "OTP expired or invalid")
-    if not secrets.compare_digest(_hash(otp.strip()), row["otp_hash"]):
-        get_dental_store().increment_otp_attempt(row["id"])
-        raise HTTPException(401, "Incorrect OTP")
-    token = secrets.token_urlsafe(48)
-    get_dental_store().create_session(phone, _hash(token), int(time.time()) + SESSION_TTL)
-    get_dental_store().consume_otp(row["id"])
-    return {"access_token": token, "expires_in": SESSION_TTL, "user": {"id": "doctor-" + phone, "phone": phone, "role": "doctor"}}
 
 async def require_doctor(authorization: str | None = Header(default=None)) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Bearer access token required")
-    token = authorization[7:]
-    # Temporary clinic demo bridge: enabled only by an explicit server-side flag.
-    # This lets the packaged Doctor APK exercise the real shared backend while
-    # production OTP delivery is being configured. It is never enabled by default.
-    if DEMO_AUTH and secrets.compare_digest(token, "demo"):
-        return {"id": "doctor-demo", "phone": DOCTOR_PHONE, "role": "doctor", "demo": True}
+    token = authorization[7:].strip()
+    if not token or len(token) < 20:
+        raise HTTPException(401, "Invalid or expired doctor session")
+
     row = get_dental_store().get_session(_hash(token))
     if not row or int(row["expires_at"]) < int(time.time()) or row.get("revoked"):
         raise HTTPException(401, "Invalid or expired doctor session")
-    identity = str(row["doctor_id"]).replace("doctor-", "", 1)
+
+    identity = str(row["doctor_id"])
     parts = identity.split("|", 2)
-    if len(parts) == 3:
-        user_id, clinic_id, role = parts
-        return {"id": user_id, "clinic_id": clinic_id, "role": role}
-    return {"id": identity, "clinic_id": "dr-pranali", "role": "doctor"}
+    if len(parts) != 3:
+        raise HTTPException(401, "Doctor session has no clinic context")
+    user_id, clinic_id, role = parts
+    if role not in {"doctor", "dentist", "admin"}:
+        raise HTTPException(403, "Doctor role required")
+    if not clinic_id:
+        raise HTTPException(403, "Clinic context required")
+    return {"id": user_id, "clinic_id": clinic_id, "role": role}

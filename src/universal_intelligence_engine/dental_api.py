@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from pydantic import BaseModel, Field
 
-from .dental_auth import login_google, require_doctor, request_otp, verify_otp
+from .dental_auth import login_google, logout_doctor, require_doctor
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
@@ -21,14 +21,6 @@ router = APIRouter(prefix="/v1/dental", tags=["dental"])
 class DoctorGoogleLoginIn(BaseModel):
     access_token: str = Field(min_length=20, max_length=10000)
     google_id_token: str = Field(min_length=20, max_length=10000)
-
-class DoctorOtpRequestIn(BaseModel):
-    phone: str = Field(min_length=7, max_length=40)
-
-class DoctorOtpVerifyIn(BaseModel):
-    phone: str = Field(min_length=7, max_length=40)
-    challenge_id: str = Field(min_length=10, max_length=200)
-    otp: str = Field(min_length=6, max_length=6)
 
 
 class PatientIn(BaseModel):
@@ -128,17 +120,9 @@ async def membership_webhook(request: Request, x_razorpay_signature: str = Heade
 async def doctor_google_login(body: DoctorGoogleLoginIn):
     return await login_google(body.access_token, body.google_id_token)
 
-@router.post("/auth/otp/request")
-async def doctor_otp_request(body: DoctorOtpRequestIn):
-    return await request_otp(body.phone)
-
-@router.post("/auth/otp/verify")
-async def doctor_otp_verify(body: DoctorOtpVerifyIn):
-    return await verify_otp(body.phone, body.challenge_id, body.otp)
-
 @router.post("/auth/logout")
-async def doctor_logout(doctor=Depends(require_doctor)):
-    # Sessions are short-lived and can be invalidated later through the session store.
+async def doctor_logout(authorization: str | None = Header(default=None), doctor=Depends(require_doctor)):
+    await logout_doctor(authorization)
     return {"ok": True}
 
 @router.get("/health")

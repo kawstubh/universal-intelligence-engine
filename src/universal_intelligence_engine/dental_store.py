@@ -283,6 +283,13 @@ class DentalStore:
         )
         return rows[0] if rows else None
 
+    def revoke_session(self, token_hash: str) -> None:
+        self._execute(
+            "UPDATE dental_sessions SET revoked=true WHERE token_hash=%s" if self.database_url else
+            "UPDATE dental_sessions SET revoked=1 WHERE token_hash=?",
+            (token_hash,),
+        )
+
     def doctor_by_email(self, email: str):
         rows = self._execute(
             "SELECT * FROM dental_doctors WHERE lower(email)=lower(%s) LIMIT 1"
