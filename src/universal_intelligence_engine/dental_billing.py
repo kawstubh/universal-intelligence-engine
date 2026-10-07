@@ -91,7 +91,11 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
     event_name = event.get("event", "")
     if event_name in {"payment.captured", "order.paid", "payment_link.paid"}:
         payment = event.get("payload", {}).get("payment", {}).get("entity", {})
-        order_id = payment.get("order_id") or event.get("payload", {}).get("order", {}).get("entity", {}).get("id") or event.get("payload", {}).get("payment_link", {}).get("entity", {}).get("id")
+        payment_link = event.get("payload", {}).get("payment_link", {}).get("entity", {})
+        payment_link_id = payment_link.get("id")
+        link_payments = payment_link.get("payments") or []
+        link_payment_id = (link_payments[0].get("payment_id") if link_payments and isinstance(link_payments[0], dict) else None)
+        order_id = payment_link_id or payment.get("order_id") or event.get("payload", {}).get("order", {}).get("entity", {}).get("id")
         if order_id:
             store = get_dental_store()
             rows = store._execute(
@@ -101,11 +105,13 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
             )
             if rows:
                 row = rows[0]
+                if str(row.get("status", "")).lower() == "paid":
+                    return {"ok": True, "duplicate": True}
                 store._execute(
                     "UPDATE dental_membership_orders SET status='paid', razorpay_payment_id=%s, paid_at=%s WHERE razorpay_order_id=%s"
                     if store.database_url else
                     "UPDATE dental_membership_orders SET status='paid', razorpay_payment_id=?, paid_at=? WHERE razorpay_order_id=?",
-                    (payment.get("id"), str(int(time.time())), order_id),
+                    (payment.get("id") or link_payment_id or link_payment_id, str(int(time.time())), order_id),
                 )
                 store._execute(
                     "INSERT INTO dental_memberships(id,clinic_id,plan_id,status,started_at,created_at) VALUES (%s,%s,%s,%s,%s,%s)"
