@@ -4,6 +4,7 @@ from .algorithm import AdaptiveReasoningCore
 from .contracts import Evaluator, IntelligenceRequest, IntelligenceResponse, KnowledgeProvider, LearningStore, ReasoningProvider
 from .knowledge import rank_evidence
 from .reasoning import NativeReasoningProvider
+from .runtime import SenseActRuntime
 
 
 class UniversalIntelligenceEngine:
@@ -11,13 +12,22 @@ class UniversalIntelligenceEngine:
 
     def __init__(self, knowledge: KnowledgeProvider, reasoning: ReasoningProvider | None = None,
                  evaluator: Evaluator | None = None, learning_store: LearningStore | None = None,
-                 algorithm: AdaptiveReasoningCore | None = None) -> None:
+                 algorithm: AdaptiveReasoningCore | None = None, runtime: SenseActRuntime | None = None) -> None:
         self.knowledge = knowledge
         # Native reasoning is the fail-safe baseline; external providers are optional accelerators.
         self.reasoning = reasoning or NativeReasoningProvider()
         self.evaluator = evaluator
         self.learning_store = learning_store
         self.algorithm = algorithm or AdaptiveReasoningCore()
+        self.runtime = runtime or SenseActRuntime()
+
+    def observe_url(self, url: str):
+        """Observe an external HTTP resource through UIE eyes."""
+        return self.runtime.observe_url(url)
+
+    def execute_http(self, **kwargs):
+        """Execute an external HTTP action through UIE hands and policy gates."""
+        return self.runtime.execute_http(**kwargs)
 
     def run(self, request: IntelligenceRequest) -> IntelligenceResponse:
         raw_evidence = tuple(self.knowledge.search(request))
