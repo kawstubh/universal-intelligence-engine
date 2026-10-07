@@ -105,9 +105,9 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
     import json
     event = json.loads(raw_body.decode("utf-8"))
     event_name = event.get("event", "")
-    if event_name in {"payment.captured", "order.paid"}:
+    if event_name in {"payment.captured", "order.paid", "payment_link.paid"}:
         payment = event.get("payload", {}).get("payment", {}).get("entity", {})
-        order_id = payment.get("order_id") or event.get("payload", {}).get("order", {}).get("entity", {}).get("id")
+        order_id = payment.get("order_id") or event.get("payload", {}).get("order", {}).get("entity", {}).get("id") or event.get("payload", {}).get("payment_link", {}).get("entity", {}).get("id")
         if order_id:
             store = get_dental_store()
             rows = store._execute(
