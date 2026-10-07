@@ -51,44 +51,58 @@ async def login_password(email: str, password: str) -> dict:
     return {"access_token": token, "expires_in": SESSION_TTL, "user": {"id": doctor["id"], "email": doctor["email"], "phone": doctor.get("phone", ""), "role": doctor.get("role", "doctor"), "clinic_id": doctor.get("clinic_id", "dr-pranali")}}
 
 async def login_google(access_token: str) -> dict:
-    """Exchange a Supabase Google session for the Dental API's short-lived doctor session."""
+    """Authenticate a Supabase user and resolve active dental clinic memberships."""
     token = (access_token or "").strip()
     if not token:
         raise HTTPException(400, "Google access token is required")
     supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
     publishable_key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
-    allowed_email = os.getenv("DENTAL_GOOGLE_ALLOWED_EMAIL", "").strip().lower()
     if not supabase_url or not publishable_key:
         raise HTTPException(503, "Google authentication is not configured on the Dental API")
-    if not allowed_email:
-        raise HTTPException(503, "Set DENTAL_GOOGLE_ALLOWED_EMAIL for the clinic doctor account")
+    headers = {"apikey": publishable_key, "Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(
-            f"{supabase_url}/auth/v1/user",
-            headers={"apikey": publishable_key, "Authorization": f"Bearer {token}"},
+        user_response = await client.get(f"{supabase_url}/auth/v1/user", headers=headers)
+        if user_response.status_code != 200:
+            raise HTTPException(401, "Invalid Google/Supabase session")
+        profile = user_response.json()
+        user_id = str(profile.get("id") or "").strip()
+        if not user_id:
+            raise HTTPException(401, "Supabase user id is missing")
+        membership_response = await client.get(
+            f"{supabase_url}/rest/v1/dental_clinic_memberships",
+            params={
+                "user_id": f"eq.{user_id}",
+                "active": "eq.true",
+                "select": "clinic_id,role,active,dental_clinics(id,name,slug,logo_url,phone,email,address,active)",
+                "order": "created_at.asc",
+            },
+            headers=headers,
         )
-    if response.status_code != 200:
-        raise HTTPException(401, "Invalid Google/Supabase session")
-    profile = response.json()
-    email = str(profile.get("email") or "").strip().lower()
-    if email != allowed_email:
-        raise HTTPException(403, "This Google account is not authorized for the doctor workspace")
-    doctor = get_dental_store().doctor_by_email(email)
-    if not doctor:
-        raise HTTPException(403, "Authorized Google account is not registered as a clinic doctor")
+    if membership_response.status_code != 200:
+        raise HTTPException(503, "Unable to resolve clinic membership")
+    memberships = [
+        m for m in membership_response.json()
+        if m.get("dental_clinics", {}).get("active", True)
+    ]
+    if not memberships:
+        raise HTTPException(403, "Your Google account is not yet authorized for a dental clinic")
+    clinics = [{"clinic_id": m["clinic_id"], "role": m["role"], "clinic": m.get("dental_clinics") or {}} for m in memberships]
+    selected = clinics[0]
     session_token = secrets.token_urlsafe(48)
-    doctor_id = "google-" + str(profile.get("id") or doctor["id"])
-    get_dental_store().create_session(doctor_id, _hash(session_token), int(time.time()) + SESSION_TTL)
+    session_identity = f"{user_id}|{selected['clinic_id']}|{selected['role']}"
+    get_dental_store().create_session(session_identity, _hash(session_token), int(time.time()) + SESSION_TTL)
+    metadata = profile.get("user_metadata") or {}
     return {
         "access_token": session_token,
         "expires_in": SESSION_TTL,
         "user": {
-            "id": doctor_id,
-            "email": email,
-            "phone": doctor.get("phone", ""),
-            "role": doctor.get("role", "doctor"),
-            "clinic_id": doctor.get("clinic_id", "dr-pranali"),
+            "id": user_id,
+            "email": str(profile.get("email") or ""),
+            "name": metadata.get("full_name") or metadata.get("name") or "",
+            "role": selected["role"],
+            "clinic_id": selected["clinic_id"],
         },
+        "clinics": clinics,
     }
 
 async def request_otp(phone: str) -> dict:
