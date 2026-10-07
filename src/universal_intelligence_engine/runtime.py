@@ -24,9 +24,9 @@ class SenseActRuntime:
             {"status_code":result.status_code,"content_sha256":result.content_sha256,"truncated":result.truncated}))
         return result
 
-    def execute_http(self,*,method:str,url:str,body:object|None=None,headers:Mapping[str,str]|None=None)->ActionResult:
+    def execute_http(self,*,method:str,url:str,body:object|None=None,headers:Mapping[str,str]|None=None,approved:bool=False)->ActionResult:
         if self.http_hand is None: raise PermissionError("HTTP hand is not configured")
-        result=self.http_hand.execute(method=method,url=url,body=body,headers=headers)
+        result=self.http_hand.execute(method=method,url=url,body=body,headers=headers,approved=approved)
         self.events.append(RuntimeEvent("action","http.execute",url,result.status,
             {"method":result.method,"status_code":result.status_code,"attempts":result.attempts}))
         return result
