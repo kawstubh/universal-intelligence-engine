@@ -100,6 +100,11 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Bearer access token required")
     token = authorization[7:]
+    # Temporary clinic demo bridge: enabled only by an explicit server-side flag.
+    # This lets the packaged Doctor APK exercise the real shared backend while
+    # production OTP delivery is being configured. It is never enabled by default.
+    if DEMO_AUTH and secrets.compare_digest(token, "demo"):
+        return {"id": "doctor-demo", "phone": DOCTOR_PHONE, "role": "doctor", "demo": True}
     row = get_dental_store().get_session(_hash(token))
     if not row or int(row["expires_at"]) < int(time.time()) or row.get("revoked"):
         raise HTTPException(401, "Invalid or expired doctor session")
