@@ -31,9 +31,10 @@ class HttpHand:
         self.timeout_seconds=timeout_seconds; self.max_response_bytes=max_response_bytes
         self.max_request_bytes=max_request_bytes; self.max_retries=max(0,min(max_retries,5))
 
-    def execute(self,*,method:str,url:str,body:object|None=None,headers:Mapping[str,str]|None=None)->ActionResult:
+    def execute(self,*,method:str,url:str,body:object|None=None,headers:Mapping[str,str]|None=None,approved:bool=False)->ActionResult:
         method=method.upper()
         if method not in self.allowed_methods: raise PermissionError(f"HTTP method not allowed: {method}")
+        if method not in self.SAFE_METHODS and not approved: raise PermissionError(f"Human approval required for mutating HTTP method: {method}")
         if not url.startswith(("http://","https://")): raise ValueError("Only HTTP(S) URLs are supported")
         from urllib.parse import urlparse
         host=(urlparse(url).hostname or "").lower()
