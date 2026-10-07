@@ -34,3 +34,14 @@ def test_hand_executes_allowlisted_action(server):
 def test_runtime_audits_observation(server):
     u=f"http://127.0.0.1:{server.server_port}/"; rt=SenseActRuntime(); rt.observe_url(u)
     assert rt.audit()[0].capability=="web.observe"
+
+
+def test_runtime_registers_capabilities(server):
+    from universal_intelligence_engine.policy import policy_for
+    from universal_intelligence_engine.tools import ToolRegistry
+    u=f"http://127.0.0.1:{server.server_port}/"
+    rt=SenseActRuntime()
+    registry=ToolRegistry(policy_for(allowed=["web.observe"]))
+    rt.register_tools(registry)
+    result=registry.call("web.observe",url=u)
+    assert result.status=="observed"
