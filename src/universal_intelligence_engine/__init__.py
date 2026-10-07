@@ -14,37 +14,24 @@ from .reasoning import NativeReasoningProvider
 from .agent import AgentRun, AgentStep, AutonomousAgent
 from .planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
 from .service import IntelligenceService
+from .self_improvement_runtime import (
+    SandboxPolicy,
+    SandboxResult,
+    SelfImprovementSandbox,
+    RuntimeSelfImprovementEngine,
+)
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 __all__ = [
-    "AdaptiveReasoningCore",
-    "AdaptivePlanner",
-    "AgentRun",
-    "AgentStep",
-    "AutonomousAgent",
-    "BasicResponseEvaluator",
-    "BraveSearchProvider",
-    "ChangeProposal",
-    "CompositeKnowledgeProvider",
-    "Evidence",
-    "GovernanceError",
-    "HumanAuthorizationGate",
-    "IntelligenceRequest",
-    "IntelligenceResponse",
-    "IntelligenceService",
-    "LearningEvent",
-    "LearningMemory",
-    "LocaleContext",
-    "NativeReasoningProvider",
-    "OpenAIResponsesReasoningProvider",
-    "ProvenanceRecord",
-    "Plan",
-    "PlanStep",
-    "UniversalIntelligenceEngine",
-    "deduplicate_evidence",
-    "rank_evidence",
-    "resolve_locale",
-    "topological_steps",
-    "validate_plan",
+    "AdaptiveReasoningCore", "AdaptivePlanner", "AgentRun", "AgentStep",
+    "AutonomousAgent", "BasicResponseEvaluator", "BraveSearchProvider",
+    "ChangeProposal", "CompositeKnowledgeProvider", "Evidence", "GovernanceError",
+    "HumanAuthorizationGate", "IntelligenceRequest", "IntelligenceResponse",
+    "IntelligenceService", "LearningEvent", "LearningMemory", "LocaleContext",
+    "NativeReasoningProvider", "OpenAIResponsesReasoningProvider",
+    "ProvenanceRecord", "Plan", "PlanStep", "UniversalIntelligenceEngine",
+    "SandboxPolicy", "SandboxResult", "SelfImprovementSandbox",
+    "RuntimeSelfImprovementEngine", "deduplicate_evidence", "rank_evidence",
+    "resolve_locale", "topological_steps", "validate_plan",
 ]
