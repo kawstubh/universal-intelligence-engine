@@ -14,8 +14,11 @@ from .reasoning import NativeReasoningProvider
 from .agent import AgentRun, AgentStep, AutonomousAgent
 from .planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
 from .service import IntelligenceService
+from .eyes import Observation, WebObserver
+from .hands import ActionResult, HttpHand
+from .runtime import RuntimeEvent, SenseActRuntime
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "AdaptiveReasoningCore",
@@ -33,6 +36,12 @@ __all__ = [
     "IntelligenceRequest",
     "IntelligenceResponse",
     "IntelligenceService",
+    "Observation",
+    "WebObserver",
+    "ActionResult",
+    "HttpHand",
+    "RuntimeEvent",
+    "SenseActRuntime",
     "LearningEvent",
     "LearningMemory",
     "LocaleContext",
