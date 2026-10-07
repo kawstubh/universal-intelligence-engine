@@ -5,13 +5,14 @@ import os
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from pydantic import BaseModel, Field
 
 from .dental_auth import login_google, require_doctor, request_otp, verify_otp
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
+from .dental_billing import plans as membership_plans, create_order as create_membership_order, handle_webhook as handle_membership_webhook
 
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
@@ -93,6 +94,34 @@ class WhatsAppTemplateIn(BaseModel):
     components: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class MembershipOrderIn(BaseModel):
+    plan_id: str = Field(min_length=3, max_length=40)
+
+@router.get("/billing/plans")
+async def get_membership_plans():
+    return {"plans": membership_plans()}
+
+@router.get("/billing/membership")
+async def get_membership(doctor=Depends(require_doctor)):
+    clinic_id = doctor.get("clinic_id", "dr-pranali")
+    master = clinic_id == os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip()
+    if master:
+        return {"clinic_id": clinic_id, "plan_id": "master", "name": "Dr. Pranali Master", "status": "active", "price_inr": 0, "period": "forever", "master": True}
+    store = get_dental_store()
+    rows = store._execute("SELECT * FROM dental_memberships WHERE clinic_id=%s ORDER BY created_at DESC LIMIT 1" if store.database_url else "SELECT * FROM dental_memberships WHERE clinic_id=? ORDER BY created_at DESC LIMIT 1", (clinic_id,))
+    return {"clinic_id": clinic_id, "membership": rows[0] if rows else None, "master": False}
+
+@router.post("/billing/order")
+async def create_membership_order(body: MembershipOrderIn, doctor=Depends(require_doctor)):
+    clinic_id = doctor.get("clinic_id")
+    if not clinic_id:
+        raise HTTPException(400, "Clinic context is required")
+    return await create_membership_order(clinic_id, body.plan_id, doctor.get("id", ""))
+
+@router.post("/billing/razorpay/webhook")
+async def membership_webhook(request: Request, x_razorpay_signature: str = Header(default="")):
+    return handle_membership_webhook(await request.body(), x_razorpay_signature)
+
 @router.post("/auth/google")
 async def doctor_google_login(body: DoctorGoogleLoginIn):
     return await login_google(body.access_token)
@@ -118,14 +147,14 @@ async def dental_health():
 
 
 @router.get("/patients")
-async def list_patients(_: dict = Depends(require_doctor)):
-    return get_dental_store().patients()
+async def list_patients(actor: dict = Depends(require_doctor)):
+    return get_dental_store().patients(actor.get("clinic_id"))
 
 
 @router.post("/patients")
 async def create_patient(body: PatientIn, actor: dict = Depends(require_doctor)):
     store = get_dental_store()
-    item = store.create_patient(body.model_dump())
+    item = store.create_patient(body.model_dump(), actor.get("clinic_id"))
     store.audit(actor.get("user_id"), "create", "patient", item["id"])
     return item
 
@@ -138,8 +167,10 @@ async def create_public_appointment(body: PublicAppointmentIn):
     not run AI, expose patient/doctor records, or accept an actor/admin identity.
     """
     store = get_dental_store()
-    patient = store.create_patient({"name": body.name.strip(), "phone": body.phone.strip(), "age": ""})
+    master_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
+    patient = store.create_patient({"name": body.name.strip(), "phone": body.phone.strip(), "age": ""}, master_clinic)
     appointment = store.create_appointment({
+        "clinic_id": master_clinic,
         "patient_id": patient["id"],
         "starts_at": body.starts_at.strip(),
         "treatment_type": body.treatment_type.strip(),
@@ -178,14 +209,15 @@ async def send_whatsapp_template(body: WhatsAppTemplateIn, actor: dict = Depends
 
 
 @router.get("/appointments")
-async def list_appointments(_: dict = Depends(require_doctor)):
+async def list_appointments(actor: dict = Depends(require_doctor)):
     store = get_dental_store()
-    patients = {p["id"]: p for p in store.patients()}
+    clinic_id = actor.get("clinic_id")
+    patients = {p["id"]: p for p in store.patients(clinic_id)}
     return [
         {**appointment,
          "patient_name": patients.get(appointment["patient_id"], {}).get("name", ""),
          "patient_phone": patients.get(appointment["patient_id"], {}).get("phone", "")}
-        for appointment in store.appointments()
+        for appointment in store.appointments(clinic_id)
     ]
 
 
@@ -195,7 +227,7 @@ async def update_appointment(appointment_id: str, body: AppointmentUpdateIn, act
     if not changes:
         raise HTTPException(status_code=400, detail="At least one appointment field is required")
     store = get_dental_store()
-    item = store.update_appointment(appointment_id, changes)
+    item = store.update_appointment(appointment_id, changes, actor.get("clinic_id"))
     if not item:
         raise HTTPException(status_code=404, detail="Appointment not found")
     store.audit(actor.get("user_id"), "update", "appointment", appointment_id)
@@ -205,14 +237,14 @@ async def update_appointment(appointment_id: str, body: AppointmentUpdateIn, act
 @router.post("/appointments")
 async def create_appointment(body: AppointmentIn, actor: dict = Depends(require_doctor)):
     store = get_dental_store()
-    item = store.create_appointment(body.model_dump())
+    item = store.create_appointment(body.model_dump(), actor.get("clinic_id"))
     store.audit(actor.get("user_id"), "create", "appointment", item["id"])
     return item
 
 
 @router.get("/patients/{patient_id}/chart")
-async def get_chart(patient_id: str, _: dict = Depends(require_doctor)):
-    return get_dental_store().chart(patient_id)
+async def get_chart(patient_id: str, actor: dict = Depends(require_doctor)):
+    return get_dental_store().chart(patient_id, actor.get("clinic_id"))
 
 
 @router.post("/patients/{patient_id}/chart")
@@ -220,21 +252,21 @@ async def save_chart(patient_id: str, body: ChartEntryIn, actor: dict = Depends(
     if body.patient_id != patient_id:
         raise HTTPException(status_code=400, detail="patient_id mismatch")
     store = get_dental_store()
-    item = store.save_chart(body.model_dump())
+    item = store.save_chart(body.model_dump(), actor.get("clinic_id"))
     store.audit(actor.get("user_id"), "write", "dental_chart", item["id"])
     return item
 
 
 @router.get("/patients/{patient_id}/periodontogram")
-async def get_periodontogram(patient_id: str, _: dict = Depends(require_doctor)):
-    return get_dental_store().periodontogram(patient_id)
+async def get_periodontogram(patient_id: str, actor: dict = Depends(require_doctor)):
+    return get_dental_store().periodontogram(patient_id, actor.get("clinic_id"))
 
 
 @router.post("/patients/{patient_id}/periodontogram")
 async def save_periodontogram(patient_id: str, body: PeriodontalEntryIn, actor: dict = Depends(require_doctor)):
     if body.patient_id != patient_id:
         raise HTTPException(status_code=400, detail="patient_id mismatch")
-    item = get_dental_store().save_periodontogram(body.model_dump())
+    item = get_dental_store().save_periodontogram(body.model_dump(), actor.get("clinic_id"))
     get_dental_store().audit(actor.get("user_id"), "write", "periodontogram", item["id"])
     return item
 
@@ -267,6 +299,6 @@ async def run_dental_intelligence(body: IntelligenceIn, actor: dict = Depends(re
 
     result = response.json()
     store = get_dental_store()
-    store.record_ai(body.patient_id, body.goal, result)
+    store.record_ai(body.patient_id, body.goal, result, actor.get("clinic_id"))
     store.audit(actor.get("user_id"), "run", "dental_intelligence", body.patient_id)
     return result
