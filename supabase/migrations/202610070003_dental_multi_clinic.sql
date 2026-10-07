@@ -54,3 +54,9 @@ using (user_id = auth.uid());
 
 -- Keep the existing dental_staff table for backwards compatibility.
 -- New production authorization should use clinic memberships.
+
+
+-- Stable platform master tenant. Keep this tenant permanently free.
+insert into public.dental_clinics (id, name, slug, active)
+values ('00000000-0000-0000-0000-000000000001', 'Dr. Pranali Dental Clinic', 'dr-pranali-master', true)
+on conflict (id) do update set name = excluded.name, slug = excluded.slug, active = true;
