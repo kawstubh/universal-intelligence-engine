@@ -1,4 +1,4 @@
-"""Dental persistence backend.
+﻿"""Dental persistence backend.
 
 PostgreSQL is the production backend when DATABASE_URL is set. SQLite remains
 supported for local development/tests. Database structure is owned by Alembic;
@@ -29,8 +29,16 @@ def _run_local_migrations() -> None:
     from alembic import command
     from alembic.config import Config
 
-    root = Path(__file__).resolve().parents[2]
-    cfg = Config(str(root / "alembic.ini"))
+    candidates = []
+    explicit = os.getenv("ALEMBIC_CONFIG", "").strip()
+    if explicit:
+        candidates.append(Path(explicit))
+    candidates.append(Path.cwd() / "alembic.ini")
+    candidates.append(Path(__file__).resolve().parents[2] / "alembic.ini")
+    config_path = next((item for item in candidates if item.exists()), None)
+    if config_path is None:
+        raise RuntimeError("Alembic configuration not found; refusing to start without database migrations")
+    cfg = Config(str(config_path))
     command.upgrade(cfg, "head")
 
 
