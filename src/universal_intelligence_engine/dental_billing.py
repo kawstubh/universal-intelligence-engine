@@ -89,6 +89,21 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
     import json
     event = json.loads(raw_body.decode("utf-8"))
     event_name = event.get("event", "")
+    event_id = str(event.get("id") or hashlib.sha256(raw_body).hexdigest())
+    store = get_dental_store()
+    existing = store._execute(
+        "SELECT event_id FROM dental_razorpay_events WHERE event_id=%s" if store.database_url else
+        "SELECT event_id FROM dental_razorpay_events WHERE event_id=?",
+        (event_id,),
+    )
+    if existing:
+        return {"ok": True, "duplicate": True, "event_id": event_id}
+    insert_event_sql = (
+        "INSERT INTO dental_razorpay_events(event_id,event_name,processed_at) VALUES (%s,%s,%s)"
+        if store.database_url else
+        "INSERT INTO dental_razorpay_events(event_id,event_name,processed_at) VALUES (?,?,?)"
+    )
+    store._execute(insert_event_sql, (event_id, event_name, str(int(time.time()))))
     if event_name in {"payment.captured", "order.paid", "payment_link.paid"}:
         payment = event.get("payload", {}).get("payment", {}).get("entity", {})
         payment_link = event.get("payload", {}).get("payment_link", {}).get("entity", {})
@@ -119,4 +134,4 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
                     "INSERT INTO dental_memberships(id,clinic_id,plan_id,status,started_at,created_at) VALUES (?,?,?,?,?,?)",
                     (str(uuid.uuid4()), row["clinic_id"], row["plan_id"], "active", str(int(time.time())), str(int(time.time()))),
                 )
-    return {"ok": True}
+    return {"ok": True, "event_id": event_id}
