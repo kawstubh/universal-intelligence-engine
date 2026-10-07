@@ -164,4 +164,9 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
     row = get_dental_store().get_session(_hash(token))
     if not row or int(row["expires_at"]) < int(time.time()) or row.get("revoked"):
         raise HTTPException(401, "Invalid or expired doctor session")
-    return {"id": row["doctor_id"], "phone": row["doctor_id"].replace("doctor-", ""), "role": "doctor"}
+    identity = str(row["doctor_id"]).replace("doctor-", "", 1)
+    parts = identity.split("|", 2)
+    if len(parts) == 3:
+        user_id, clinic_id, role = parts
+        return {"id": user_id, "clinic_id": clinic_id, "role": role}
+    return {"id": identity, "clinic_id": "dr-pranali", "role": "doctor"}
