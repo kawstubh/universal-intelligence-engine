@@ -7,6 +7,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from .contracts import IntelligenceRequest
 from .dental_api import router as dental_router
+from .dental_ai import router as dental_ai_router
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
@@ -39,6 +40,7 @@ app = FastAPI(
 )
 service = build_service()
 app.include_router(dental_router)
+app.include_router(dental_ai_router)
 
 def _authorize(authorization: str | None) -> None:
     expected = os.getenv("UIE_API_KEY")
