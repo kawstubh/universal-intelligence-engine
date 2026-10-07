@@ -1,6 +1,6 @@
 [project]
 name = "universal-intelligence-engine"
-version = "0.4.0"
+version = "0.4.1"
 description = "Domain-agnostic intelligence engine for research, reasoning, tools, agents, memory, and learning."
 requires-python = ">=3.11"
 dependencies = [
