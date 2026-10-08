@@ -11,7 +11,7 @@ from .dental_ai import router as dental_ai_router
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
-from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider, ProviderNotConfiguredError
+from .providers import BraveSearchProvider, DisabledKnowledgeProvider, OpenAIResponsesReasoningProvider, ProviderNotConfiguredError
 from .service import IntelligenceService
 
 class IntelligenceRunBody(BaseModel):
@@ -22,7 +22,7 @@ class IntelligenceRunBody(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
 
 def build_service() -> IntelligenceService:
-    knowledge = BraveSearchProvider()
+    knowledge = BraveSearchProvider() if os.getenv("BRAVE_SEARCH_API_KEY") else DisabledKnowledgeProvider()
     reasoning = OpenAIResponsesReasoningProvider()
     memory = LearningMemory(os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl"))
     engine = UniversalIntelligenceEngine(
