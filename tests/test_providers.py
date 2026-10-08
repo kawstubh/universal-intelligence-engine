@@ -58,3 +58,41 @@ def test_missing_reasoning_provider_fails_closed(monkeypatch):
     except ProviderNotConfiguredError as exc:
         assert exc.code == "PROVIDER_NOT_CONFIGURED"
         assert exc.provider == "reasoning"
+
+
+def test_gemini_provider_uses_openai_compatible_endpoint(monkeypatch):
+    from universal_intelligence_engine import providers
+    monkeypatch.setenv("REASONING_PROVIDER", "gemini")
+    monkeypatch.setenv("REASONING_MODEL", "gemini-3.6-flash")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    captured = {}
+
+    def fake_request(url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs["headers"]
+        captured["payload"] = kwargs["payload"]
+        return {"id": "gemini-test", "choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    monkeypatch.setattr(providers, "_json_request", fake_request)
+    result = providers.OpenAIResponsesReasoningProvider().reason(IntelligenceRequest(goal="test"), [])
+    assert result.answer == "ok"
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["headers"]["Authorization"] == "Bearer test-gemini-key"
+    assert captured["payload"]["model"] == "gemini-3.6-flash"
+
+
+def test_groq_provider_uses_openai_compatible_endpoint(monkeypatch):
+    from universal_intelligence_engine import providers
+    monkeypatch.setenv("REASONING_PROVIDER", "groq")
+    monkeypatch.setenv("REASONING_MODEL", "openai/gpt-oss-20b")
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    captured = {}
+
+    def fake_request(url, **kwargs):
+        captured["url"] = url
+        return {"id": "groq-test", "choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    monkeypatch.setattr(providers, "_json_request", fake_request)
+    result = providers.OpenAIResponsesReasoningProvider().reason(IntelligenceRequest(goal="test"), [])
+    assert result.answer == "ok"
+    assert captured["url"] == "https://api.groq.com/openai/v1/chat/completions"
