@@ -57,7 +57,17 @@ def health() -> dict[str, Any]:
         "version": "0.5.0",
         "providers": {
             "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
-            "reasoning": bool((os.getenv("REASONING_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY")) and (os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL"))),
+            "reasoning": bool(
+                (
+                    {
+                        "openai": os.getenv("OPENAI_API_KEY"),
+                        "gemini": os.getenv("GEMINI_API_KEY"),
+                        "groq": os.getenv("GROQ_API_KEY"),
+                    }.get(os.getenv("REASONING_PROVIDER", "openai").strip().lower())
+                    or os.getenv("REASONING_API_KEY")
+                )
+                and (os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL"))
+            ),
             "knowledge_provider": "brave-search",
             "reasoning_provider": os.getenv("REASONING_PROVIDER", "openai"),
             "reasoning_model": os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL"),
