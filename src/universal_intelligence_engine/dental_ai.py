@@ -380,9 +380,24 @@ async def _patient_ai(capability: str, actor: dict, message: str, patient_id: st
     patient = await _patient_record(actor, patient_id)
     clinic_id = patient.get("clinic_id") if patient else "patient"
     _limits(actor["user_id"], clinic_id, capability)
-    safe = {"domain": "dental", "language": language, "patient": {"patient_id": patient["id"]} if patient else {}}
+    if patient:
+        safe = _safe_context(patient["id"], clinic_id)
+        safe["language"] = language
+    else:
+        safe = {"domain": "dental", "language": language}
+    key = _cache_key(capability, {"message": message, "context": safe})
+    cached = store.get_ai_cache(key)
+    if cached:
+        store.save_patient_ai_message(actor["user_id"], patient.get("id") if patient else None, "user", message, clinic_id)
+        store.save_patient_ai_message(actor["user_id"], patient.get("id") if patient else None, "assistant", str(cached["result"]), clinic_id)
+        store.record_ai_usage(actor["user_id"], clinic_id, "patient", capability, True)
+        cached["request_id"] = str(uuid.uuid4())
+        cached["cache_hit"] = True
+        return cached
     goal = f"{system_goal}\nUser message: {message}\nNever diagnose. Never prescribe. Never provide medicine dosage."
     result = await _uie(capability, goal, safe, DISCLAIMER_PATIENT)
+    result["cache_hit"] = False
+    store.put_ai_cache(key, result, int(time.time()) + int(os.getenv("DENTAL_AI_CACHE_TTL", "900")))
     store.save_patient_ai_message(actor["user_id"], patient.get("id") if patient else None, "user", message, clinic_id)
     store.save_patient_ai_message(actor["user_id"], patient.get("id") if patient else None, "assistant", str(result["result"]), clinic_id)
     store.record_ai_usage(actor["user_id"], clinic_id, "patient", capability, False)
