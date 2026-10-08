@@ -176,41 +176,28 @@ class OpenAIResponsesReasoningProvider:
         )
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
-    def reason(
+    def _reason_once(
         self,
         request: IntelligenceRequest,
         evidence: list[Evidence] | tuple[Evidence, ...],
     ) -> IntelligenceResponse:
         if self.provider not in self.DEFAULT_BASE_URLS:
-            raise ProviderNotConfiguredError(
-                "reasoning",
-                f"Unsupported reasoning provider: {self.provider}",
-            )
+            raise ProviderNotConfiguredError("reasoning", f"Unsupported reasoning provider: {self.provider}")
         if not self.api_key:
-            raise ProviderNotConfiguredError(
-                "reasoning",
-                f"Reasoning provider is not configured: API key is missing for {self.provider}",
-            )
+            raise ProviderNotConfiguredError("reasoning", f"Reasoning provider is not configured: API key is missing for {self.provider}")
         if not self.model:
-            raise ProviderNotConfiguredError(
-                "reasoning",
-                "Reasoning provider is not configured: REASONING_MODEL is missing",
-            )
-
+            raise ProviderNotConfiguredError("reasoning", "Reasoning provider is not configured: REASONING_MODEL is missing")
         messages = self._messages(request, evidence)
         if self.provider == "openai":
             data = _json_request(
                 f"{self.base_url}/responses",
                 method="POST",
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                payload={
-                    "model": self.model,
-                    "input": messages,
-                },
+                payload={"model": self.model, "input": messages},
             )
             answer = data.get("output_text")
             if not answer:
-                parts: list[str] = []
+                parts = []
                 for item in data.get("output", []):
                     for content in item.get("content", []) if isinstance(item, dict) else []:
                         if isinstance(content, dict) and content.get("type") == "output_text":
@@ -221,29 +208,45 @@ class OpenAIResponsesReasoningProvider:
                 f"{self.base_url}/chat/completions",
                 method="POST",
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                payload={
-                    "model": self.model,
-                    "messages": messages,
-                },
+                payload={"model": self.model, "messages": messages},
             )
             choices = data.get("choices") or []
             answer = None
             if choices and isinstance(choices[0], dict):
-                message = choices[0].get("message") or {}
-                answer = message.get("content")
-
+                answer = (choices[0].get("message") or {}).get("content")
         if not answer:
             raise RuntimeError("Reasoning provider returned no output text")
-
         return IntelligenceResponse(
             answer=str(answer),
             evidence=evidence,
             confidence=None,
-            metadata={
-                "provider": self.provider,
-                "model": self.model,
-                "response_id": data.get("id"),
-                "usage": data.get("usage", {}),
-            },
+            metadata={"provider": self.provider, "model": self.model, "response_id": data.get("id"), "usage": data.get("usage", {})},
         )
-\n
+
+    def reason(
+        self,
+        request: IntelligenceRequest,
+        evidence: list[Evidence] | tuple[Evidence, ...],
+    ) -> IntelligenceResponse:
+        try:
+            return self._reason_once(request, evidence)
+        except Exception as primary_error:
+            fallback = os.getenv("REASONING_FALLBACK_PROVIDER", "").strip().lower()
+            if not fallback or fallback == self.provider:
+                raise
+            fallback_model = os.getenv("REASONING_FALLBACK_MODEL", "").strip() or None
+            fallback_base = os.getenv("REASONING_FALLBACK_BASE_URL", "").strip() or None
+            fallback_key = {
+                "openai": os.getenv("OPENAI_API_KEY"),
+                "gemini": os.getenv("GEMINI_API_KEY"),
+                "groq": os.getenv("GROQ_API_KEY"),
+            }.get(fallback) or os.getenv("REASONING_API_KEY")
+            if not fallback_key:
+                raise primary_error
+            secondary = OpenAIResponsesReasoningProvider(
+                api_key=fallback_key,
+                model=fallback_model,
+                base_url=fallback_base,
+                provider=fallback,
+            )
+            return secondary._reason_once(request, evidence)
