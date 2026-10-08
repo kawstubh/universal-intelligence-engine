@@ -167,3 +167,32 @@ def test_doctor_approval_is_audit_only(monkeypatch):
     assert response.json()["result"]["written_to_clinical_record"] is False
     assert response.json()["result"]["approval_id"] == "approval-1"
     app.dependency_overrides.clear()
+
+
+def test_patient_context_defaults_to_anonymized(monkeypatch):
+    class Store:
+        def get_patient(self, patient_id, clinic_id): return {"id": patient_id, "clinic_id": clinic_id, "age": 41}
+        def chart(self, *args): return [{"tooth_fdi": "16", "status": "caries"}]
+        def periodontogram(self, *args): return [{"tooth_fdi": "16", "measurements": {"pd": 4}}]
+        def appointments(self, *args): return [{"starts_at": "2026-10-08T10:00:00", "treatment_type": "RCT", "status": "scheduled"}]
+    monkeypatch.setattr(dental_ai, "get_dental_store", lambda: Store())
+    monkeypatch.delenv("AI_PATIENT_DATA_MODE", raising=False)
+    context = dental_ai._safe_context("patient-123", "clinic-a")
+    assert "patient_id" not in context
+    assert context["patient"] == {"age_band": "30_44"}
+    assert context["appointments"] == [{"treatment_type": "RCT", "status": "scheduled"}]
+    assert "starts_at" not in context["appointments"][0]
+
+
+def test_patient_context_full_mode_is_explicit_opt_in(monkeypatch):
+    class Store:
+        def get_patient(self, patient_id, clinic_id): return {"id": patient_id, "clinic_id": clinic_id, "age": 41}
+        def chart(self, *args): return []
+        def periodontogram(self, *args): return []
+        def appointments(self, *args): return [{"starts_at": "2026-10-08T10:00:00", "treatment_type": "RCT", "status": "scheduled"}]
+    monkeypatch.setattr(dental_ai, "get_dental_store", lambda: Store())
+    monkeypatch.setenv("AI_PATIENT_DATA_MODE", "full")
+    context = dental_ai._safe_context("patient-123", "clinic-a")
+    assert context["patient"]["patient_id"] == "patient-123"
+    assert context["patient"]["age"] == 41
+    assert context["appointments"][0]["starts_at"] == "2026-10-08T10:00:00"

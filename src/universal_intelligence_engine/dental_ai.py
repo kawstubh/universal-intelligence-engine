@@ -109,28 +109,60 @@ def _limits(actor_id: str, clinic_id: str, endpoint: str) -> None:
         raise HTTPException(429, detail={"message": "Clinic monthly AI limit reached", "code": "AI_CLINIC_MONTHLY_CAP"})
 
 
+def _patient_data_mode() -> str:
+    mode = os.getenv("AI_PATIENT_DATA_MODE", "anonymized").strip().lower()
+    return mode if mode in {"anonymized", "full"} else "anonymized"
+
+
+def _age_band(age: Any) -> str:
+    try:
+        value = int(age)
+    except (TypeError, ValueError):
+        return "unknown"
+    if value < 18:
+        return "under_18"
+    if value < 30:
+        return "18_29"
+    if value < 45:
+        return "30_44"
+    if value < 60:
+        return "45_59"
+    return "60_plus"
+
+
 def _safe_context(patient_id: str, clinic_id: str) -> dict[str, Any]:
     store = get_dental_store()
     patient = store.get_patient(patient_id, clinic_id)
     if not patient:
         raise HTTPException(403, detail={"message": "Patient is not accessible from this clinic", "code": "PATIENT_CLINIC_ACCESS_DENIED"})
-    return {
+    chart = [
+        {"tooth_fdi": row["tooth_fdi"], "status": row["status"]}
+        for row in store.chart(patient_id, clinic_id)
+    ]
+    perio = [
+        {"tooth_fdi": row["tooth_fdi"], "measurements": row.get("measurements", {})}
+        for row in store.periodontogram(patient_id, clinic_id)
+    ]
+    appointments = [
+        {"starts_at": row["starts_at"], "treatment_type": row["treatment_type"], "status": row["status"]}
+        for row in store.appointments(clinic_id, patient_id)
+    ]
+    context = {
         "domain": "dental",
         "patient": {"patient_id": patient["id"], "age": patient.get("age", "")},
-        "dental_chart": [
-            {"tooth_fdi": row["tooth_fdi"], "status": row["status"]}
-            for row in store.chart(patient_id, clinic_id)
-        ],
-        "periodontogram": [
-            {"tooth_fdi": row["tooth_fdi"], "measurements": row.get("measurements", {})}
-            for row in store.periodontogram(patient_id, clinic_id)
-        ],
-        "appointments": [
-            {"starts_at": row["starts_at"], "treatment_type": row["treatment_type"], "status": row["status"]}
-            for row in store.appointments(clinic_id, patient_id)
-        ],
+        "dental_chart": chart,
+        "periodontogram": perio,
+        "appointments": appointments,
         "patient_id": patient_id,
     }
+    if _patient_data_mode() == "anonymized":
+        context["patient"] = {"age_band": _age_band(patient.get("age"))}
+        context["appointments"] = [
+            {"treatment_type": row["treatment_type"], "status": row["status"]}
+            for row in appointments
+        ]
+        context.pop("patient_id", None)
+    return context
 
 
 async def _uie(capability: str, goal: str, context: dict[str, Any], disclaimer: str = DISCLAIMER_DOCTOR) -> dict[str, Any]:
