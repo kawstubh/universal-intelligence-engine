@@ -96,3 +96,8 @@ def test_groq_provider_uses_openai_compatible_endpoint(monkeypatch):
     result = providers.OpenAIResponsesReasoningProvider().reason(IntelligenceRequest(goal="test"), [])
     assert result.answer == "ok"
     assert captured["url"] == "https://api.groq.com/openai/v1/chat/completions"
+
+
+def test_disabled_knowledge_provider_returns_empty_evidence():
+    from universal_intelligence_engine.providers import DisabledKnowledgeProvider
+    assert DisabledKnowledgeProvider().search(IntelligenceRequest(goal="test")) == []
