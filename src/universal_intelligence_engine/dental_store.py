@@ -6,9 +6,12 @@ this module never creates tables directly.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 import sqlite3
+import string
 import time
 import uuid
 from datetime import datetime, timezone
@@ -92,9 +95,9 @@ class DentalStore:
 
     def get_patient(self, patient_id: str, clinic_id: str) -> dict[str, Any] | None:
         rows = self._execute(
-            "SELECT id,name,phone,age,clinic_id,created_at FROM dental_patients WHERE id=%s AND clinic_id=%s"
+            "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=%s AND clinic_id=%s"
             if self.database_url else
-            "SELECT id,name,phone,age,clinic_id,created_at FROM dental_patients WHERE id=? AND clinic_id=?",
+            "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=? AND clinic_id=?",
             (patient_id, clinic_id),
         )
         return rows[0] if rows else None
@@ -326,10 +329,32 @@ class DentalStore:
             rows = self._execute(sql, (user_id,))
         return rows[0] if rows else None
 
-    def patient_by_phone(self, phone: str):
-        sql = "SELECT * FROM dental_patients WHERE regexp_replace(phone, '[^0-9]', '', 'g') LIKE %s" if self.database_url else "SELECT * FROM dental_patients WHERE replace(replace(replace(phone, '-', ''), ' ', ''), '+91', '') LIKE ?"
-        value = "%" + phone[-10:]
-        return self._execute(sql, (value,))
+    def create_patient_invite(self, patient_id: str, clinic_id: str, ttl_seconds: int = 86400) -> str:
+        alphabet = string.ascii_uppercase + string.digits
+        code = "".join(secrets.choice(alphabet) for _ in range(10))
+        code_hash = hashlib.sha256(code.encode()).hexdigest()
+        sql = "INSERT INTO dental_patient_invites(id,code_hash,clinic_id,patient_id,expires_at,created_at) VALUES (%s,%s,%s,%s,%s,%s)" if self.database_url else "INSERT INTO dental_patient_invites(id,code_hash,clinic_id,patient_id,expires_at,created_at) VALUES (?,?,?,?,?,?)"
+        self._execute(sql, (_id(), code_hash, clinic_id, patient_id, str(int(time.time()) + ttl_seconds), _now()))
+        return code
+
+    def consume_patient_invite(self, code: str, user_id: str):
+        code_hash = hashlib.sha256(code.strip().upper().encode()).hexdigest()
+        sql = "SELECT * FROM dental_patient_invites WHERE code_hash=%s AND used_at IS NULL" if self.database_url else "SELECT * FROM dental_patient_invites WHERE code_hash=? AND used_at IS NULL"
+        rows = self._execute(sql, (code_hash,))
+        if not rows or int(float(rows[0]["expires_at"])) < int(time.time()):
+            return None
+        invite = rows[0]
+        patient = self.get_patient(invite["patient_id"], invite["clinic_id"])
+        if not patient:
+            return None
+        if patient.get("user_id") and patient["user_id"] != user_id:
+            return None
+        sql = "UPDATE dental_patient_invites SET used_at=%s,used_by=%s WHERE id=%s AND used_at IS NULL RETURNING id" if self.database_url else "UPDATE dental_patient_invites SET used_at=?,used_by=? WHERE id=? AND used_at IS NULL RETURNING id"
+        consumed = self._execute(sql, (_now(), user_id, invite["id"]))
+        if not consumed:
+            return None
+        self.link_patient_user(patient["id"], user_id)
+        return patient
 
     def link_patient_user(self, patient_id: str, user_id: str) -> None:
         sql = "UPDATE dental_patients SET user_id=%s WHERE id=%s" if self.database_url else "UPDATE dental_patients SET user_id=? WHERE id=?"

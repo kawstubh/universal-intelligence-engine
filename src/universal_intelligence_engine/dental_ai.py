@@ -37,7 +37,7 @@ class NoteAIIn(DoctorAIIn):
 
 
 class PatientLinkIn(BaseModel):
-    phone: str = Field(min_length=7, max_length=40)
+    invite_code: str = Field(min_length=8, max_length=32, pattern=r"^[A-Za-z0-9]+$")
 
 
 class PatientAIIn(BaseModel):
@@ -306,20 +306,20 @@ async def _patient_record(actor: dict, patient_id: str | None = None) -> dict[st
 
 
 @router.post("/patient/link")
-async def patient_link(body: PatientLinkIn, authorization: str | None = Header(default=None)):
-    actor = await require_patient(authorization)
-    store = get_dental_store()
-    normalized = "".join(ch for ch in body.phone if ch.isdigit())[-10:]
-    rows = store.patient_by_phone(normalized)
-    if not rows:
-        raise HTTPException(404, "No clinic patient record matches that mobile number")
-    if len(rows) > 1:
-        raise HTTPException(409, "More than one patient record matches this mobile number; clinic staff must link the account.")
-    patient = rows[0]
-    if patient.get("user_id") and patient["user_id"] != actor["user_id"]:
-        raise HTTPException(409, "This patient record is already linked to another account")
-    store.link_patient_user(patient["id"], actor["user_id"])
-    return {"result": {"patient_id": patient["id"], "linked": True}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
+async def patient_link(body: PatientLinkIn, actor=Depends(require_patient)):
+    patient = get_dental_store().consume_patient_invite(body.invite_code, actor["user_id"])
+    if not patient:
+        raise HTTPException(403, detail={"message": "Invalid, expired, or already-used clinic invite code", "code": "PATIENT_INVITE_INVALID"})
+    return {"result": {"patient_id": patient["id"], "clinic_id": patient["clinic_id"], "linked": True}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
+
+
+@router.post("/doctor/patients/{patient_id}/invite")
+async def create_patient_invite(patient_id: str, actor=Depends(require_doctor)):
+    clinic_id = actor["clinic_id"]
+    if not get_dental_store().get_patient(patient_id, clinic_id):
+        raise HTTPException(404, "Patient not found")
+    code = get_dental_store().create_patient_invite(patient_id, clinic_id)
+    return {"result": {"patient_id": patient_id, "invite_code": code, "expires_in": 86400}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_DOCTOR], "request_id": str(uuid.uuid4())}
 
 
 @router.post("/patient/consent")
