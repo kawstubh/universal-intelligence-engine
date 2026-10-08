@@ -1,0 +1,22 @@
+name: Supabase Keep Alive
+
+on:
+  schedule:
+    - cron: "17 */12 * * *"
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Touch Supabase Auth
+        env:
+          SUPABASE_URL: https://jzxbeldubkhwnznrathu.supabase.co
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o /tmp/supabase-health.json -w "%{http_code}" \
+            -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+            "$SUPABASE_URL/auth/v1/health")"
+          cat /tmp/supabase-health.json
+          test "$code" = "200"
