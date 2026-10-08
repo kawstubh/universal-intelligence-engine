@@ -101,3 +101,28 @@ def test_groq_provider_uses_openai_compatible_endpoint(monkeypatch):
 def test_disabled_knowledge_provider_returns_empty_evidence():
     from universal_intelligence_engine.providers import DisabledKnowledgeProvider
     assert DisabledKnowledgeProvider().search(IntelligenceRequest(goal="test")) == []
+
+
+def test_gemini_falls_back_to_groq(monkeypatch):
+    from universal_intelligence_engine import providers
+    monkeypatch.setenv("REASONING_PROVIDER", "gemini")
+    monkeypatch.setenv("REASONING_MODEL", "gemini-2.5-flash")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+    monkeypatch.setenv("REASONING_FALLBACK_PROVIDER", "groq")
+    monkeypatch.setenv("REASONING_FALLBACK_MODEL", "openai/gpt-oss-20b")
+    monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+    calls = []
+
+    def fake_request(url, **kwargs):
+        calls.append((url, kwargs["headers"]["Authorization"]))
+        if "generativelanguage" in url:
+            raise RuntimeError("primary unavailable")
+        return {"id": "fallback", "choices": [{"message": {"content": "fallback ok"}}], "usage": {}}
+
+    monkeypatch.setattr(providers, "_json_request", fake_request)
+    result = providers.OpenAIResponsesReasoningProvider().reason(IntelligenceRequest(goal="test"), [])
+    assert result.answer == "fallback ok"
+    assert calls == [
+        ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "Bearer gemini-key"),
+        ("https://api.groq.com/openai/v1/chat/completions", "Bearer groq-key"),
+    ]
