@@ -311,14 +311,14 @@ async def _supabase_user(authorization: str | None) -> dict[str, Any]:
     url = os.getenv("SUPABASE_URL", "").rstrip("/")
     key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
     if not token or not url or not key:
-        raise HTTPException(401, "Invalid patient session")
+        raise HTTPException(401, detail={"message": "Invalid patient session", "code": "INVALID_PATIENT_SESSION"})
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.get(f"{url}/auth/v1/user", headers={"apikey": key, "Authorization": f"Bearer {token}"})
     if response.status_code != 200:
-        raise HTTPException(401, "Invalid patient session")
+        raise HTTPException(401, detail={"message": "Invalid patient session", "code": "INVALID_PATIENT_SESSION"})
     user = response.json()
     if not user.get("id"):
-        raise HTTPException(401, "Patient identity missing")
+        raise HTTPException(401, detail={"message": "Patient identity missing", "code": "PATIENT_IDENTITY_MISSING"})
     return user
 
 
