@@ -11,6 +11,7 @@ import json
 import os
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
+import time
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 from typing import Any
@@ -39,7 +40,16 @@ def _json_request(
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
-    except (HTTPError, URLError) as exc:
+    except HTTPError as exc:
+        if exc.code == 429:
+            retry_after = None
+            try:
+                retry_after = float(exc.headers.get("Retry-After"))
+            except (TypeError, ValueError):
+                retry_after = None
+            raise ProviderRateLimitError("reasoning", retry_after) from exc
+        raise RuntimeError(f"Provider request failed: {exc}") from exc
+    except URLError as exc:
         raise RuntimeError(f"Provider request failed: {exc}") from exc
     try:
         value = json.loads(raw)
@@ -48,6 +58,15 @@ def _json_request(
     if not isinstance(value, dict):
         raise RuntimeError("Provider returned a non-object JSON response")
     return value
+
+
+class ProviderRateLimitError(RuntimeError):
+    """Raised when a provider returns HTTP 429 after retry handling."""
+    def __init__(self, provider: str, retry_after: float | None = None):
+        self.provider = provider
+        self.retry_after = retry_after
+        self.code = "AI_RATE_LIMITED"
+        super().__init__("Reasoning provider rate limit reached")
 
 
 class ProviderNotConfiguredError(RuntimeError):
@@ -228,10 +247,15 @@ class OpenAIResponsesReasoningProvider:
         request: IntelligenceRequest,
         evidence: list[Evidence] | tuple[Evidence, ...],
     ) -> IntelligenceResponse:
-        try:
-            return self._reason_once(request, evidence)
-        except Exception as primary_error:
-            fallback = os.getenv("REASONING_FALLBACK_PROVIDER", "").strip().lower()
+        for attempt in range(3):
+            try:
+                return self._reason_once(request, evidence)
+            except ProviderRateLimitError as exc:
+                if attempt >= 2:
+                    raise
+                delay = exc.retry_after if exc.retry_after is not None else 2 ** attempt
+                time.sleep(min(max(delay, 1.0), 8.0))
+        raise RuntimeError("Reasoning provider retry loop exited unexpectedly")
             if not fallback or fallback == self.provider:
                 raise
             fallback_model = os.getenv("REASONING_FALLBACK_MODEL", "").strip() or None
