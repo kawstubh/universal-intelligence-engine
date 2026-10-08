@@ -11,7 +11,7 @@ from .dental_ai import router as dental_ai_router
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
-from .providers import BraveSearchProvider, DisabledKnowledgeProvider, OpenAIResponsesReasoningProvider, ProviderNotConfiguredError
+from .providers import BraveSearchProvider, DisabledKnowledgeProvider, OpenAIResponsesReasoningProvider, ProviderNotConfiguredError, ProviderRateLimitError
 from .service import IntelligenceService
 
 class IntelligenceRunBody(BaseModel):
@@ -75,6 +75,8 @@ def run_intelligence(body: IntelligenceRunBody, authorization: str | None = Head
         ))
     except ProviderNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail={"message": str(exc), "code": exc.code, "provider": exc.provider}) from exc
+    except ProviderRateLimitError as exc:
+        raise HTTPException(status_code=429, detail={"message": "AI is busy right now. Please try again shortly.", "code": exc.code, "provider": exc.provider}) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail={"message": str(exc), "code": "PROVIDER_REQUEST_FAILED"}) from exc
     return {
