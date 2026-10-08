@@ -247,15 +247,46 @@ class OpenAIResponsesReasoningProvider:
         request: IntelligenceRequest,
         evidence: list[Evidence] | tuple[Evidence, ...],
     ) -> IntelligenceResponse:
+        primary_error: Exception | None = None
         for attempt in range(3):
             try:
                 return self._reason_once(request, evidence)
             except ProviderRateLimitError as exc:
+                primary_error = exc
                 if attempt >= 2:
-                    raise
+                    break
                 delay = exc.retry_after if exc.retry_after is not None else 2 ** attempt
                 time.sleep(min(max(delay, 1.0), 8.0))
-        raise RuntimeError("Reasoning provider retry loop exited unexpectedly")
+            except Exception as exc:
+                primary_error = exc
+                break
+        return self._fallback_after_primary_failure(request, evidence, primary_error or RuntimeError("Primary provider failed"))
+
+    def _fallback_after_primary_failure(
+        self,
+        request: IntelligenceRequest,
+        evidence: list[Evidence] | tuple[Evidence, ...],
+        primary_error: Exception,
+    ) -> IntelligenceResponse:
+        fallback = os.getenv("REASONING_FALLBACK_PROVIDER", "").strip().lower()
+        if not fallback or fallback == self.provider:
+            raise primary_error
+        fallback_model = os.getenv("REASONING_FALLBACK_MODEL", "").strip() or None
+        fallback_base = os.getenv("REASONING_FALLBACK_BASE_URL", "").strip() or None
+        fallback_key = {
+            "openai": os.getenv("OPENAI_API_KEY"),
+            "gemini": os.getenv("GEMINI_API_KEY"),
+            "groq": os.getenv("GROQ_API_KEY"),
+        }.get(fallback) or os.getenv("REASONING_API_KEY")
+        if not fallback_key:
+            raise primary_error
+        secondary = OpenAIResponsesReasoningProvider(
+            api_key=fallback_key,
+            model=fallback_model,
+            base_url=fallback_base,
+            provider=fallback,
+        )
+        return secondary._reason_once(request, evidence)
             if not fallback or fallback == self.provider:
                 raise
             fallback_model = os.getenv("REASONING_FALLBACK_MODEL", "").strip() or None
