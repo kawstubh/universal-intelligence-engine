@@ -287,21 +287,3 @@ class OpenAIResponsesReasoningProvider:
             provider=fallback,
         )
         return secondary._reason_once(request, evidence)
-            if not fallback or fallback == self.provider:
-                raise
-            fallback_model = os.getenv("REASONING_FALLBACK_MODEL", "").strip() or None
-            fallback_base = os.getenv("REASONING_FALLBACK_BASE_URL", "").strip() or None
-            fallback_key = {
-                "openai": os.getenv("OPENAI_API_KEY"),
-                "gemini": os.getenv("GEMINI_API_KEY"),
-                "groq": os.getenv("GROQ_API_KEY"),
-            }.get(fallback) or os.getenv("REASONING_API_KEY")
-            if not fallback_key:
-                raise primary_error
-            secondary = OpenAIResponsesReasoningProvider(
-                api_key=fallback_key,
-                model=fallback_model,
-                base_url=fallback_base,
-                provider=fallback,
-            )
-            return secondary._reason_once(request, evidence)
