@@ -58,6 +58,13 @@ class ProviderNotConfiguredError(RuntimeError):
         super().__init__(message)
 
 
+class DisabledKnowledgeProvider:
+    """No-op knowledge provider used when web search is intentionally disabled."""
+
+    def search(self, request: IntelligenceRequest) -> list[Evidence]:
+        return []
+
+
 class BraveSearchProvider:
     """Live web search through Brave Search API."""
 
