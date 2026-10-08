@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-revision = "0004_patient_invites_and_billing_lifecycle"
+revision = "0004_patient_invites_billing"
 down_revision = "0003_razorpay_idempotency"
 branch_labels = None
 depends_on = None
