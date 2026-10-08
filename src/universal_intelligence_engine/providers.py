@@ -104,37 +104,53 @@ class BraveSearchProvider:
 
 
 class OpenAIResponsesReasoningProvider:
-    """Reason over retrieved evidence through OpenAI's Responses API.
+    """Vendor-neutral reasoning provider.
 
-    Uses OPENAI_API_KEY and OPENAI_MODEL. The Responses API is the current API
-    surface for new OpenAI integrations.
+    Supported providers:
+      - openai: OpenAI Responses API
+      - gemini: Gemini OpenAI-compatible Chat Completions API
+      - groq: Groq OpenAI-compatible Chat Completions API
+
+    Configuration:
+      REASONING_PROVIDER=openai|gemini|groq
+      REASONING_BASE_URL=<optional override>
+      REASONING_MODEL=<provider model id>
+      REASONING_API_KEY=<generic key, optional>
+      GEMINI_API_KEY=<Gemini key, preferred for provider=gemini>
+      GROQ_API_KEY=<Groq key, preferred for provider=groq>
+      OPENAI_API_KEY=<OpenAI key, preferred for provider=openai>
     """
+
+    DEFAULT_BASE_URLS = {
+        "openai": "https://api.openai.com/v1",
+        "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "groq": "https://api.groq.com/openai/v1",
+    }
 
     def __init__(
         self,
         api_key: str | None = None,
         model: str | None = None,
         base_url: str | None = None,
+        provider: str | None = None,
     ):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model or os.getenv("OPENAI_MODEL")
-        self.base_url = (base_url or os.getenv(
-            "OPENAI_BASE_URL", "https://api.openai.com/v1"
-        )).rstrip("/")
+        self.provider = (provider or os.getenv("REASONING_PROVIDER", "openai")).strip().lower()
+        self.model = model or os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL")
+        self.base_url = (
+            base_url
+            or os.getenv("REASONING_BASE_URL")
+            or self.DEFAULT_BASE_URLS.get(self.provider, "")
+        ).rstrip("/")
+        provider_keys = {
+            "openai": os.getenv("OPENAI_API_KEY"),
+            "gemini": os.getenv("GEMINI_API_KEY"),
+            "groq": os.getenv("GROQ_API_KEY"),
+        }
+        self.api_key = api_key or provider_keys.get(self.provider) or os.getenv("REASONING_API_KEY")
 
-    def reason(
-        self,
-        request: IntelligenceRequest,
-        evidence: list[Evidence] | tuple[Evidence, ...],
-    ) -> IntelligenceResponse:
-        if not self.api_key:
-            raise ProviderNotConfiguredError("reasoning", "Reasoning provider is not configured: OPENAI_API_KEY is missing")
-        if not self.model:
-            raise ProviderNotConfiguredError("reasoning", "Reasoning provider is not configured: OPENAI_MODEL is missing")
-
+    def _messages(self, request: IntelligenceRequest, evidence: list[Evidence] | tuple[Evidence, ...]) -> list[dict[str, str]]:
         evidence_block = "\n\n".join(
-            f"[{idx}] {item.title}\nSource: {item.source}\nURL: {item.url or 'n/a'}\n"
-            f"{item.content}"
+            f"[{idx}] {item.title}\nSource: {item.source}\nURL: {item.url or 'n/a'}\n{item.content}"
             for idx, item in enumerate(evidence, start=1)
         )
         system = (
@@ -151,38 +167,76 @@ class OpenAIResponsesReasoningProvider:
             f"Constraints: {json.dumps(dict(request.constraints), ensure_ascii=False)}\n\n"
             f"Evidence:\n{evidence_block or 'No evidence was retrieved.'}"
         )
-        data = _json_request(
-            f"{self.base_url}/responses",
-            method="POST",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            payload={
-                "model": self.model,
-                "input": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            },
-        )
-        answer = data.get("output_text")
-        if not answer:
-            parts: list[str] = []
-            for item in data.get("output", []):
-                for content in item.get("content", []) if isinstance(item, dict) else []:
-                    if isinstance(content, dict) and content.get("type") == "output_text":
-                        parts.append(str(content.get("text", "")))
-            answer = "\n".join(p for p in parts if p).strip()
+        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    def reason(
+        self,
+        request: IntelligenceRequest,
+        evidence: list[Evidence] | tuple[Evidence, ...],
+    ) -> IntelligenceResponse:
+        if self.provider not in self.DEFAULT_BASE_URLS:
+            raise ProviderNotConfiguredError(
+                "reasoning",
+                f"Unsupported reasoning provider: {self.provider}",
+            )
+        if not self.api_key:
+            raise ProviderNotConfiguredError(
+                "reasoning",
+                f"Reasoning provider is not configured: API key is missing for {self.provider}",
+            )
+        if not self.model:
+            raise ProviderNotConfiguredError(
+                "reasoning",
+                "Reasoning provider is not configured: REASONING_MODEL is missing",
+            )
+
+        messages = self._messages(request, evidence)
+        if self.provider == "openai":
+            data = _json_request(
+                f"{self.base_url}/responses",
+                method="POST",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                payload={
+                    "model": self.model,
+                    "input": messages,
+                },
+            )
+            answer = data.get("output_text")
+            if not answer:
+                parts: list[str] = []
+                for item in data.get("output", []):
+                    for content in item.get("content", []) if isinstance(item, dict) else []:
+                        if isinstance(content, dict) and content.get("type") == "output_text":
+                            parts.append(str(content.get("text", "")))
+                answer = "\n".join(p for p in parts if p).strip()
+        else:
+            data = _json_request(
+                f"{self.base_url}/chat/completions",
+                method="POST",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                payload={
+                    "model": self.model,
+                    "messages": messages,
+                },
+            )
+            choices = data.get("choices") or []
+            answer = None
+            if choices and isinstance(choices[0], dict):
+                message = choices[0].get("message") or {}
+                answer = message.get("content")
+
         if not answer:
             raise RuntimeError("Reasoning provider returned no output text")
 
         return IntelligenceResponse(
-            answer=answer,
+            answer=str(answer),
             evidence=evidence,
             confidence=None,
             metadata={
-                "provider": "openai-responses",
+                "provider": self.provider,
                 "model": self.model,
                 "response_id": data.get("id"),
                 "usage": data.get("usage", {}),
             },
         )
-
+\n
