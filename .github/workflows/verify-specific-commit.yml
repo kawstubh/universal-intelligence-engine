@@ -1,0 +1,23 @@
+name: Verify Specific Commit
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Commit SHA to test
+        required: true
+        default: ca1f659bcf3f1fca9c9e25288b3499cfb9579f0e
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
