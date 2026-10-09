@@ -41,3 +41,33 @@ def test_engine_orchestrates():
     assert result.answer["goal"] == "test"
     assert result.metadata["evaluation"]["passed"] is True
     assert learning.events[0]["evidence_count"] == 1
+
+
+def test_require_sources_never_calls_reasoner_without_evidence():
+    from universal_intelligence_engine.evaluation import BasicResponseEvaluator
+
+    class EmptyKnowledge:
+        def search(self, request):
+            return []
+
+    class MustNotReasonWithoutSources:
+        def reason(self, request, evidence):
+            raise AssertionError("reasoning must not run without required evidence")
+
+    engine = UniversalIntelligenceEngine(
+        EmptyKnowledge(),
+        MustNotReasonWithoutSources(),
+        BasicResponseEvaluator(),
+    )
+    result = engine.run(
+        IntelligenceRequest(
+            goal="Find a supported answer",
+            constraints={"require_sources": True},
+        )
+    )
+
+    assert result.metadata["reason"] == "required_evidence_unavailable"
+    assert result.metadata["reasoning_skipped"] is True
+    assert result.confidence == 0.0
+    assert result.evidence == ()
+    assert result.metadata["evaluation"]["passed"] is False
