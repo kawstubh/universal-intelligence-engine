@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
+
+from . import __version__
 
 from .contracts import IntelligenceRequest
 from .engine import UniversalIntelligenceEngine
@@ -44,7 +47,7 @@ def build_service() -> IntelligenceService:
 
 app = FastAPI(
     title="Universal Intelligence Engine",
-    version="0.4.1",
+    version=__version__,
     description="Shared intelligence API for research, reasoning, applications and agents.",
 )
 service = build_service()
@@ -57,7 +60,9 @@ def _authorize(authorization: str | None) -> None:
             status_code=503,
             detail="UIE_API_KEY is not configured; API access is fail-closed.",
         )
-    if authorization != f"Bearer {expected}":
+    supplied = authorization or ""
+    expected_header = f"Bearer {expected}"
+    if not hmac.compare_digest(supplied, expected_header):
         raise HTTPException(status_code=401, detail="Invalid API credentials")
 
 
@@ -66,7 +71,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
-        "version": "0.4.1",
+        "version": __version__,
         "providers": {
             "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
             "reasoning": bool(os.getenv("OPENAI_API_KEY")),
