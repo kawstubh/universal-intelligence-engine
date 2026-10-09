@@ -53,6 +53,26 @@ class AutonomousAgent:
         steps: list[AgentStep] = []
         outputs: dict[str, Any] = {}
         for index, step in enumerate(ordered, start=1):
+            if step.requires_approval:
+                steps.append(
+                    AgentStep(
+                        index,
+                        step.capability,
+                        "approval_required",
+                        error="Human approval is required before this action can execute.",
+                    )
+                )
+                return AgentRun(
+                    goal,
+                    "approval_required",
+                    tuple(steps),
+                    output=outputs.get("reason"),
+                    metadata={
+                        "reason": "human_approval_required",
+                        "pending_action": step.capability,
+                        "pending_step": step.id,
+                    },
+                )
             args = {"goal": goal, "objective": step.objective, "previous": outputs}
             try:
                 result = self.tools.call(step.capability, **args)
