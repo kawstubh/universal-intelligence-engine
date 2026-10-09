@@ -15,7 +15,8 @@ from .contracts import IntelligenceRequest
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
-from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
+from .providers import BraveSearchProvider, NoKnowledgeProvider, OpenAIResponsesReasoningProvider
+from .reasoning import NativeReasoningProvider
 from .service import IntelligenceService
 
 
@@ -31,8 +32,18 @@ class IntelligenceRunBody(BaseModel):
 
 
 def build_service() -> IntelligenceService:
-    knowledge = BraveSearchProvider()
-    reasoning = OpenAIResponsesReasoningProvider()
+    # Provider selection is explicit: the core remains usable offline, but never
+    # invents evidence when the live research provider is not configured.
+    knowledge = (
+        BraveSearchProvider()
+        if os.getenv("BRAVE_SEARCH_API_KEY")
+        else NoKnowledgeProvider()
+    )
+    reasoning = (
+        OpenAIResponsesReasoningProvider()
+        if os.getenv("OPENAI_API_KEY")
+        else NativeReasoningProvider()
+    )
     memory = LearningMemory(
         os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl")
     )

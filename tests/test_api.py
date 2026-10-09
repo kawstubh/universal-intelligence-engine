@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from universal_intelligence_engine import __version__
 from universal_intelligence_engine import api
-from universal_intelligence_engine.contracts import IntelligenceResponse
+from universal_intelligence_engine.contracts import IntelligenceRequest, IntelligenceResponse
 
 
 client = TestClient(api.app)
@@ -90,3 +90,23 @@ def test_intelligence_rejects_invalid_request_before_execution(monkeypatch):
     )
 
     assert response.status_code == 422
+
+
+def test_service_uses_native_reasoning_and_empty_evidence_when_providers_are_unconfigured(
+    monkeypatch, tmp_path
+):
+    from universal_intelligence_engine.providers import NoKnowledgeProvider
+    from universal_intelligence_engine.reasoning import NativeReasoningProvider
+
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("UIE_MEMORY_PATH", str(tmp_path / "learning.jsonl"))
+
+    service = api.build_service()
+    result = service.execute(IntelligenceRequest(goal="Explain a subject"))
+
+    assert isinstance(service.engine.knowledge, NoKnowledgeProvider)
+    assert isinstance(service.engine.reasoning, NativeReasoningProvider)
+    assert result.evidence == ()
+    assert "cannot establish a supported answer" in result.answer
+    assert result.metadata["provider"] == "native"
