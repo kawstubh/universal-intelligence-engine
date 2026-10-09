@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from pydantic import BaseModel, Field
 
-from .dental_auth import login_google, logout_doctor, require_doctor
+from .dental_auth import bootstrap_doctor, login_password, logout_doctor, require_doctor
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
@@ -18,9 +18,16 @@ from .dental_billing import plans as membership_plans, create_order as create_me
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
 
-class DoctorGoogleLoginIn(BaseModel):
-    access_token: str = Field(min_length=20, max_length=10000)
-    google_id_token: str = Field(min_length=20, max_length=10000)
+class DoctorPasswordLoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class DoctorBootstrapIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=12, max_length=256)
+    display_name: str = Field(default="", max_length=200)
+    setup_key: str = Field(min_length=16, max_length=256)
 
 
 class PatientIn(BaseModel):
@@ -116,9 +123,15 @@ async def create_membership_order(body: MembershipOrderIn, doctor=Depends(requir
 async def membership_webhook(request: Request, x_razorpay_signature: str = Header(default="")):
     return handle_membership_webhook(await request.body(), x_razorpay_signature)
 
-@router.post("/auth/google")
-async def doctor_google_login(body: DoctorGoogleLoginIn):
-    return await login_google(body.access_token, body.google_id_token)
+@router.post("/auth/password")
+async def doctor_password_login(body: DoctorPasswordLoginIn):
+    return login_password(body.email, body.password)
+
+
+@router.post("/auth/bootstrap")
+async def doctor_bootstrap(body: DoctorBootstrapIn):
+    """One-time clinic setup; disabled unless a secret setup key is configured."""
+    return bootstrap_doctor(body.email, body.password, body.display_name, body.setup_key)
 
 @router.post("/auth/logout")
 async def doctor_logout(authorization: str | None = Header(default=None), doctor=Depends(require_doctor)):
