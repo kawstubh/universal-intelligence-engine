@@ -119,5 +119,13 @@ class AutonomousAgent:
                         metadata={"step_count": len(steps), "verified": verified})
 
     def run_goal(self, goal: str, context: Mapping[str, Any] | None = None) -> AgentRun:
-        plan = self.planner.build(goal, context)
+        try:
+            plan = self.planner.build(goal, context)
+        except ValueError as exc:
+            return AgentRun(
+                goal,
+                "failed",
+                (),
+                metadata={"reason": "plan_rejected", "detail": str(exc)},
+            )
         return self._execute_plan(goal, plan)

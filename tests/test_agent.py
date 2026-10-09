@@ -30,3 +30,18 @@ def test_goal_agent_can_finish_non_mutating_goal():
 
     assert result.status == "verified"
     assert result.metadata["verified"] is True
+
+
+def test_goal_agent_rejects_plan_that_would_be_truncated_by_budget():
+    registry = ToolRegistry(policy_for(allowed=["reason", "verify"]))
+    registry.register(ToolSpec("reason", "Reason", lambda **kwargs: "draft"))
+    registry.register(ToolSpec("verify", "Verify", lambda **kwargs: "checked"))
+
+    result = AutonomousAgent(registry, max_steps=2).run_goal(
+        "research the latest evidence"
+    )
+
+    assert result.status == "failed"
+    assert result.metadata["reason"] == "plan_rejected"
+    assert "exceeding configured budget" in result.metadata["detail"]
+    assert result.steps == ()
