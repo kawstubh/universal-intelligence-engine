@@ -83,7 +83,9 @@ class AdaptivePlanner:
             )
 
         if len(steps) > self.max_steps:
-            steps = steps[: self.max_steps]
+            raise ValueError(
+                f"Plan requires {len(steps)} steps, exceeding configured budget of {self.max_steps}"
+            )
 
         return Plan(
             goal=goal,

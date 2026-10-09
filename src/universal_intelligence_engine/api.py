@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from . import __version__
+
 from .contracts import IntelligenceRequest
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
-from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
+from .providers import BraveSearchProvider, NoKnowledgeProvider, OpenAIResponsesReasoningProvider
+from .reasoning import NativeReasoningProvider
 from .service import IntelligenceService
 
 
@@ -28,8 +32,18 @@ class IntelligenceRunBody(BaseModel):
 
 
 def build_service() -> IntelligenceService:
-    knowledge = BraveSearchProvider()
-    reasoning = OpenAIResponsesReasoningProvider()
+    # Provider selection is explicit: the core remains usable offline, but never
+    # invents evidence when the live research provider is not configured.
+    knowledge = (
+        BraveSearchProvider()
+        if os.getenv("BRAVE_SEARCH_API_KEY")
+        else NoKnowledgeProvider()
+    )
+    reasoning = (
+        OpenAIResponsesReasoningProvider()
+        if os.getenv("OPENAI_API_KEY")
+        else NativeReasoningProvider()
+    )
     memory = LearningMemory(
         os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl")
     )
@@ -44,7 +58,7 @@ def build_service() -> IntelligenceService:
 
 app = FastAPI(
     title="Universal Intelligence Engine",
-    version="0.4.1",
+    version=__version__,
     description="Shared intelligence API for research, reasoning, applications and agents.",
 )
 service = build_service()
@@ -57,7 +71,9 @@ def _authorize(authorization: str | None) -> None:
             status_code=503,
             detail="UIE_API_KEY is not configured; API access is fail-closed.",
         )
-    if authorization != f"Bearer {expected}":
+    supplied = authorization or ""
+    expected_header = f"Bearer {expected}"
+    if not hmac.compare_digest(supplied, expected_header):
         raise HTTPException(status_code=401, detail="Invalid API credentials")
 
 
@@ -66,7 +82,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
-        "version": "0.4.1",
+        "version": __version__,
         "providers": {
             "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
             "reasoning": bool(os.getenv("OPENAI_API_KEY")),

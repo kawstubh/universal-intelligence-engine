@@ -49,6 +49,13 @@ def _json_request(
     return value
 
 
+class NoKnowledgeProvider:
+    """Explicit offline fallback that returns no fabricated evidence."""
+
+    def search(self, request: IntelligenceRequest) -> list[Evidence]:
+        return []
+
+
 class BraveSearchProvider:
     """Live web search through Brave Search API."""
 

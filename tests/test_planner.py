@@ -31,3 +31,10 @@ def test_plan_rejects_blocked_capability():
         assert False, "blocked capability should fail"
     except PermissionError:
         pass
+
+
+def test_adaptive_planner_rejects_budget_that_would_drop_verification():
+    import pytest
+
+    with pytest.raises(ValueError, match="exceeding configured budget"):
+        AdaptivePlanner(max_steps=2).build("research the latest evidence")

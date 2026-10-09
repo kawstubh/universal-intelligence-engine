@@ -53,6 +53,26 @@ class AutonomousAgent:
         steps: list[AgentStep] = []
         outputs: dict[str, Any] = {}
         for index, step in enumerate(ordered, start=1):
+            if step.requires_approval:
+                steps.append(
+                    AgentStep(
+                        index,
+                        step.capability,
+                        "approval_required",
+                        error="Human approval is required before this action can execute.",
+                    )
+                )
+                return AgentRun(
+                    goal,
+                    "approval_required",
+                    tuple(steps),
+                    output=outputs.get("reason"),
+                    metadata={
+                        "reason": "human_approval_required",
+                        "pending_action": step.capability,
+                        "pending_step": step.id,
+                    },
+                )
             args = {"goal": goal, "objective": step.objective, "previous": outputs}
             try:
                 result = self.tools.call(step.capability, **args)
@@ -99,5 +119,13 @@ class AutonomousAgent:
                         metadata={"step_count": len(steps), "verified": verified})
 
     def run_goal(self, goal: str, context: Mapping[str, Any] | None = None) -> AgentRun:
-        plan = self.planner.build(goal, context)
+        try:
+            plan = self.planner.build(goal, context)
+        except ValueError as exc:
+            return AgentRun(
+                goal,
+                "failed",
+                (),
+                metadata={"reason": "plan_rejected", "detail": str(exc)},
+            )
         return self._execute_plan(goal, plan)

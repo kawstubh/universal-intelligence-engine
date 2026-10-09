@@ -152,3 +152,14 @@ Configure:
 The governance boundary itself is not self-modifiable. Proposed changes should be sandboxed, benchmarked, security-tested, regression-tested, signed by the human operator, versioned, and auditable before activation.
 
 **Important:** never place the private signing key in the repository, mobile app, or AI runtime.
+
+
+## Provider fallback and action approval
+
+UIE separates service liveness from provider availability. `GET /health` reports whether the live Brave research and OpenAI reasoning credentials are configured; it does not claim that either provider is reachable or that an answer is factually correct.
+
+When no live provider key is configured, UIE selects its native reasoning implementation and an offline knowledge provider that returns **no evidence**. It must then say the answer cannot be established from available evidence rather than inventing sources or facts. A configured provider outage is surfaced as an error rather than silently presented as a successful live-research result.
+
+Autonomous plans may describe consequential actions, but any plan step marked `requires_approval` stops with `approval_required` and a pending-action identifier. The agent does not execute that step automatically. Plans that exceed their configured step budget are rejected rather than truncated, because truncation could remove verification or change the intended sequence.
+
+The API tests cover authentication failure modes, package/API version consistency, request-field propagation, offline fallback behavior, plan budgets, and the human-approval boundary.

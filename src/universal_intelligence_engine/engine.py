@@ -34,7 +34,22 @@ class UniversalIntelligenceEngine:
         fused_evidence = tuple(rank_evidence(raw_evidence))
         decision = self.algorithm.decide(request, fused_evidence)
         evidence = decision.evidence
-        response = self.reasoning.reason(request, evidence)
+        if request.constraints.get("require_sources") and not evidence:
+            response = IntelligenceResponse(
+                answer=(
+                    "I cannot establish a supported answer because no evidence "
+                    "was retrieved. Configure a knowledge provider or retry later."
+                ),
+                evidence=(),
+                confidence=0.0,
+                metadata={
+                    "provider": "none",
+                    "reasoning_skipped": True,
+                    "reason": "required_evidence_unavailable",
+                },
+            )
+        else:
+            response = self.reasoning.reason(request, evidence)
         evaluation = self.evaluator.evaluate(response) if self.evaluator else None
 
         if self.learning_store is not None:
