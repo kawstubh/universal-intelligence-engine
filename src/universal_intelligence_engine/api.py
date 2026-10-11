@@ -14,8 +14,10 @@ from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
 from .providers import (
     BraveSearchProvider,
+    EmptyKnowledgeProvider,
     GeminiReasoningProvider,
     OpenAIResponsesReasoningProvider,
+    TavilySearchProvider,
 )
 from .service import IntelligenceService
 
@@ -32,7 +34,14 @@ class IntelligenceRunBody(BaseModel):
 
 
 def build_service() -> IntelligenceService:
-    knowledge = BraveSearchProvider()
+    # Prefer Tavily's free allowance; retain Brave compatibility, but do not block
+    # reasoning if no search API key is configured.
+    if os.getenv("TAVILY_API_KEY"):
+        knowledge = TavilySearchProvider()
+    elif os.getenv("BRAVE_SEARCH_API_KEY"):
+        knowledge = BraveSearchProvider()
+    else:
+        knowledge = EmptyKnowledgeProvider()
     # Explicit UIE_REASONING_PROVIDER wins; otherwise use Gemini when configured,
     # then retain the existing OpenAI provider, then the native deterministic fallback.
     provider_name = os.getenv("UIE_REASONING_PROVIDER", "").strip().lower()
@@ -93,7 +102,12 @@ def health() -> dict[str, Any]:
         "engine": "universal-intelligence-engine",
         "version": "0.5.0",
         "providers": {
-            "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
+            "knowledge": bool(os.getenv("TAVILY_API_KEY") or os.getenv("BRAVE_SEARCH_API_KEY")),
+            "knowledge_provider": (
+                "tavily" if os.getenv("TAVILY_API_KEY")
+                else "brave" if os.getenv("BRAVE_SEARCH_API_KEY")
+                else "none"
+            ),
             "reasoning": bool(
                 (provider_name == "gemini" and os.getenv("GEMINI_API_KEY"))
                 or (provider_name == "openai" and os.getenv("OPENAI_API_KEY"))
