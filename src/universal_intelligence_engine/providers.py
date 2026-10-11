@@ -1,4 +1,4 @@
-""""Live provider adapters for UIE.
+"""Live provider adapters for UIE.
 
 Providers are environment-configured and vendor-replaceable. No API secrets are
 stored in source control.
@@ -95,6 +95,59 @@ class BraveSearchProvider:
                 )
             )
         return evidence
+
+
+class TavilySearchProvider:
+    """Live web search through Tavily's hosted Search API."""
+
+    def __init__(self, api_key: str | None = None, max_results: int = 8):
+        self.api_key = api_key or os.getenv("TAVILY_API_KEY")
+        self.max_results = max(1, min(max_results, 20))
+
+    def search(self, request: IntelligenceRequest) -> list[Evidence]:
+        if not self.api_key:
+            raise RuntimeError("TAVILY_API_KEY is not configured")
+        query = request.goal.strip()
+        if request.locale:
+            query = f"{query} (region: {request.locale})"
+        data = _json_request(
+            "https://api.tavily.com/search",
+            method="POST",
+            payload={
+                "api_key": self.api_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": self.max_results,
+                "include_answer": False,
+                "include_raw_content": False,
+            },
+        )
+        results = data.get("results", [])
+        evidence: list[Evidence] = []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            evidence.append(
+                Evidence(
+                    source="tavily-web",
+                    title=str(item.get("title") or "Untitled result"),
+                    retrieved_at=_utc_now(),
+                    content=str(item.get("content") or ""),
+                    url=item.get("url"),
+                    language=request.language,
+                    locale=request.locale,
+                    confidence=float(item.get("score", 0.65) or 0.65),
+                    metadata={"provider": "tavily"},
+                )
+            )
+        return evidence
+
+
+class EmptyKnowledgeProvider:
+    """Safe no-search fallback so reasoning can run without a paid search key."""
+
+    def search(self, request: IntelligenceRequest) -> list[Evidence]:
+        return []
 
 
 class OpenAIResponsesReasoningProvider:
