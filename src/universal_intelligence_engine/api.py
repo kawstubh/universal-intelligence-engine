@@ -12,7 +12,11 @@ from .contracts import IntelligenceRequest
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
-from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
+from .providers import (
+    BraveSearchProvider,
+    GeminiReasoningProvider,
+    OpenAIResponsesReasoningProvider,
+)
 from .service import IntelligenceService
 
 
@@ -29,7 +33,21 @@ class IntelligenceRunBody(BaseModel):
 
 def build_service() -> IntelligenceService:
     knowledge = BraveSearchProvider()
-    reasoning = OpenAIResponsesReasoningProvider()
+    # Explicit UIE_REASONING_PROVIDER wins; otherwise use Gemini when configured,
+    # then retain the existing OpenAI provider, then the native deterministic fallback.
+    provider_name = os.getenv("UIE_REASONING_PROVIDER", "").strip().lower()
+    if provider_name == "gemini" or (
+        not provider_name and os.getenv("GEMINI_API_KEY")
+    ):
+        reasoning = GeminiReasoningProvider()
+    elif provider_name == "openai" or (
+        not provider_name and os.getenv("OPENAI_API_KEY")
+    ):
+        reasoning = OpenAIResponsesReasoningProvider()
+    elif provider_name == "native":
+        reasoning = None
+    else:
+        reasoning = None
     memory = LearningMemory(
         os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl")
     )
@@ -44,7 +62,7 @@ def build_service() -> IntelligenceService:
 
 app = FastAPI(
     title="Universal Intelligence Engine",
-    version="0.4.1",
+    version="0.5.0",
     description="Shared intelligence API for research, reasoning, applications and agents.",
 )
 service = build_service()
@@ -63,13 +81,25 @@ def _authorize(authorization: str | None) -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    provider_name = os.getenv("UIE_REASONING_PROVIDER", "").strip().lower()
+    if not provider_name:
+        provider_name = (
+            "gemini" if os.getenv("GEMINI_API_KEY")
+            else "openai" if os.getenv("OPENAI_API_KEY")
+            else "native"
+        )
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
-        "version": "0.4.1",
+        "version": "0.5.0",
         "providers": {
             "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
-            "reasoning": bool(os.getenv("OPENAI_API_KEY")),
+            "reasoning": bool(
+                (provider_name == "gemini" and os.getenv("GEMINI_API_KEY"))
+                or (provider_name == "openai" and os.getenv("OPENAI_API_KEY"))
+                or provider_name == "native"
+            ),
+            "reasoning_provider": provider_name,
         },
     }
 
