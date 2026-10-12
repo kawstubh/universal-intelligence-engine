@@ -1,0 +1,108 @@
+name: required-gates
+
+on:
+  pull_request:
+    branches: [integration/uie-dental, feat/dental-production-stack-v1]
+  push:
+    branches: [integration/uie-dental]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-safety:
+    name: unit-and-safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project and test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run test suite (includes safety/security tests)
+        run: python -m pytest -q
+
+  type-and-lint:
+    name: type-and-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install checks
+        run: python -m pip install -e ".[dev]" ruff mypy
+      - name: Ruff
+        run: ruff check src tests
+      - name: Mypy
+        run: mypy src/universal_intelligence_engine
+
+  secret-scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  post-deploy-smoke:
+    name: post-deploy-smoke
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require live service URL
+        env:
+          LIVE_BASE_URL: ${{ vars.UIE_LIVE_BASE_URL }}
+          UIE_API_KEY: ${{ secrets.UIE_API_KEY }}
+      - name: Run live smoke checks
+        env:
+          LIVE_BASE_URL: ${{ vars.UIE_LIVE_BASE_URL }}
+          UIE_API_KEY: ${{ secrets.UIE_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os, sys, urllib.error, urllib.request
+          base = os.environ.get("LIVE_BASE_URL", "").rstrip("/")
+          if not base:
+              print("BLOCKED: repository variable UIE_LIVE_BASE_URL is not configured")
+              sys.exit(2)
+          def request(path, method="GET", payload=None, token=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              headers = {"Content-Type": "application/json"}
+              if token:
+                  headers["Authorization"] = "Bearer " + token
+              req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as response:
+                      return response.status, response.read().decode(errors="replace")
+              except urllib.error.HTTPError as exc:
+                  return exc.code, exc.read().decode(errors="replace")
+          failures = []
+          for path in ("/health", "/v1/dental/health"):
+              code, body = request(path)
+              print(f"{path}: HTTP {code} {body[:500]}")
+              if code != 200: failures.append(path)
+          code, body = request("/v1/dental/ai/patient/chat", "POST", {"message":"smoke"})
+          print(f"patient AI blocked: HTTP {code} {body[:300]}")
+          if code != 404: failures.append("patient-ai-404")
+          code, body = request("/v1/intelligence/run", "POST", {"goal":"smoke","context":{},"constraints":{}}, None)
+          print(f"unauthenticated UIE request: HTTP {code} {body[:300]}")
+          if code != 401: failures.append("unauthenticated-401")
+          key = os.environ.get("UIE_API_KEY")
+          if key:
+              code, body = request("/v1/intelligence/run", "POST", {"goal":"Return a minimal safe status only","context":{},"constraints":{}}, key)
+              print(f"authenticated UIE request: HTTP {code} {body[:500]}")
+              if code not in (200, 503): failures.append("authenticated-fallback-or-unavailable")
+          else:
+              print("authenticated provider test: SKIPPED because UIE_API_KEY secret is not configured")
+              failures.append("missing-UIE_API_KEY-secret")
+          if failures:
+              print("FAILED checks:", ", ".join(failures))
+              sys.exit(1)
+          print("PASS: live smoke checks")
+          PY
