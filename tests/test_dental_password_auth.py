@@ -71,3 +71,25 @@ def test_google_login_route_is_removed():
     paths = set(app.openapi()["paths"])
     assert "/v1/dental/auth/google" not in paths
     assert "/v1/dental/auth/password/login" in paths
+
+
+def test_bootstrap_admin_does_not_recreate_existing_admin(monkeypatch):
+    """First-run bootstrap is idempotent once the configured admin exists."""
+    from universal_intelligence_engine import dental_auth
+
+    class ExistingAdminStore:
+        def __init__(self):
+            self.created = []
+
+        def doctor_by_email(self, email):
+            return {"id": "existing-admin", "email": email, "role": "admin", "clinic_id": "clinic-a"}
+
+        def create_doctor(self, payload):
+            self.created.append(payload)
+
+    store = ExistingAdminStore()
+    monkeypatch.setenv("DENTAL_BOOTSTRAP_ADMIN_EMAIL", "admin@example.test")
+    monkeypatch.setenv("DENTAL_BOOTSTRAP_ADMIN_PASSWORD", "a-strong-test-password")
+    monkeypatch.setattr(dental_auth, "get_dental_store", lambda: store)
+    dental_auth._bootstrap_admin()
+    assert store.created == []
