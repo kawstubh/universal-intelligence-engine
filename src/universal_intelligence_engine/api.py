@@ -1,9 +1,12 @@
 ﻿
 """HTTP API for the Universal Intelligence Engine and Dental application layer."""
 from __future__ import annotations
+import hmac
 import os
 from typing import Any
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
 from .contracts import IntelligenceRequest
 from .dental_api import router as dental_router
@@ -39,14 +42,43 @@ app = FastAPI(
     description="Shared intelligence API for research, reasoning, applications, agents, and Dental Intelligence.",
 )
 service = build_service()
+
+# Launch policy: patient-facing AI is disabled at the API boundary, including
+# legacy routes that may still be registered by the Dental router.
+@app.middleware("http")
+async def disable_patient_ai(request: Request, call_next):
+    path = request.url.path.rstrip("/")
+    if path == "/v1/dental/ai/patient" or path.startswith("/v1/dental/ai/patient/"):
+        return JSONResponse(
+            status_code=404,
+            content={"detail": {"code": "PATIENT_AI_DISABLED", "message": "Patient-facing AI is not available."}},
+        )
+    return await call_next(request)
+
 app.include_router(dental_router)
 app.include_router(dental_ai_router)
+
+def _doctor_only_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+    schema["paths"] = {
+        path: operations
+        for path, operations in schema.get("paths", {}).items()
+        if not (path.rstrip("/") == "/v1/dental/ai/patient" or path.startswith("/v1/dental/ai/patient/"))
+    }
+    app.openapi_schema = schema
+    return schema
+
+app.openapi = _doctor_only_openapi
 
 def _authorize(authorization: str | None) -> None:
     expected = os.getenv("UIE_API_KEY")
     if not expected:
         raise HTTPException(status_code=503, detail="UIE_API_KEY is not configured; API access is fail-closed.")
-    if authorization != f"Bearer {expected}":
+    supplied = authorization or ""
+    expected_header = f"Bearer {expected}"
+    if not hmac.compare_digest(supplied, expected_header):
         raise HTTPException(status_code=401, detail="Invalid API credentials")
 
 @app.get("/health")
