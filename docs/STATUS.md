@@ -40,3 +40,11 @@ Last cycle: 2026-10-13. Latest correction commit: `ef84256d00e31cfecdd31e2da155c
 2. Continue fixing Ruff findings at source without relaxing the lint gate.
 3. Add a locked first-run setup path and explicit security tests without introducing a setup bypass; preserve existing cross-clinic isolation tests.
 4. Verify repository branch protection/required checks and Actions permissions. Only then enable auto-merge for PR #17 and proceed through deploy + live smoke if gates are green.
+
+
+## Ruff gate follow-up — 2026-10-13
+- Latest inspected required-gates run on integration commit `19d70212a2cc9365f6055acc99c50fecb18e7ead` failed at Ruff with 103 findings; unit/safety and Gitleaks passed, Mypy and post-deploy smoke were skipped.
+- Opened PR #18 (`fix/ruff-fastapi-depends`) to configure Ruff Bugbear's `extend-immutable-calls = ["fastapi.Depends"]`. FastAPI's `Depends()` in route signatures is standard dependency injection; this narrow configuration addresses those framework false positives without disabling B008 generally.
+- PR #18 has not yet produced a confirmed passing lint run. Remaining import sorting, unused imports, modern typing/UTC, and other rule findings remain blockers. Do not merge or deploy until CI is green.
+- CI log: https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38313203057
+- PR: https://github.com/kawstubh/universal-intelligence-engine/pull/18
