@@ -303,6 +303,36 @@ class DentalStore:
         )
         return rows[0] if rows else None
 
+    def doctor_by_id(self, doctor_id: str):
+        rows = self._execute(
+            "SELECT * FROM dental_doctors WHERE id=%s LIMIT 1" if self.database_url else
+            "SELECT * FROM dental_doctors WHERE id=? LIMIT 1",
+            (doctor_id,),
+        )
+        return rows[0] if rows else None
+
+    def create_doctor(self, data: dict[str, Any]) -> dict[str, Any]:
+        item = {
+            "id": data["id"], "email": data["email"].strip().lower(),
+            "phone": data.get("phone", ""), "password_hash": data["password_hash"],
+            "role": data.get("role", "doctor"), "clinic_id": data["clinic_id"],
+            "active": True, "created_at": _now(),
+        }
+        self._execute(
+            "INSERT INTO dental_doctors(id,email,phone,password_hash,role,clinic_id,active,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+            if self.database_url else
+            "INSERT INTO dental_doctors(id,email,phone,password_hash,role,clinic_id,active,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            tuple(item[k] for k in ("id", "email", "phone", "password_hash", "role", "clinic_id", "active", "created_at")),
+        )
+        return item
+
+    def set_doctor_active(self, doctor_id: str, active: bool) -> None:
+        self._execute(
+            "UPDATE dental_doctors SET active=%s WHERE id=%s" if self.database_url else
+            "UPDATE dental_doctors SET active=? WHERE id=?",
+            (active, doctor_id),
+        )
+
     def record_ai(self, patient_id: str | None, goal: str, result: dict[str, Any], clinic_id: str) -> None:
         self._execute(
             "INSERT INTO dental_ai_events(id,patient_id,clinic_id,goal,result_json,created_at) VALUES (%s,%s,%s,%s,%s,%s)"
