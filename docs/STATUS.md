@@ -14,7 +14,9 @@ Last cycle: 2026-10-13. Latest correction commit: `d66ad2df7f5669099caf04e4b9065
 - Mobile PR #9: https://github.com/kawstubh/dr-pranali-dental-mobile-v2/pull/9. No workflow run is associated with PR #9 in the accessible Actions run listing; the separate APK success is not PR-specific evidence.
 
 ## CI and security status
-- Do not claim gates are green until the latest SHA `d66ad2df7f5669099caf04e4b9065601e15ffadf` has completed all checks.
+- Engine Tests passed on the code-fix SHA `d66ad2df7f5669099caf04e4b9065601e15ffadf` (run https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38312722094), confirming the import-scope failures are resolved.
+- Gitleaks and unit/safety passed on the required-gates run for that SHA (https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38312715359).
+- Type-and-lint still fails: Ruff reported 106 findings and Mypy was skipped because Ruff failed. The full log is https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38312715359. This is not a green gate; do not merge or deploy.
 - Ruff/type-lint cleanup remains a known blocker from earlier CI: the existing broad lint step reported numerous findings including duplicate `create_membership_order` definition (F811), import sorting, unused imports, and additional Ruff findings. Do not weaken the rules or skip tests.
 - Existing cross-clinic regression in `tests/test_dental_e2e.py` expects 403 with `PATIENT_CLINIC_ACCESS_DENIED`; a new dedicated setup-token-locked endpoint is still absent. The existing bootstrap idempotence test only proves it does not recreate an existing admin.
 - Repository settings remain unverified because the connected GitHub API access rejected protected branch-protection and Actions-permissions reads. Verify here:
