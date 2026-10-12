@@ -22,7 +22,16 @@ class UniversalIntelligenceEngine:
         fused_evidence = tuple(rank_evidence(raw_evidence))
         decision = self.algorithm.decide(request, fused_evidence)
         evidence = decision.evidence
-        response = self.reasoning.reason(request, evidence)
+        if request.constraints.get("require_sources") and not evidence:
+            from .contracts import IntelligenceResponse
+            response = IntelligenceResponse(
+                answer="Evidence is required for this request, but no evidence was available. No conclusion was generated.",
+                evidence=(),
+                confidence=0.0,
+                metadata={"provider": "none", "reason": "evidence_required_but_unavailable"},
+            )
+        else:
+            response = self.reasoning.reason(request, evidence)
         evaluation = self.evaluator.evaluate(response) if self.evaluator else None
 
         if self.learning_store is not None:
