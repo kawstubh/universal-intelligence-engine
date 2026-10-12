@@ -1,37 +1,44 @@
 # UIE + Dental Cycle Status
 
-Last cycle time: 2026-10-13 (date confirmed; exact local clock time not independently exposed by the repository tools).
+Last cycle: 2026-10-13; GitHub Actions timestamps observed during the cycle: 2026-10-12 21:31–21:32 UTC.
 
-## What changed this cycle
-- Added `docs/ROADMAP.md` with M0–M5 acceptance criteria, Option D redesign groups, staged branch integration, and non-negotiable clinical safety invariants.
-- Added `.github/workflows/required-gates.yml` with unit/safety tests, Ruff + mypy, Gitleaks, and a manual live smoke job.
-- Fixed an invalid workflow step structure after inspecting the first workflow definition.
-- Added a server-side 404 guard for `/v1/dental/ai/patient...`, removed patient AI paths from OpenAPI, and added constant-time comparison for UIE bearer credentials.
-- Added patient-AI regression tests and aligned Dental E2E/security tests with the doctor-only launch policy.
-- Opened draft PR #17: https://github.com/kawstubh/universal-intelligence-engine/pull/17
-- Added Doctor mobile roadmap at https://github.com/kawstubh/dr-pranali-dental-mobile-v2/blob/integration/doctor-app/docs/MOBILE_ROADMAP.md and opened draft PR #9: https://github.com/kawstubh/dr-pranali-dental-mobile-v2/pull/9
+## Code changed this cycle
+- Ported deterministic native reasoning from PR #13 into `src/universal_intelligence_engine/reasoning.py`, plus temporal contradiction/freshness assessment.
+- Added `NoKnowledgeProvider`; the API selects native reasoning when `OPENAI_API_KEY` is absent and does not fabricate evidence.
+- Added engine behavior: when `constraints.require_sources` is true and no evidence exists, reasoning is not called and an explicit evidence-unavailable result is returned.
+- Ported the bounded planner and agent modules from PR #13, including approval-required action stops and rejection of over-budget plans; added planner/agent tests and exports.
+- Added native fallback and required-evidence tests.
+- Added an idempotence test proving bootstrap does not recreate an existing admin.
+- Normalized API version reporting to the package version.
+- Existing cross-clinic Doctor AI denial test remains in `tests/test_dental_e2e.py` and asserts 403 / `PATIENT_CLINIC_ACCESS_DENIED`.
+- PR #17: https://github.com/kawstubh/universal-intelligence-engine/pull/17
+- Mobile roadmap PR #9: https://github.com/kawstubh/dr-pranali-dental-mobile-v2/pull/9
 
-## CI status
-- Current workflow-fix commit: `6654ad5ac70d295b0e320d7ebaad731b939034dd`.
-- Required-gates run: https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38311041918 — in progress at last check.
-- Gitleaks job passed.
-- Unit/safety and type/lint jobs were still installing dependencies; pytest/Ruff/mypy results are not yet available.
-- Existing CI and Engine Tests workflows were also in progress; no final all-green result verified.
-- Live smoke was skipped because this was a pull-request event, not a manual post-deploy dispatch. Automatic Render-deploy-to-smoke wiring is not complete.
+## CI findings
+- PR #17's prior required-gates runs failed in Ruff, not pytest or Gitleaks. The actual Ruff log reports 89 findings across existing source/tests: import sorting, unused imports, FastAPI `Depends` B008, modern typing/date aliases, mutable class defaults, a duplicate `create_membership_order` definition (F811), and other style/static findings. The gate was not weakened and no tests were skipped.
+- On the failed run, unit/safety passed and Gitleaks passed; Ruff failed and mypy was skipped as a consequence of the failed step.
+- After this cycle's native/planner/agent commits, new CI runs are queued/in progress: https://github.com/kawstubh/universal-intelligence-engine/actions. No final green result has been verified for the latest SHA yet.
+- Mobile PR #9 has no PR-triggered workflow run in the accessible Actions listing. The latest unrelated Doctor APK run on `hardening/launch-safety` passed, but that is not a test result for PR #9. Documentation-only PR changes did not trigger a mobile CI run.
 
-## Failing checks / blockers
-- No failing test log is available yet; CI is still running.
-- PR #13's remaining native reasoning fallback, no-evidence provider, approval gating, plan-budget rejection, and related contract tests have not all been ported yet.
-- PR #17 is an integration-to-deploy draft review PR, not evidence of successful deployment. Do not merge/deploy until all M1 changes and checks are green.
-- Automated merge policy and repository branch-protection required-check settings have not been verified/configured through the available connector.
-- Live Render health and post-deploy rollback path have not been verified.
-- Mobile roadmap PR #9 is documentation-only; mobile app code and APK workflow have not changed.
+## Repository settings verification
+The connected GitHub API interface rejected reads of protected repository settings/Actions permissions endpoints, so the following settings are **not verified** from this cycle:
+- Allow auto-merge: https://github.com/kawstubh/universal-intelligence-engine/settings
+- Branch protection/rules for `integration/uie-dental`: https://github.com/kawstubh/universal-intelligence-engine/settings/branches
+- Actions permissions: https://github.com/kawstubh/universal-intelligence-engine/settings/actions
+- Required status checks should include `unit-and-safety`, `type-and-lint`, and `gitleaks`; do not enable auto-merge until these checks are required and green.
+- Mobile repo equivalent settings: https://github.com/kawstubh/dr-pranali-dental-mobile-v2/settings/branches and https://github.com/kawstubh/dr-pranali-dental-mobile-v2/settings/actions
+
+## Remaining blockers
+- The Ruff failure requires actual code cleanup across multiple files, including fixing the duplicate billing function; it has not yet been fully repaired.
+- First-run bootstrap is tested for idempotence, but a dedicated `DENTAL_SETUP_TOKEN`-protected setup endpoint does not currently exist. This cycle did not add an unauthenticated setup endpoint.
+- Full M1 promotion remains blocked until latest required checks pass and branch-protection settings are verified.
+- Post-deploy smoke is currently manual-dispatch only and has not been wired to a verified Render deploy event. No live smoke or deployment was performed.
+- No Render settings, `DATABASE_URL`, package IDs, signing, OAuth, master, or CueScene were changed.
 
 ## Next step
-Read the active CI jobs when they finish, fix actual failures without weakening tests, then port the remaining PR #13 changes on a feature branch/PR. Add the missing first-run setup lock, golden clinical safety checks, and complete security regression suite before promotion.
+Fix Ruff findings at source, rerun all checks, add a dedicated cross-clinic/setup-lock security regression where not already covered, verify repository settings in GitHub UI/API, and only then enable auto-merge/promotion. Do not deploy while checks are pending or failing.
 
 ## Safety state
-- `UIE_LEARNING_ENABLED` must default to OFF; no automatic activation.
-- No Render deployment triggered by this cycle.
-- No `DATABASE_URL`, signing, OAuth client, package ID, master, or CueScene changes.
-- No auth-hardening changes deployed.
+- `UIE_LEARNING_ENABLED` remains OFF by default; no activation performed.
+- Patient AI server guard remains HTTP 404 and hidden from OpenAPI.
+- No production deployment triggered.
