@@ -69,7 +69,8 @@ def test_patient_books_doctor_updates_patient_sees_ai_and_cross_clinic_denied(e2
         }
 
     monkeypatch.setattr(dental_ai, "_uie", fake_uie)
-    ai = client.post("/v1/dental/ai/patient/chat", json={"message": "Explain my dental visit."})
+    # Use a patient-specific prompt so a cache entry from another test run cannot bypass fake_uie.
+    ai = client.post("/v1/dental/ai/patient/chat", json={"message": f"Explain my dental visit for test patient {patient_id}."})
     assert ai.status_code == 200
     assert ai.json()["result"] == "Real backend contract result from the AI endpoint."
     assert ai.json()["request_id"] == "e2e-ai-request"
