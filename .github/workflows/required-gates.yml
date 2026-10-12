@@ -56,10 +56,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - name: Require live service URL
-        env:
-          LIVE_BASE_URL: ${{ vars.UIE_LIVE_BASE_URL }}
-          UIE_API_KEY: ${{ secrets.UIE_API_KEY }}
       - name: Run live smoke checks
         env:
           LIVE_BASE_URL: ${{ vars.UIE_LIVE_BASE_URL }}
