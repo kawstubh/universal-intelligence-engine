@@ -1,9 +1,10 @@
-﻿
 """HTTP API for the Universal Intelligence Engine and Dental application layer."""
 from __future__ import annotations
 import os
 from typing import Any
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
 from .contracts import IntelligenceRequest
 from .dental_api import router as dental_router
@@ -39,8 +40,36 @@ app = FastAPI(
     description="Shared intelligence API for research, reasoning, applications, agents, and Dental Intelligence.",
 )
 service = build_service()
+
+# Launch policy: patient-facing AI is disabled. Enforce this at the API boundary,
+# even if legacy patient routes remain in the imported router during migration.
+@app.middleware("http")
+async def disable_patient_ai(request: Request, call_next):
+    path = request.url.path.rstrip("/")
+    if path == "/v1/dental/ai/patient" or path.startswith("/v1/dental/ai/patient/"):
+        return JSONResponse(
+            status_code=404,
+            content={"detail": {"code": "PATIENT_AI_DISABLED", "message": "Patient-facing AI is not available."}},
+        )
+    return await call_next(request)
+
 app.include_router(dental_router)
 app.include_router(dental_ai_router)
+
+# Do not advertise disabled legacy patient-AI routes in the OpenAPI document.
+def _doctor_only_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+    schema["paths"] = {
+        path: operations
+        for path, operations in schema.get("paths", {}).items()
+        if not (path.rstrip("/") == "/v1/dental/ai/patient" or path.startswith("/v1/dental/ai/patient/"))
+    }
+    app.openapi_schema = schema
+    return schema
+
+app.openapi = _doctor_only_openapi
 
 def _authorize(authorization: str | None) -> None:
     expected = os.getenv("UIE_API_KEY")
