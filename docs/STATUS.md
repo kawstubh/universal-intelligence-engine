@@ -5,6 +5,7 @@ Last cycle: 2026-10-13. Latest correction commit: `d66ad2df7f5669099caf04e4b9065
 ## Changes made this cycle
 - Fixed a confirmed runtime defect in `src/universal_intelligence_engine/engine.py`: removed a conditional function-local import of `IntelligenceResponse`. Python treated the name as local throughout `run()`, causing `UnboundLocalError` on ordinary evidence-backed and native-fallback paths.
 - Reformatted the engine module imports and orchestration block while preserving the evidence-required fail-closed behavior, evaluator metadata, decision trace, and optional learning-store recording.
+- Fixed a second real defect found in the Ruff report: the `/billing/order` route function shadowed the imported `create_order` implementation and recursively called itself. Renamed the imported implementation to `create_membership_order_impl`; the route now calls that implementation directly. This also resolves the duplicate-name F811 finding at its source.
 - GitHub Actions was automatically triggered for the new integration-branch commit. Latest runs at the time of this update are pending:
   - Engine Tests: https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38312722094
   - Required gates: https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38312715359
@@ -16,7 +17,7 @@ Last cycle: 2026-10-13. Latest correction commit: `d66ad2df7f5669099caf04e4b9065
 ## CI and security status
 - Engine Tests passed on the code-fix SHA `d66ad2df7f5669099caf04e4b9065601e15ffadf` (run https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38312722094), confirming the import-scope failures are resolved.
 - Gitleaks and unit/safety passed on the required-gates run for that SHA (https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38312715359).
-- Type-and-lint still fails: Ruff reported 106 findings and Mypy was skipped because Ruff failed. The full log is https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38312715359. This is not a green gate; do not merge or deploy.
+- Type-and-lint failed on the earlier tested SHA: Ruff reported 106 findings and Mypy was skipped because Ruff failed. The full log is https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38312715359. The duplicate billing-name defect has now been fixed, but the remaining findings have not been resolved. New runs triggered by the billing correction must be checked before any merge or deployment.
 - Ruff/type-lint cleanup remains a known blocker from earlier CI: the existing broad lint step reported numerous findings including duplicate `create_membership_order` definition (F811), import sorting, unused imports, and additional Ruff findings. Do not weaken the rules or skip tests.
 - Existing cross-clinic regression in `tests/test_dental_e2e.py` expects 403 with `PATIENT_CLINIC_ACCESS_DENIED`; a new dedicated setup-token-locked endpoint is still absent. The existing bootstrap idempotence test only proves it does not recreate an existing admin.
 - Repository settings remain unverified because the connected GitHub API access rejected protected branch-protection and Actions-permissions reads. Verify here:
@@ -33,7 +34,7 @@ Last cycle: 2026-10-13. Latest correction commit: `d66ad2df7f5669099caf04e4b9065
 - `UIE_LEARNING_ENABLED` remains OFF by default and was not enabled.
 
 ## Next actions
-1. Confirm latest unit/safety run outcome, then fix any remaining failures at root.
+1. Confirm CI after the billing correction, then fix remaining Ruff findings at source without relaxing the gate.
 2. Resolve Ruff findings in source rather than relaxing the lint gate.
 3. Add a locked first-run setup path and explicit security tests without introducing a setup bypass; preserve existing cross-clinic isolation tests.
 4. Verify repository branch protection/required checks and Actions permissions. Only then enable auto-merge for PR #17 and proceed through deploy + live smoke if gates are green.
