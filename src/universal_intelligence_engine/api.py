@@ -91,21 +91,20 @@ def health() -> dict[str, Any]:
         "version": app.version,
         "providers": {
             "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
-            "reasoning": bool(
-                (
-                    {
-                        "openai": os.getenv("OPENAI_API_KEY"),
-                        "gemini": os.getenv("GEMINI_API_KEY"),
-                        "groq": os.getenv("GROQ_API_KEY"),
-                    }.get(os.getenv("REASONING_PROVIDER", "openai").strip().lower())
-                    or os.getenv("REASONING_API_KEY")
-                )
-                and (os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL"))
+            "reasoning": True,
+            "knowledge_provider": (
+                "brave-search" if os.getenv("BRAVE_SEARCH_API_KEY") else "unavailable"
             ),
-            "knowledge_provider": "brave-search",
-            "reasoning_provider": os.getenv("REASONING_PROVIDER", "openai"),
-            "reasoning_model": os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL"),
+            "reasoning_provider": (
+                "openai-responses" if os.getenv("OPENAI_API_KEY") else "native"
+            ),
+            "reasoning_model": (
+                os.getenv("OPENAI_MODEL") or "native"
+                if not os.getenv("OPENAI_API_KEY")
+                else os.getenv("OPENAI_MODEL") or "default"
+            ),
         },
+
         "dental_api": True,
     }
 
