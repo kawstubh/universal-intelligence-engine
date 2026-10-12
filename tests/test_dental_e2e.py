@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from universal_intelligence_engine.api import app
-from universal_intelligence_engine import dental_api, dental_ai
+from universal_intelligence_engine import dental_api
 
 
 @pytest.fixture()
@@ -16,7 +16,7 @@ def e2e_db(tmp_path, monkeypatch):
     dental_api._store = None
 
 
-def test_patient_books_doctor_updates_patient_sees_ai_and_cross_clinic_denied(e2e_db, monkeypatch):
+def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
     client = TestClient(app)
     appointment_response = client.post(
         "/v1/dental/public/appointments",
@@ -31,7 +31,9 @@ def test_patient_books_doctor_updates_patient_sees_ai_and_cross_clinic_denied(e2
     appointment = appointment_response.json()["appointment"]
     patient_id = appointment["patient_id"]
 
-    app.dependency_overrides[dental_api.require_doctor] = lambda: {"id": "doctor-a", "clinic_id": "clinic-a", "role": "doctor"}
+    app.dependency_overrides[dental_api.require_doctor] = lambda: {
+        "id": "doctor-a", "clinic_id": "clinic-a", "role": "doctor"
+    }
     seen = client.get("/v1/dental/appointments")
     assert seen.status_code == 200
     assert any(row["id"] == appointment["id"] for row in seen.json())
@@ -47,35 +49,23 @@ def test_patient_books_doctor_updates_patient_sees_ai_and_cross_clinic_denied(e2
     )
     assert chart.status_code == 200
 
-    store = dental_api.get_dental_store()
-    store.link_patient_user(patient_id, "patient-user")
+    # Patient AI, consent, linking, history, and AI-prefixed patient routes are
+    # disabled at the API boundary; doctor-facing clinical AI remains separate.
+    for method, path, payload in [
+        ("POST", "/v1/dental/ai/patient/chat", {"message": "hello"}),
+        ("POST", "/v1/dental/ai/patient/consent", {"consent": True}),
+        ("POST", "/v1/dental/ai/patient/link", {"invite_code": "ABCDEFGH"}),
+        ("GET", "/v1/dental/ai/patient/appointments", None),
+        ("GET", "/v1/dental/ai/patient/chart", None),
+        ("DELETE", "/v1/dental/ai/patient/history", None),
+    ]:
+        response = client.request(method, path, json=payload)
+        assert response.status_code == 404, (method, path, response.text)
+        assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
 
-    app.dependency_overrides[dental_ai.require_patient] = lambda: {"user_id": "patient-user", "email": "patient@example.com"}
-    patient_appointments = client.get("/v1/dental/ai/patient/appointments")
-    patient_chart = client.get("/v1/dental/ai/patient/chart")
-    assert patient_appointments.json()["result"][0]["status"] == "confirmed"
-    assert patient_chart.json()["result"] == [{"tooth_fdi": "46", "status": "attention"}]
-
-    store.set_ai_consent("patient-user", True)
-
-    async def fake_uie(capability, goal, context, disclaimer=dental_ai.DISCLAIMER_PATIENT):
-        return {
-            "result": "Real backend contract result from the AI endpoint.",
-            "confidence": 0.91,
-            "sources": [{"title": "Test evidence", "url": "https://example.test/source"}],
-            "disclaimers": [disclaimer],
-            "request_id": "e2e-ai-request",
-            "capability": capability,
-        }
-
-    monkeypatch.setattr(dental_ai, "_uie", fake_uie)
-    # Use a patient-specific prompt so a cache entry from another test run cannot bypass fake_uie.
-    ai = client.post("/v1/dental/ai/patient/chat", json={"message": f"Explain my dental visit for test patient {patient_id}."})
-    assert ai.status_code == 200
-    assert ai.json()["result"] == "Real backend contract result from the AI endpoint."
-    assert ai.json()["request_id"] == "e2e-ai-request"
-
-    app.dependency_overrides[dental_api.require_doctor] = lambda: {"id": "doctor-b", "clinic_id": "clinic-b", "role": "doctor"}
+    app.dependency_overrides[dental_api.require_doctor] = lambda: {
+        "id": "doctor-b", "clinic_id": "clinic-b", "role": "doctor"
+    }
     denied = client.post(
         "/v1/dental/ai/doctor/patient-summary",
         json={"patient_id": patient_id},
