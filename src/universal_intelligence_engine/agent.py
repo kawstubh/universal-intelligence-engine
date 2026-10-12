@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 
-from .planner import AdaptivePlanner, Plan, PlanStep, topological_steps
-from .policy import CapabilityPolicy
+from .planner import AdaptivePlanner, Plan, topological_steps
 from .tools import ToolRegistry
 
 
