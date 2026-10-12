@@ -287,3 +287,10 @@ class OpenAIResponsesReasoningProvider:
             provider=fallback,
         )
         return secondary._reason_once(request, evidence)
+
+
+class NoKnowledgeProvider:
+    """Explicit offline fallback that returns no fabricated evidence."""
+
+    def search(self, request: IntelligenceRequest) -> list[Evidence]:
+        return []
