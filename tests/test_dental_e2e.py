@@ -16,7 +16,7 @@ def e2e_db(tmp_path, monkeypatch):
     dental_api._store = None
 
 
-def test_patient_books_doctor_updates_patient_sees_ai_and_cross_clinic_denied(e2e_db, monkeypatch):
+def test_patient_books_doctor_updates_chart_and_patient_ai_is_disabled(e2e_db, monkeypatch):
     client = TestClient(app)
     appointment_response = client.post(
         "/v1/dental/public/appointments",
@@ -47,32 +47,10 @@ def test_patient_books_doctor_updates_patient_sees_ai_and_cross_clinic_denied(e2
     )
     assert chart.status_code == 200
 
-    store = dental_api.get_dental_store()
-    store.link_patient_user(patient_id, "patient-user")
-
-    app.dependency_overrides[dental_ai.require_patient] = lambda: {"user_id": "patient-user", "email": "patient@example.com"}
-    patient_appointments = client.get("/v1/dental/ai/patient/appointments")
-    patient_chart = client.get("/v1/dental/ai/patient/chart")
-    assert patient_appointments.json()["result"][0]["status"] == "confirmed"
-    assert patient_chart.json()["result"] == [{"tooth_fdi": "46", "status": "attention"}]
-
-    store.set_ai_consent("patient-user", True)
-
-    async def fake_uie(capability, goal, context, disclaimer=dental_ai.DISCLAIMER_PATIENT):
-        return {
-            "result": "Real backend contract result from the AI endpoint.",
-            "confidence": 0.91,
-            "sources": [{"title": "Test evidence", "url": "https://example.test/source"}],
-            "disclaimers": [disclaimer],
-            "request_id": "e2e-ai-request",
-            "capability": capability,
-        }
-
-    monkeypatch.setattr(dental_ai, "_uie", fake_uie)
-    ai = client.post("/v1/dental/ai/patient/chat", json={"message": "Explain my dental visit."})
-    assert ai.status_code == 200
-    assert ai.json()["result"] == "Real backend contract result from the AI endpoint."
-    assert ai.json()["request_id"] == "e2e-ai-request"
+    # Patient-facing AI and patient identity routes are intentionally absent at launch.
+    assert client.get("/v1/dental/ai/patient/appointments").status_code == 404
+    assert client.get("/v1/dental/ai/patient/chart").status_code == 404
+    assert client.post("/v1/dental/ai/patient/chat", json={"message": "Explain my dental visit."}).status_code == 404
 
     app.dependency_overrides[dental_api.require_doctor] = lambda: {"id": "doctor-b", "clinic_id": "clinic-b", "role": "doctor"}
     denied = client.post(

@@ -4,7 +4,9 @@ from universal_intelligence_engine.api import app
 
 PUBLIC_PATHS = {
     "/v1/dental/health",
-    "/v1/dental/auth/google",
+    "/v1/dental/public/clinic",
+    "/v1/dental/auth/password",
+    "/v1/dental/auth/bootstrap",
     "/v1/dental/public/appointments",
     "/v1/dental/billing/plans",
     "/v1/dental/billing/razorpay/webhook",
@@ -65,3 +67,29 @@ def test_demo_bearer_never_authenticates(monkeypatch):
         headers={"Authorization": "Bearer demo"},
     )
     assert response.status_code == 401
+
+
+
+def test_patient_ai_endpoints_are_not_registered():
+    client = TestClient(app)
+    for path in (
+        "/v1/dental/ai/patient/consent",
+        "/v1/dental/ai/patient/link",
+        "/v1/dental/ai/patient/chat",
+        "/v1/dental/ai/patient/treatment-explanation",
+        "/v1/dental/ai/patient/triage",
+        "/v1/dental/ai/patient/history",
+        "/v1/dental/ai/patient/device",
+        "/v1/dental/ai/patient/aftercare",
+        "/v1/dental/ai/patient/appointments",
+        "/v1/dental/ai/patient/chart",
+        "/v1/dental/ai/patient/recall",
+    ):
+        assert client.post(path, json={}).status_code == 404
+        assert client.get(path).status_code == 404
+
+
+def test_doctor_google_and_legacy_login_routes_are_absent():
+    client = TestClient(app)
+    assert client.post("/v1/dental/auth/google", json={}).status_code == 404
+    assert client.post("/v1/dental/auth/login", json={}).status_code == 404

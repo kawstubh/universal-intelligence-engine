@@ -1,4 +1,4 @@
-﻿
+
 """Dental application API with portable persistence and UIE adapter."""
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from pydantic import BaseModel, Field
 
-from .dental_auth import bootstrap_doctor, login_password, logout_doctor, require_doctor
+from .dental_auth import (add_doctor, bootstrap_doctor, change_password, deactivate_doctor, login_password, logout_doctor, require_doctor, reset_doctor_password)
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
@@ -20,14 +20,24 @@ router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
 class DoctorPasswordLoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=8, max_length=256)
+    password: str = Field(min_length=1, max_length=256)
 
 
 class DoctorBootstrapIn(BaseModel):
     email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=10, max_length=256)
     display_name: str = Field(default="", max_length=200)
-    setup_key: str = Field(min_length=16, max_length=256)
+    setup_token: str = Field(min_length=1, max_length=512)
+
+
+class DoctorPasswordChangeIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=10, max_length=256)
+
+
+class DoctorCreateIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    display_name: str = Field(min_length=1, max_length=200)
 
 
 class PatientIn(BaseModel):
@@ -56,7 +66,6 @@ class PublicAppointmentIn(BaseModel):
     starts_at: str = Field(min_length=5, max_length=80)
     treatment_type: str = Field(default="General dental consultation", min_length=1, max_length=120)
     note: str | None = Field(default=None, max_length=2000)
-    intelligence_request: bool = False
 
 
 class ChartEntryIn(BaseModel):
@@ -124,19 +133,54 @@ async def membership_webhook(request: Request, x_razorpay_signature: str = Heade
     return handle_membership_webhook(await request.body(), x_razorpay_signature)
 
 @router.post("/auth/password")
-async def doctor_password_login(body: DoctorPasswordLoginIn):
-    return login_password(body.email, body.password)
+async def doctor_password_login(body: DoctorPasswordLoginIn, request: Request):
+    return login_password(body.email, body.password, request.client.host if request.client else "unknown")
 
 
 @router.post("/auth/bootstrap")
 async def doctor_bootstrap(body: DoctorBootstrapIn):
-    """One-time clinic setup; disabled unless a secret setup key is configured."""
-    return bootstrap_doctor(body.email, body.password, body.display_name, body.setup_key)
+    """One-time first-admin setup, protected by DENTAL_SETUP_TOKEN."""
+    return bootstrap_doctor(body.email, body.password, body.display_name, body.setup_token)
+
+
+@router.post("/auth/password/change")
+async def doctor_password_change(body: DoctorPasswordChangeIn, actor=Depends(require_doctor)):
+    return change_password(actor, body.current_password, body.new_password)
+
+
+@router.post("/auth/doctors")
+async def doctor_add(body: DoctorCreateIn, actor=Depends(require_doctor)):
+    return add_doctor(actor, body.email, body.display_name)
+
+
+@router.patch("/auth/doctors/{doctor_id}/deactivate")
+async def doctor_deactivate(doctor_id: str, actor=Depends(require_doctor)):
+    return deactivate_doctor(actor, doctor_id)
+
+
+@router.post("/auth/doctors/{doctor_id}/reset-password")
+async def doctor_reset_password(doctor_id: str, actor=Depends(require_doctor)):
+    return reset_doctor_password(actor, doctor_id)
 
 @router.post("/auth/logout")
 async def doctor_logout(authorization: str | None = Header(default=None), doctor=Depends(require_doctor)):
     await logout_doctor(authorization)
     return {"ok": True}
+
+@router.get("/public/clinic")
+async def public_clinic_profile():
+    store = get_dental_store()
+    clinic_id = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
+    rows = store._execute(
+        "SELECT clinic_id,name,phone,phone_e164,whatsapp_phone,address FROM dental_clinic_profiles WHERE clinic_id=%s AND active=true"
+        if store.database_url else
+        "SELECT clinic_id,name,phone,phone_e164,whatsapp_phone,address FROM dental_clinic_profiles WHERE clinic_id=? AND active=1",
+        (clinic_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail={"code": "CLINIC_PROFILE_NOT_FOUND", "message": "Clinic contact details are unavailable."})
+    return {"clinic": rows[0]}
+
 
 @router.get("/health")
 async def dental_health():

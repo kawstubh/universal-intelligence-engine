@@ -9,7 +9,7 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .dental_auth import require_doctor
@@ -18,7 +18,6 @@ from .scano_adapter import get_scano_adapter
 
 router = APIRouter(prefix="/v1/dental/ai", tags=["dental-ai"])
 DISCLAIMER_DOCTOR = "AI suggestion only. A qualified doctor must verify the result. AI never writes clinical records automatically."
-DISCLAIMER_PATIENT = "This AI assistant is not a diagnosis. It cannot prescribe medicines or provide prescription/dosage advice."
 
 
 class DoctorAIIn(BaseModel):
@@ -36,41 +35,18 @@ class NoteAIIn(DoctorAIIn):
     visit_context: str = Field(default="", max_length=4000)
 
 
-class PatientLinkIn(BaseModel):
-    invite_code: str = Field(min_length=8, max_length=32, pattern=r"^[A-Za-z0-9]+$")
 
 
-class PatientAIIn(BaseModel):
-    message: str = Field(min_length=1, max_length=4000)
-    patient_id: str | None = None
-    language: str = Field(default="en", max_length=20)
 
 
-class PatientPlanIn(BaseModel):
-    patient_id: str | None = None
-    treatment_plan: str = Field(min_length=1, max_length=12000)
-    language: str = Field(default="en", max_length=20)
 
 
-class PatientAftercareIn(BaseModel):
-    patient_id: str | None = None
-    treatment: str = Field(min_length=1, max_length=2000)
-    language: str = Field(default="en", max_length=20)
 
 
-class PatientTriageIn(BaseModel):
-    patient_id: str | None = None
-    symptoms: str = Field(min_length=1, max_length=4000)
-    language: str = Field(default="en", max_length=20)
 
 
-class ConsentIn(BaseModel):
-    consent: bool
 
 
-class DeviceIn(BaseModel):
-    patient_id: str | None = None
-    expo_push_token: str = Field(min_length=10, max_length=512)
 
 
 class ApprovalIn(BaseModel):
@@ -109,9 +85,6 @@ def _limits(actor_id: str, clinic_id: str, endpoint: str) -> None:
         raise HTTPException(429, detail={"message": "Clinic monthly AI limit reached", "code": "AI_CLINIC_MONTHLY_CAP"})
 
 
-def _patient_data_mode() -> str:
-    mode = os.getenv("AI_PATIENT_DATA_MODE", "anonymized").strip().lower()
-    return mode if mode in {"anonymized", "full"} else "anonymized"
 
 
 def _age_band(age: Any) -> str:
@@ -155,13 +128,14 @@ def _safe_context(patient_id: str, clinic_id: str) -> dict[str, Any]:
         "appointments": appointments,
         "patient_id": patient_id,
     }
-    if _patient_data_mode() == "anonymized":
-        context["patient"] = {"age_band": _age_band(patient.get("age"))}
-        context["appointments"] = [
-            {"treatment_type": row["treatment_type"], "status": row["status"]}
-            for row in appointments
-        ]
-        context.pop("patient_id", None)
+    # Doctor AI receives the minimum necessary patient context by default.
+    # Patient identifiers, names and appointment timestamps are never sent to the AI provider.
+    context["patient"] = {"age_band": _age_band(patient.get("age"))}
+    context["appointments"] = [
+        {"treatment_type": row["treatment_type"], "status": row["status"]}
+        for row in appointments
+    ]
+    context.pop("patient_id", None)
     return context
 
 
@@ -304,45 +278,12 @@ async def doctor_approve(body: ApprovalIn, actor=Depends(require_doctor)):
     return {"result": {"approval_id": approval_id, "action": body.action, "written_to_clinical_record": False}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_DOCTOR], "request_id": str(uuid.uuid4())}
 
 
-async def _supabase_user(authorization: str | None) -> dict[str, Any]:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "Bearer access token required")
-    token = authorization[7:].strip()
-    url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
-    if not token or not url or not key:
-        raise HTTPException(401, detail={"message": "Invalid patient session", "code": "INVALID_PATIENT_SESSION"})
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(f"{url}/auth/v1/user", headers={"apikey": key, "Authorization": f"Bearer {token}"})
-    if response.status_code != 200:
-        raise HTTPException(401, detail={"message": "Invalid patient session", "code": "INVALID_PATIENT_SESSION"})
-    user = response.json()
-    if not user.get("id"):
-        raise HTTPException(401, detail={"message": "Patient identity missing", "code": "PATIENT_IDENTITY_MISSING"})
-    return user
 
 
-async def require_patient(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = await _supabase_user(authorization)
-    return {"user_id": str(user["id"]), "email": str(user.get("email") or "")}
 
 
-async def _patient_record(actor: dict, patient_id: str | None = None) -> dict[str, Any] | None:
-    store = get_dental_store()
-    if patient_id:
-        row = store.patient_by_user_id(actor["user_id"], patient_id)
-        if not row:
-            raise HTTPException(403, detail={"message": "Patient record is not linked to this account", "code": "PATIENT_IDENTITY_MISMATCH"})
-        return row
-    return store.patient_by_user_id(actor["user_id"])
 
 
-@router.post("/patient/link")
-async def patient_link(body: PatientLinkIn, actor=Depends(require_patient)):
-    patient = get_dental_store().consume_patient_invite(body.invite_code, actor["user_id"])
-    if not patient:
-        raise HTTPException(403, detail={"message": "Invalid, expired, or already-used clinic invite code", "code": "PATIENT_INVITE_INVALID"})
-    return {"result": {"patient_id": patient["id"], "clinic_id": patient["clinic_id"], "linked": True}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
 
 
 @router.post("/doctor/patients/{patient_id}/invite")
@@ -352,160 +293,3 @@ async def create_patient_invite(patient_id: str, actor=Depends(require_doctor)):
         raise HTTPException(404, "Patient not found")
     code = get_dental_store().create_patient_invite(patient_id, clinic_id)
     return {"result": {"patient_id": patient_id, "invite_code": code, "expires_in": 86400}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_DOCTOR], "request_id": str(uuid.uuid4())}
-
-
-@router.post("/patient/consent")
-async def patient_consent(body: ConsentIn, actor=Depends(require_patient)):
-    get_dental_store().set_ai_consent(actor["user_id"], bool(body.consent))
-    return {"result": {"consent": bool(body.consent)}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
-
-
-def _triage_emergency(text: str) -> tuple[bool, list[str]]:
-    value = text.lower()
-    rules = {
-        "difficulty breathing": ["difficulty breathing", "can't breathe", "cannot breathe"],
-        "difficulty swallowing": ["difficulty swallowing", "cannot swallow", "can't swallow"],
-        "uncontrolled bleeding": ["uncontrolled bleeding", "bleeding won't stop", "bleeding will not stop"],
-        "rapid facial/neck swelling": ["rapid swelling", "neck swelling", "face swelling", "facial swelling", "face is swelling", "face is swollen"],
-        "serious trauma": ["jaw fracture", "facial trauma", "knocked unconscious", "unconscious after injury"],
-    }
-    matched = [label for label, phrases in rules.items() if any(p in value for p in phrases)]
-    return bool(matched), matched
-
-
-async def _patient_ai(capability: str, actor: dict, message: str, patient_id: str | None, language: str, system_goal: str) -> dict[str, Any]:
-    store = get_dental_store()
-    if not store.ai_consent(actor["user_id"]):
-        raise HTTPException(403, detail={"message": "AI consent is required before first use", "code": "AI_CONSENT_REQUIRED"})
-    patient = await _patient_record(actor, patient_id)
-    clinic_id = patient.get("clinic_id") if patient else "patient"
-    _limits(actor["user_id"], clinic_id, capability)
-    if patient:
-        safe = _safe_context(patient["id"], clinic_id)
-        safe["language"] = language
-    else:
-        safe = {"domain": "dental", "language": language}
-    key = _cache_key(capability, {"message": message, "context": safe})
-    cached = store.get_ai_cache(key)
-    if cached:
-        store.save_patient_ai_message(actor["user_id"], patient.get("id") if patient else None, "user", message, clinic_id)
-        store.save_patient_ai_message(actor["user_id"], patient.get("id") if patient else None, "assistant", str(cached["result"]), clinic_id)
-        store.record_ai_usage(actor["user_id"], clinic_id, "patient", capability, True)
-        cached["request_id"] = str(uuid.uuid4())
-        cached["cache_hit"] = True
-        return cached
-    goal = f"{system_goal}\nUser message: {message}\nNever diagnose. Never prescribe. Never provide medicine dosage."
-    result = await _uie(capability, goal, safe, DISCLAIMER_PATIENT)
-    result["cache_hit"] = False
-    store.put_ai_cache(key, result, int(time.time()) + int(os.getenv("DENTAL_AI_CACHE_TTL", "900")))
-    store.save_patient_ai_message(actor["user_id"], patient.get("id") if patient else None, "user", message, clinic_id)
-    store.save_patient_ai_message(actor["user_id"], patient.get("id") if patient else None, "assistant", str(result["result"]), clinic_id)
-    store.record_ai_usage(actor["user_id"], clinic_id, "patient", capability, False)
-    return result
-
-
-@router.post("/patient/chat")
-async def patient_chat(body: PatientAIIn, actor=Depends(require_patient)):
-    emergency, matched = _triage_emergency(body.message)
-    if emergency:
-        safe = _result(
-            {"message": "This may be an emergency. Seek urgent medical/dental care now, especially for breathing/swallowing difficulty, uncontrolled bleeding, or rapidly increasing facial/neck swelling.", "matched_flags": matched},
-            confidence=1.0,
-            sources=[],
-            disclaimer=DISCLAIMER_PATIENT,
-            emergency=True,
-        )
-        return safe
-    return await _patient_ai("patient_chat", actor, body.message, body.patient_id, body.language, "Explain dental information in plain language and advise contacting the clinic for personalized assessment.")
-
-
-@router.post("/patient/triage")
-async def patient_triage(body: PatientTriageIn, actor=Depends(require_patient)):
-    emergency, matched = _triage_emergency(body.symptoms)
-    if emergency:
-        return _result(
-            {"urgency": "emergency", "message": "Seek urgent medical/dental care now.", "matched_flags": matched},
-            confidence=1.0,
-            sources=[],
-            disclaimer=DISCLAIMER_PATIENT,
-            emergency=True,
-        )
-    return await _patient_ai("patient_triage", actor, body.symptoms, body.patient_id, body.language, "Provide safe symptom triage without diagnosing. Explain red flags and when to contact the dental clinic. Do not prescribe or give dosage advice.")
-
-
-@router.post("/patient/treatment-explanation")
-async def patient_treatment_explanation(body: PatientPlanIn, actor=Depends(require_patient)):
-    return await _patient_ai("treatment_explanation", actor, body.treatment_plan, body.patient_id, body.language, "Explain the supplied dental treatment plan in simple language, including what each step is for, common questions, and what to confirm with the dentist. Do not change the plan.")
-
-
-@router.post("/patient/aftercare")
-async def patient_aftercare(body: PatientAftercareIn, actor=Depends(require_patient)):
-    return await _patient_ai("aftercare", actor, body.treatment, body.patient_id, body.language, "Give general dental aftercare information for the supplied treatment. Do not prescribe medication or dosage. Tell the patient when to contact the clinic urgently.")
-
-
-@router.get("/patient/history")
-async def patient_history(actor=Depends(require_patient)):
-    patient = await _patient_record(actor)
-    rows = get_dental_store().patient_ai_messages(actor["user_id"], patient.get("id") if patient else None)
-    return {"result": rows, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
-
-
-@router.delete("/patient/history")
-async def patient_delete_history(actor=Depends(require_patient)):
-    get_dental_store().delete_patient_ai_messages(actor["user_id"])
-    return {"result": {"deleted": True}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
-
-
-@router.get("/patient/appointments")
-async def patient_appointments(actor=Depends(require_patient)):
-    patient = await _patient_record(actor)
-    if not patient:
-        return {"result": [], "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
-    rows = get_dental_store().appointments(patient["clinic_id"], patient["id"])
-    safe = [{"id": r["id"], "starts_at": r["starts_at"], "treatment_type": r["treatment_type"], "status": r["status"]} for r in rows]
-    return {"result": safe, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
-
-
-@router.get("/patient/chart")
-async def patient_chart(actor=Depends(require_patient)):
-    patient = await _patient_record(actor)
-    if not patient:
-        return {"result": [], "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
-    rows = get_dental_store().chart(patient["id"], patient["clinic_id"])
-    safe = [{"tooth_fdi": r["tooth_fdi"], "status": r["status"]} for r in rows]
-    return {"result": safe, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
-
-
-@router.post("/patient/device")
-async def patient_device(body: DeviceIn, actor=Depends(require_patient)):
-    patient = await _patient_record(actor, body.patient_id)
-    clinic_id = patient.get("clinic_id") if patient else "patient"
-    get_dental_store().save_patient_device(actor["user_id"], patient.get("id") if patient else None, clinic_id, body.expo_push_token)
-    return {"result": {"registered": True}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
-
-
-@router.post("/patient/recall")
-async def patient_recall(actor=Depends(require_patient)):
-    patient = await _patient_record(actor)
-    if not patient:
-        return _result({"message": "No linked clinic record yet.", "push_sent": False}, confidence=1.0, sources=[], disclaimer=DISCLAIMER_PATIENT)
-    appointments = get_dental_store().appointments(patient["clinic_id"], patient["id"])
-    overdue = [a for a in appointments if a.get("status") in {"completed", "no_show"}]
-    message = "It may be time to check with your dentist about your next follow-up." if overdue else "No recall action is currently suggested from the available record."
-    sent = False
-    if overdue:
-        sent = await _send_expo_push(get_dental_store().patient_devices(actor["user_id"]), "Dental recall reminder", message)
-    return _result({"message": message, "push_sent": sent}, confidence=1.0, sources=[], disclaimer=DISCLAIMER_PATIENT)
-
-
-async def _send_expo_push(tokens: list[str], title: str, body: str) -> bool:
-    tokens = [t for t in tokens if t]
-    if not tokens or os.getenv("EXPO_PUSH_ENABLED", "false").lower() != "true":
-        return False
-    payload = [{"to": token, "title": title, "body": body, "sound": "default"} for token in tokens]
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post("https://exp.host/--/api/v2/push/send", json=payload)
-        return 200 <= response.status_code < 300
-    except httpx.HTTPError:
-        return False
