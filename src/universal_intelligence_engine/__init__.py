@@ -9,7 +9,10 @@ from .knowledge import CompositeKnowledgeProvider, deduplicate_evidence, rank_ev
 from .locale import LocaleContext, resolve_locale
 from .memory import LearningEvent, LearningMemory
 from .provenance import ProvenanceRecord
-from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
+from .providers import BraveSearchProvider, NoKnowledgeProvider, OpenAIResponsesReasoningProvider
 from .service import IntelligenceService
+from .reasoning import NativeReasoningProvider
+from .agent import AgentRun, AgentStep, AutonomousAgent
+from .planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
 __version__ = "0.5.0"
-__all__ = ["AdaptiveReasoningCore","BasicResponseEvaluator","BraveSearchProvider","ChangeProposal","CompositeKnowledgeProvider","Evidence","GovernanceError","HumanAuthorizationGate","IntelligenceRequest","IntelligenceResponse","IntelligenceService","LearningEvent","LearningMemory","LocaleContext","OpenAIResponsesReasoningProvider","ProvenanceRecord","UniversalIntelligenceEngine","dental_router","deduplicate_evidence","rank_evidence","resolve_locale"]
+__all__ = ["AdaptiveReasoningCore","BasicResponseEvaluator","BraveSearchProvider","NoKnowledgeProvider","NativeReasoningProvider","AgentRun","AgentStep","AutonomousAgent","AdaptivePlanner","Plan","PlanStep","topological_steps","validate_plan","ChangeProposal","CompositeKnowledgeProvider","Evidence","GovernanceError","HumanAuthorizationGate","IntelligenceRequest","IntelligenceResponse","IntelligenceService","LearningEvent","LearningMemory","LocaleContext","OpenAIResponsesReasoningProvider","ProvenanceRecord","UniversalIntelligenceEngine","dental_router","deduplicate_evidence","rank_evidence","resolve_locale"]
