@@ -106,6 +106,8 @@ def test_patient_ai_prompt_forbids_diagnosis_and_dosage(monkeypatch):
         def ai_consent(self, user_id): return True
         def patient_by_user_id(self, user_id, patient_id=None): return None
         def ai_usage_count(self, *args, **kwargs): return 0
+        def get_ai_cache(self, key): return None
+        def put_ai_cache(self, key, value, expires_at): pass
         def save_patient_ai_message(self, *args): pass
         def record_ai_usage(self, *args): pass
 

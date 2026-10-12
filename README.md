@@ -114,25 +114,29 @@ Use `dental.env.example` as the Dental backend environment template.
 
 Required production backend values include:
 
-- `SUPABASE_URL`
-- `SUPABASE_PUBLISHABLE_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY` — server only
+- `DATABASE_URL` — Render PostgreSQL connection string
+- `DENTAL_MASTER_CLINIC_ID`
+- `DENTAL_BOOTSTRAP_ADMIN_EMAIL` and `DENTAL_BOOTSTRAP_ADMIN_PASSWORD` — optional initial admin bootstrap; use a strong password and set them in Render environment only
 - `UIE_API_URL`
 - `UIE_API_KEY` — server only
 - `OPENAI_API_KEY` — server only
 - `BRAVE_SEARCH_API_KEY` — server only
 
+## Dental authentication
+
+The Dental API uses clinic-issued email/password accounts; Google sign-in is not part of this flow. Passwords are stored as salted scrypt hashes. Successful login returns a random bearer session token; only its SHA-256 hash is stored in PostgreSQL. Sessions expire after 30 days and can be revoked at logout. Login attempts are rate-limited per source IP.
+
+- `POST /v1/dental/auth/password/login` — `{ "email": "doctor@example.com", "password": "..." }`
+- `GET /v1/dental/auth/me` — returns the current authenticated doctor account
+- `POST /v1/dental/auth/logout` — revokes the current session
+- `POST /v1/dental/auth/doctors` — admin-only account creation for the current clinic
+- `POST /v1/dental/auth/doctors/{doctor_id}/deactivate` — admin-only account deactivation
+
+To bootstrap the first administrator, set `DENTAL_BOOTSTRAP_ADMIN_EMAIL` and `DENTAL_BOOTSTRAP_ADMIN_PASSWORD` in the Render service environment. Use a unique strong password of at least 12 characters. The bootstrap is idempotent and does not overwrite an existing account. Do not put production credentials in this file or in source control.
+
 ## Database
 
-Dental migrations are under:
-
-```
-supabase/migrations/
-```
-
-The schema covers patients, appointments, dental chart entries, AI events, audit events, and staff roles.
-
-RLS is enabled on clinical tables. The intended architecture is that mobile clients authenticate with Supabase Auth and call the Dental API; the mobile client does not receive the service-role key.
+Production schema migrations are under `alembic/versions/` and are run against the Render PostgreSQL database. Supabase migrations are retained for historical schema context and are not used for this password login flow. Existing tables are preserved by the password-auth migration.
 
 ## Safety boundary
 

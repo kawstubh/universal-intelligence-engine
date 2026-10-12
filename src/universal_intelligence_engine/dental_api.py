@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from pydantic import BaseModel, Field
 
-from .dental_auth import login_google, logout_doctor, require_doctor
+from .dental_auth import hash_password, login_password, logout_doctor, require_doctor
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
@@ -18,9 +18,15 @@ from .dental_billing import plans as membership_plans, create_order as create_me
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
 
-class DoctorGoogleLoginIn(BaseModel):
-    access_token: str = Field(min_length=20, max_length=10000)
-    google_id_token: str = Field(min_length=20, max_length=10000)
+class DoctorPasswordLoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class DoctorAccountCreateIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=12, max_length=256)
+    role: str = Field(default="doctor", pattern=r"^(doctor|dentist|admin)$")
 
 
 class PatientIn(BaseModel):
@@ -116,9 +122,41 @@ async def create_membership_order(body: MembershipOrderIn, doctor=Depends(requir
 async def membership_webhook(request: Request, x_razorpay_signature: str = Header(default="")):
     return handle_membership_webhook(await request.body(), x_razorpay_signature)
 
-@router.post("/auth/google")
-async def doctor_google_login(body: DoctorGoogleLoginIn):
-    return await login_google(body.access_token, body.google_id_token)
+@router.post("/auth/password/login")
+async def doctor_password_login(body: DoctorPasswordLoginIn, request: Request):
+    return await login_password(body.email, body.password, request)
+
+
+@router.post("/auth/doctors")
+async def create_doctor_account(body: DoctorAccountCreateIn, actor=Depends(require_doctor)):
+    if actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail={"code": "ADMIN_REQUIRED", "message": "Clinic administrator required"})
+    email = body.email.strip().lower()
+    store = get_dental_store()
+    if store.doctor_by_email(email):
+        raise HTTPException(status_code=409, detail={"code": "ACCOUNT_EXISTS", "message": "An account already exists for this email"})
+    import secrets
+    doctor = store.create_doctor({"id": secrets.token_hex(16), "email": email, "password_hash": hash_password(body.password), "role": body.role, "clinic_id": actor["clinic_id"]})
+    return {"id": doctor["id"], "email": doctor["email"], "role": doctor["role"], "clinic_id": doctor["clinic_id"], "active": True}
+
+
+@router.post("/auth/doctors/{doctor_id}/deactivate")
+async def deactivate_doctor_account(doctor_id: str, actor=Depends(require_doctor)):
+    if actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail={"code": "ADMIN_REQUIRED", "message": "Clinic administrator required"})
+    store = get_dental_store()
+    target = store.doctor_by_id(doctor_id)
+    if not target or target.get("clinic_id") != actor.get("clinic_id"):
+        raise HTTPException(status_code=404, detail={"code": "ACCOUNT_NOT_FOUND", "message": "Doctor account not found in this clinic"})
+    if target.get("role") == "admin" and target.get("id") == actor.get("id"):
+        raise HTTPException(status_code=400, detail={"code": "CANNOT_DEACTIVATE_SELF", "message": "You cannot deactivate your own account"})
+    store.set_doctor_active(doctor_id, False)
+    return {"ok": True, "id": doctor_id, "active": False}
+
+@router.get("/auth/me")
+async def doctor_session_me(doctor=Depends(require_doctor)):
+    return {"user": {"id": doctor["id"], "email": doctor["email"], "role": doctor["role"], "clinic_id": doctor["clinic_id"]}}
+
 
 @router.post("/auth/logout")
 async def doctor_logout(authorization: str | None = Header(default=None), doctor=Depends(require_doctor)):
