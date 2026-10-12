@@ -8,6 +8,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
+from . import __version__
 from .contracts import IntelligenceRequest
 from .dental_api import router as dental_router
 from .dental_ai import router as dental_ai_router
@@ -39,7 +40,7 @@ def build_service() -> IntelligenceService:
 
 app = FastAPI(
     title="Universal Intelligence Engine",
-    version=__import__("universal_intelligence_engine").__version__,
+    version=__version__,
     description="Shared intelligence API for research, reasoning, applications, agents, and Dental Intelligence.",
 )
 service = build_service()
