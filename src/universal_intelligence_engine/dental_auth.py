@@ -19,7 +19,11 @@ MAX_FAILURES = 5
 LOCK_SECONDS = 15 * 60
 DEFAULT_CLINIC = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
 # Same bcrypt work for unknown emails and wrong passwords, avoiding account-enumeration timing.
-_DUMMY_HASH = bcrypt.hashpw(b"not-a-real-clinic-password", bcrypt.gensalt(rounds=12))
+_DUMMY_HASH = bcrypt.hashpw(hashlib.sha256(b"not-a-real-clinic-password").digest(), bcrypt.gensalt(rounds=12))
+_DUMMY_SCRYPT_SALT = bytes.fromhex("00" * 16)
+_DUMMY_SCRYPT_DIGEST = hashlib.scrypt(
+    b"not-a-real-clinic-password", salt=_DUMMY_SCRYPT_SALT, n=2**14, r=8, p=1, dklen=32,
+)
 
 
 def _now() -> int:
@@ -41,12 +45,32 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, encoded: str) -> bool:
-    try:
-        return bcrypt.checkpw(hashlib.sha256(password.encode("utf-8")).digest(), encoded.encode("ascii"))
-    except (ValueError, TypeError, UnicodeError):
-        # Preserve the bcrypt work factor even for malformed stored hashes.
-        bcrypt.checkpw(hashlib.sha256(password.encode("utf-8")).digest(), _DUMMY_HASH)
-        return False
+    """Verify bcrypt or legacy scrypt while performing both KDF costs per attempt."""
+    password_bytes = password.encode("utf-8")
+    bcrypt_ok = False
+    scrypt_ok = False
+    if encoded.startswith("$2"):
+        try:
+            bcrypt_ok = bcrypt.checkpw(hashlib.sha256(password_bytes).digest(), encoded.encode("ascii"))
+        except (ValueError, TypeError, UnicodeError):
+            bcrypt.checkpw(hashlib.sha256(password_bytes).digest(), _DUMMY_HASH)
+        candidate = hashlib.scrypt(password_bytes, salt=_DUMMY_SCRYPT_SALT, n=2**14, r=8, p=1, dklen=32)
+        hmac.compare_digest(candidate, _DUMMY_SCRYPT_DIGEST)
+    elif encoded.startswith("scrypt$"):
+        try:
+            scheme, salt_hex, digest_hex = encoded.split("$", 2)
+            expected = bytes.fromhex(digest_hex)
+            actual = hashlib.scrypt(password_bytes, salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1, dklen=len(expected))
+            scrypt_ok = scheme == "scrypt" and hmac.compare_digest(actual, expected)
+        except (ValueError, TypeError):
+            candidate = hashlib.scrypt(password_bytes, salt=_DUMMY_SCRYPT_SALT, n=2**14, r=8, p=1, dklen=32)
+            hmac.compare_digest(candidate, _DUMMY_SCRYPT_DIGEST)
+        bcrypt.checkpw(hashlib.sha256(password_bytes).digest(), _DUMMY_HASH)
+    else:
+        bcrypt.checkpw(hashlib.sha256(password_bytes).digest(), _DUMMY_HASH)
+        candidate = hashlib.scrypt(password_bytes, salt=_DUMMY_SCRYPT_SALT, n=2**14, r=8, p=1, dklen=32)
+        hmac.compare_digest(candidate, _DUMMY_SCRYPT_DIGEST)
+    return bcrypt_ok or scrypt_ok
 
 
 def _sql(store, pg: str, sqlite: str) -> str:
@@ -190,6 +214,16 @@ def login_password(email: str, password: str, ip: str = "unknown") -> dict:
         _record_failure(email, ip)
         _audit_login(email, False, ip, "INVALID_CREDENTIALS")
         _auth_error(401, "INVALID_CREDENTIALS", "Email or password is incorrect.")
+    # Upgrade a verified legacy scrypt hash to bcrypt on successful login.
+    if str(doctor.get("password_hash") or "").startswith("scrypt$"):
+        upgraded_hash = hash_password(password)
+        store._execute(
+            _sql(store,
+                 "UPDATE dental_doctors SET password_hash=%s,password_changed_at=%s WHERE id=%s AND clinic_id=%s",
+                 "UPDATE dental_doctors SET password_hash=?,password_changed_at=? WHERE id=? AND clinic_id=?"),
+            (upgraded_hash, str(_now()), doctor["id"], doctor["clinic_id"]),
+        )
+        doctor["password_hash"] = upgraded_hash
     _clear_throttle(email, ip)
     _audit_login(email, True, ip, "OK")
     return _create_session(doctor)
@@ -295,21 +329,22 @@ def add_doctor(actor: dict, email: str, display_name: str) -> dict:
 def deactivate_doctor(actor: dict, doctor_id: str) -> dict:
     _require_admin(actor)
     store = get_dental_store()
-    rows = store._execute(
+    target = store._execute(
         _sql(store,
-             "UPDATE dental_doctors SET is_active=false WHERE id=%s AND clinic_id=%s RETURNING id",
-             "UPDATE dental_doctors SET is_active=0 WHERE id=? AND clinic_id=?"),
+             "SELECT id,role FROM dental_doctors WHERE id=%s AND clinic_id=%s",
+             "SELECT id,role FROM dental_doctors WHERE id=? AND clinic_id=?"),
         (doctor_id, actor["clinic_id"]),
     )
-    if not rows:
-        # SQLite UPDATE without RETURNING returns no rows; verify within same clinic.
-        exists = store._execute(
-            _sql(store, "SELECT id FROM dental_doctors WHERE id=%s AND clinic_id=%s",
-                 "SELECT id FROM dental_doctors WHERE id=? AND clinic_id=?"),
-            (doctor_id, actor["clinic_id"]),
-        )
-        if not exists:
-            _auth_error(404, "DOCTOR_NOT_FOUND", "Doctor not found in this clinic.")
+    if not target:
+        _auth_error(404, "DOCTOR_NOT_FOUND", "Doctor not found in this clinic.")
+    if target[0]["role"] == "admin":
+        _auth_error(409, "ADMIN_CANNOT_BE_DEACTIVATED", "The clinic administrator cannot be deactivated through doctor management.")
+    store._execute(
+        _sql(store,
+             "UPDATE dental_doctors SET is_active=false WHERE id=%s AND clinic_id=%s AND role<>'admin'",
+             "UPDATE dental_doctors SET is_active=0 WHERE id=? AND clinic_id=? AND role<>'admin'"),
+        (doctor_id, actor["clinic_id"]),
+    )
     _revoke_doctor_sessions(doctor_id)
     return {"ok": True, "doctor_id": doctor_id, "active": False, "sessions_revoked": True}
 

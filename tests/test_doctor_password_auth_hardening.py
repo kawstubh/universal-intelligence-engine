@@ -242,6 +242,8 @@ def test_admin_deactivation_revokes_doctor_session(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     setup = _setup(client, monkeypatch)
     admin_token = setup.json()["access_token"]
+    cannot_disable_admin = client.patch(f"/v1/dental/auth/doctors/{setup.json()['user']['id']}/deactivate", headers={"Authorization":f"Bearer {admin_token}"})
+    assert cannot_disable_admin.status_code == 409
     created = client.post("/v1/dental/auth/doctors", headers={"Authorization":f"Bearer {admin_token}"}, json={
         "email":"associate@clinic.example","display_name":"Associate",
     })
@@ -267,3 +269,26 @@ def test_public_clinic_profile_returns_record_phone_without_auth(tmp_path, monke
     assert clinic["phone"] == "9137007432"
     assert clinic["phone_e164"] == "+919137007432"
     assert clinic["whatsapp_phone"] == "919137007432"
+
+
+
+def test_legacy_scrypt_password_is_upgraded_to_bcrypt_after_successful_login(tmp_path, monkeypatch):
+    import hashlib
+    import secrets
+    client = _client(tmp_path, monkeypatch)
+    setup = _setup(client, monkeypatch)
+    assert setup.status_code == 200
+    password = "legacy-doctor-password-10"
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1, dklen=32)
+    legacy = "scrypt$" + salt.hex() + "$" + digest.hex()
+    db = sqlite3.connect(tmp_path / "auth.sqlite3")
+    db.execute("INSERT INTO dental_doctors(id,email,phone,password_hash,role,clinic_id,created_at,is_active,must_change_password,display_name) VALUES (?,?,?,?,?,?,?,?,?,?)",
+               ("legacy-doctor", "legacy@clinic.example", "", legacy, "doctor", "dr-pranali", "1", 1, 0, "Legacy Doctor"))
+    db.commit(); db.close()
+    response = client.post("/v1/dental/auth/password", json={"email":"legacy@clinic.example","password":password})
+    assert response.status_code == 200, response.text
+    db = sqlite3.connect(tmp_path / "auth.sqlite3")
+    upgraded = db.execute("SELECT password_hash FROM dental_doctors WHERE id='legacy-doctor'").fetchone()[0]
+    db.close()
+    assert upgraded.startswith("$2b$12$")
