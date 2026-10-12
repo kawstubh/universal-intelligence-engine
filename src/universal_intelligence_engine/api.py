@@ -14,7 +14,8 @@ from .dental_ai import router as dental_ai_router
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
-from .providers import BraveSearchProvider, DisabledKnowledgeProvider, OpenAIResponsesReasoningProvider, ProviderNotConfiguredError, ProviderRateLimitError
+from .reasoning import NativeReasoningProvider
+from .providers import BraveSearchProvider, DisabledKnowledgeProvider, NoKnowledgeProvider, OpenAIResponsesReasoningProvider, ProviderNotConfiguredError, ProviderRateLimitError
 from .service import IntelligenceService
 
 class IntelligenceRunBody(BaseModel):
@@ -25,8 +26,8 @@ class IntelligenceRunBody(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
 
 def build_service() -> IntelligenceService:
-    knowledge = BraveSearchProvider() if os.getenv("BRAVE_SEARCH_API_KEY") else DisabledKnowledgeProvider()
-    reasoning = OpenAIResponsesReasoningProvider()
+    knowledge = BraveSearchProvider() if os.getenv("BRAVE_SEARCH_API_KEY") else NoKnowledgeProvider()
+    reasoning = OpenAIResponsesReasoningProvider() if os.getenv("OPENAI_API_KEY") else NativeReasoningProvider()
     memory = LearningMemory(os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl"))
     engine = UniversalIntelligenceEngine(
         knowledge=knowledge,
@@ -38,7 +39,7 @@ def build_service() -> IntelligenceService:
 
 app = FastAPI(
     title="Universal Intelligence Engine",
-    version="0.5.0",
+    version=__import__("universal_intelligence_engine").__version__,
     description="Shared intelligence API for research, reasoning, applications, agents, and Dental Intelligence.",
 )
 service = build_service()
@@ -86,7 +87,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
-        "version": "0.5.0",
+        "version": app.version,
         "providers": {
             "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
             "reasoning": bool(
