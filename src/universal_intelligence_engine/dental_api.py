@@ -13,7 +13,7 @@ from .dental_auth import hash_password, login_password, logout_doctor, require_d
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
-from .dental_billing import plans as membership_plans, create_order as create_membership_order, handle_webhook as handle_membership_webhook
+from .dental_billing import plans as membership_plans, create_order as create_membership_order_impl, handle_webhook as handle_membership_webhook
 
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
@@ -116,7 +116,7 @@ async def create_membership_order(body: MembershipOrderIn, doctor=Depends(requir
     clinic_id = doctor.get("clinic_id")
     if not clinic_id:
         raise HTTPException(400, "Clinic context is required")
-    return await create_membership_order(clinic_id, body.plan_id, doctor.get("id", ""))
+    return await create_membership_order_impl(clinic_id, body.plan_id, doctor.get("id", ""))
 
 @router.post("/billing/razorpay/webhook")
 async def membership_webhook(request: Request, x_razorpay_signature: str = Header(default="")):
