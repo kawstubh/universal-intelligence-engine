@@ -1,4 +1,3 @@
-import sqlite3
 from universal_intelligence_engine.dental_store import DentalStore
 
 

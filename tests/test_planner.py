@@ -1,4 +1,10 @@
-from universal_intelligence_engine.planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
+from universal_intelligence_engine.planner import (
+    AdaptivePlanner,
+    Plan,
+    PlanStep,
+    topological_steps,
+    validate_plan,
+)
 
 
 def test_adaptive_planner_creates_research_reason_verify():

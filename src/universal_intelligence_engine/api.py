@@ -1,23 +1,33 @@
 ﻿
 """HTTP API for the Universal Intelligence Engine and Dental application layer."""
 from __future__ import annotations
+
 import hmac
 import os
 from typing import Any
+
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
 from . import __version__
 from .contracts import IntelligenceRequest
-from .dental_api import router as dental_router
 from .dental_ai import router as dental_ai_router
+from .dental_api import router as dental_router
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
+from .providers import (
+    BraveSearchProvider,
+    NoKnowledgeProvider,
+    OpenAIResponsesReasoningProvider,
+    ProviderNotConfiguredError,
+    ProviderRateLimitError,
+)
 from .reasoning import NativeReasoningProvider
-from .providers import BraveSearchProvider, DisabledKnowledgeProvider, NoKnowledgeProvider, OpenAIResponsesReasoningProvider, ProviderNotConfiguredError, ProviderRateLimitError
 from .service import IntelligenceService
+
 
 class IntelligenceRunBody(BaseModel):
     goal: str = Field(min_length=1, max_length=12000)

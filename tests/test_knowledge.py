@@ -1,6 +1,14 @@
-from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from universal_intelligence_engine.contracts import (
+    Evidence,
+    IntelligenceRequest,
+    IntelligenceResponse,
+)
 from universal_intelligence_engine.engine import UniversalIntelligenceEngine
-from universal_intelligence_engine.knowledge import deduplicate_evidence, evidence_score, rank_evidence
+from universal_intelligence_engine.knowledge import (
+    deduplicate_evidence,
+    evidence_score,
+    rank_evidence,
+)
 
 
 def make_evidence(title, *, authority, confidence=0.5, url=None, content="same"):

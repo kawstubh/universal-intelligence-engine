@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from typing import Any
 
 from .contracts import Evidence, IntelligenceRequest, KnowledgeProvider
 from .provenance import ProvenanceRecord
+
+
+logger = logging.getLogger(__name__)
 
 
 class CompositeKnowledgeProvider:
@@ -21,8 +25,9 @@ class CompositeKnowledgeProvider:
         for provider in self.providers:
             try:
                 results.extend(provider.search(request))
-            except Exception:
+            except (RuntimeError, TimeoutError, ValueError, TypeError, OSError):
                 # One provider outage must not take down the whole research pass.
+                logger.warning("Knowledge provider failed during search", exc_info=True)
                 continue
         return rank_evidence(results)
 

@@ -1,7 +1,7 @@
 """Evidence provenance, freshness, and trust primitives."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -21,8 +21,8 @@ class ProvenanceRecord:
         if not self.published_at:
             return None
         try:
-            published = datetime.fromisoformat(self.published_at.replace("Z", "+00:00"))
-            now = datetime.now(timezone.utc)
+            published = datetime.fromisoformat(self.published_at)
+            now = datetime.now(UTC)
             return max(0.0, (now - published).total_seconds() / 3600)
         except ValueError:
             return None
