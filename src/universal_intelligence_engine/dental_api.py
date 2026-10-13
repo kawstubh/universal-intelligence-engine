@@ -1,4 +1,4 @@
-﻿
+
 """Dental application API with portable persistence and UIE adapter."""
 from __future__ import annotations
 
@@ -215,7 +215,7 @@ async def screen_scan(body: ScanScreenIn, actor: dict = Depends(require_doctor))
             "metadata": body.metadata,
         })
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise HTTPException(status_code=503, detail="Scan screening is temporarily unavailable.") from exc
     get_dental_store().audit(actor.get("user_id"), "screen", "scan", body.patient_id)
     return result
 
@@ -226,7 +226,7 @@ async def send_whatsapp_template(body: WhatsAppTemplateIn, actor: dict = Depends
     try:
         result = await adapter.send_template(body.to.strip(), body.template_name.strip(), body.language_code.strip(), body.components)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise HTTPException(status_code=503, detail="WhatsApp delivery is temporarily unavailable.") from exc
     get_dental_store().audit(actor.get("user_id"), "send", "whatsapp", body.to.strip())
     return result
 

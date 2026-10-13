@@ -1,4 +1,4 @@
-﻿
+
 """HTTP API for the Universal Intelligence Engine and Dental application layer."""
 from __future__ import annotations
 import hmac
@@ -117,11 +117,11 @@ def run_intelligence(body: IntelligenceRunBody, authorization: str | None = Head
             language=body.language, constraints=body.constraints
         ))
     except ProviderNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail={"message": str(exc), "code": exc.code, "provider": exc.provider}) from exc
+        raise HTTPException(status_code=503, detail={"message": "Provider is not configured.", "code": exc.code, "provider": exc.provider}) from exc
     except ProviderRateLimitError as exc:
         raise HTTPException(status_code=429, detail={"message": "AI is busy right now. Please try again shortly.", "code": exc.code, "provider": exc.provider}) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail={"message": str(exc), "code": "PROVIDER_REQUEST_FAILED"}) from exc
+        raise HTTPException(status_code=502, detail={"message": "Provider request failed.", "code": "PROVIDER_REQUEST_FAILED"}) from exc
     return {
         "answer": result.answer,
         "evidence": [item.__dict__ for item in result.evidence],

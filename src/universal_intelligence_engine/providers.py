@@ -1,4 +1,3 @@
-﻿
 """Live provider adapters for UIE.
 
 Providers are environment-configured and vendor-replaceable. No API secrets are
@@ -9,6 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import logging
+import socket
+import httpx
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 import time
@@ -17,6 +19,30 @@ from urllib.request import Request, urlopen
 from typing import Any
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from .reasoning import NativeReasoningProvider
+
+logger = logging.getLogger(__name__)
+
+
+class ProviderError(RuntimeError):
+    """Sanitized base class for provider failures."""
+
+
+class ProviderTimeout(ProviderError):
+    """Provider request timed out."""
+
+
+class ProviderUnavailable(ProviderError):
+    """Provider returned a 5xx response or could not be reached."""
+
+
+class ProviderRateLimited(ProviderError):
+    """Provider returned HTTP 429."""
+
+
+class ProviderBadOutput(ProviderError):
+    """Provider returned malformed JSON or an invalid response schema."""
+
 
 
 def _utc_now() -> str:
@@ -40,23 +66,35 @@ def _json_request(
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
+    except httpx.TimeoutException as exc:
+        raise ProviderTimeout("provider timeout") from exc
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status == 429:
+            raise ProviderRateLimited("provider rate limited") from exc
+        if 500 <= status <= 599:
+            raise ProviderUnavailable("provider unavailable") from exc
+        raise ProviderBadOutput("provider returned an unexpected HTTP status") from exc
+    except httpx.RequestError as exc:
+        raise ProviderUnavailable("provider request failed") from exc
     except HTTPError as exc:
         if exc.code == 429:
-            retry_after = None
-            try:
-                retry_after = float(exc.headers.get("Retry-After"))
-            except (TypeError, ValueError):
-                retry_after = None
-            raise ProviderRateLimitError("reasoning", retry_after) from exc
-        raise RuntimeError(f"Provider request failed: {exc}") from exc
+            raise ProviderRateLimited("provider rate limited") from exc
+        if 500 <= exc.code <= 599:
+            raise ProviderUnavailable("provider unavailable") from exc
+        raise ProviderUnavailable("provider request failed") from exc
+    except TimeoutError as exc:
+        raise ProviderTimeout("provider timeout") from exc
     except URLError as exc:
-        raise RuntimeError(f"Provider request failed: {exc}") from exc
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise ProviderTimeout("provider timeout") from exc
+        raise ProviderUnavailable("provider unreachable") from exc
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Provider returned invalid JSON") from exc
+        raise ProviderBadOutput("provider returned malformed JSON") from exc
     if not isinstance(value, dict):
-        raise RuntimeError("Provider returned a non-object JSON response")
+        raise ProviderBadOutput("provider returned a non-object JSON response")
     return value
 
 
@@ -234,7 +272,7 @@ class OpenAIResponsesReasoningProvider:
             if choices and isinstance(choices[0], dict):
                 answer = (choices[0].get("message") or {}).get("content")
         if not answer:
-            raise RuntimeError("Reasoning provider returned no output text")
+            raise ProviderBadOutput("provider returned no output text")
         return IntelligenceResponse(
             answer=str(answer),
             evidence=evidence,
@@ -247,20 +285,46 @@ class OpenAIResponsesReasoningProvider:
         request: IntelligenceRequest,
         evidence: list[Evidence] | tuple[Evidence, ...],
     ) -> IntelligenceResponse:
-        primary_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                return self._reason_once(request, evidence)
-            except ProviderRateLimitError as exc:
-                primary_error = exc
-                if attempt >= 2:
+        try:
+            primary_error: ProviderError | None = None
+            for attempt in range(3):
+                try:
+                    return self._reason_once(request, evidence)
+                except ProviderRateLimited:
+                    primary_error = ProviderRateLimited("provider rate limited")
+                    if attempt < 2:
+                        time.sleep(min(2 ** attempt, 8.0))
+                except ProviderError as exc:
+                    primary_error = exc
                     break
-                delay = exc.retry_after if exc.retry_after is not None else 2 ** attempt
-                time.sleep(min(max(delay, 1.0), 8.0))
-            except Exception as exc:
-                primary_error = exc
-                break
-        return self._fallback_after_primary_failure(request, evidence, primary_error or RuntimeError("Primary provider failed"))
+            return self._fallback_after_primary_failure(
+                request, evidence, primary_error or ProviderUnavailable("primary provider failed")
+            )
+        except ProviderNotConfiguredError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # Deliberately log only the exception type; never log exception text or payload.
+            logger.warning("provider guard caught exception class=%s", type(exc).__name__)
+            try:
+                native = NativeReasoningProvider().reason(request, evidence)
+                metadata = dict(native.metadata)
+                metadata["provider_used"] = "native-fallback"
+                metadata["provider_error"] = "AI unavailable"
+                return IntelligenceResponse(
+                    answer=native.answer or "AI unavailable",
+                    evidence=native.evidence,
+                    confidence=native.confidence,
+                    actions=native.actions,
+                    metadata=metadata,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("native provider failed; returning static fallback")
+                return IntelligenceResponse(
+                    answer="AI unavailable",
+                    evidence=[],
+                    confidence=0,
+                    metadata={"provider_used": "static-fallback", "provider_error": "AI unavailable"},
+                )
 
     def _fallback_after_primary_failure(
         self,
@@ -270,7 +334,11 @@ class OpenAIResponsesReasoningProvider:
     ) -> IntelligenceResponse:
         fallback = os.getenv("REASONING_FALLBACK_PROVIDER", "").strip().lower()
         if not fallback or fallback == self.provider:
-            raise primary_error
+            native = NativeReasoningProvider().reason(request, evidence)
+            metadata = dict(native.metadata)
+            metadata["provider_used"] = "native-fallback"
+            metadata["provider_error"] = "AI unavailable"
+            return IntelligenceResponse(answer=native.answer, evidence=native.evidence, confidence=native.confidence, actions=native.actions, metadata=metadata)
         fallback_model = os.getenv("REASONING_FALLBACK_MODEL", "").strip() or None
         fallback_base = os.getenv("REASONING_FALLBACK_BASE_URL", "").strip() or None
         fallback_key = {
@@ -279,14 +347,23 @@ class OpenAIResponsesReasoningProvider:
             "groq": os.getenv("GROQ_API_KEY"),
         }.get(fallback) or os.getenv("REASONING_API_KEY")
         if not fallback_key:
-            raise primary_error
+            native = NativeReasoningProvider().reason(request, evidence)
+            metadata = dict(native.metadata)
+            metadata["provider_used"] = "native-fallback"
+            return IntelligenceResponse(answer=native.answer, evidence=native.evidence, confidence=native.confidence, actions=native.actions, metadata=metadata)
         secondary = OpenAIResponsesReasoningProvider(
             api_key=fallback_key,
             model=fallback_model,
             base_url=fallback_base,
             provider=fallback,
         )
-        return secondary._reason_once(request, evidence)
+        try:
+            return secondary._reason_once(request, evidence)
+        except ProviderError:
+            native = NativeReasoningProvider().reason(request, evidence)
+            metadata = dict(native.metadata)
+            metadata["provider_used"] = "native-fallback"
+            return IntelligenceResponse(answer=native.answer, evidence=native.evidence, confidence=native.confidence, actions=native.actions, metadata=metadata)
 
 
 class NoKnowledgeProvider:

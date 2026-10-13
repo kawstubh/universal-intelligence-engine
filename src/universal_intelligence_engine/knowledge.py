@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
+import re
 from typing import Any
 
 from .contracts import Evidence, IntelligenceRequest, KnowledgeProvider
