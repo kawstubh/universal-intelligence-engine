@@ -2,6 +2,9 @@ name: Ruff Autofix (manual only)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - fix/ruff-fastapi-depends
 
 permissions:
   contents: write
