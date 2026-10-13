@@ -1,0 +1,60 @@
+name: Ruff Autofix (manual only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  autofix:
+    if: github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name != 'feat/dental-production-stack-v1' && github.ref_name != 'integration/uie-dental'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard target branch
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          case "$BRANCH" in
+            main|master|feat/dental-production-stack-v1|integration/uie-dental)
+              echo "Refusing to autofix protected or deployment branch: $BRANCH"
+              exit 1
+              ;;
+          esac
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project and checks (same as required-gates)
+        run: python -m pip install -e ".[dev]" ruff mypy
+      - name: Apply Ruff safe autofixes
+        id: autofix
+        continue-on-error: true
+        run: ruff check --fix .
+      - name: Commit autofixes if any
+        id: commit
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No autofix changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git add .github/workflows/ruff-autofix.yml
+          git commit -m "style: ruff autofix"
+          git push origin "HEAD:$BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Dispatch required gates on updated branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: gh workflow run required-gates.yml --ref "$BRANCH"
