@@ -1,7 +1,9 @@
 from universal_intelligence_engine import api
 
 
-def test_health_reports_native_reasoning_fallback_when_openai_is_unconfigured(monkeypatch):
+def test_health_reports_native_reasoning_fallback_when_openai_is_unconfigured(
+    monkeypatch,
+):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)

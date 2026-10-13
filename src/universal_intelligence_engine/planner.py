@@ -5,11 +5,13 @@ It is intentionally deterministic and conservative: external models may later
 propose richer plans, but UIE keeps validation, dependency ordering, budgets,
 and capability policy outside the model.
 """
+
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -35,11 +37,11 @@ class AdaptivePlanner:
 
     _research_terms = re.compile(
         r"\b(research|find|latest|current|compare|investigate|analy[sz]e|verify|check|study)\b",
-        re.I,
+        re.IGNORECASE,
     )
     _action_terms = re.compile(
         r"\b(send|create|publish|deploy|delete|modify|buy|book|execute|contact|update)\b",
-        re.I,
+        re.IGNORECASE,
     )
 
     def __init__(self, max_steps: int = 8) -> None:
@@ -68,7 +70,12 @@ class AdaptivePlanner:
 
         verify_dep = ("reason",)
         steps.append(
-            PlanStep("verify", "verify", f"Verify the proposed result for: {goal}", verify_dep)
+            PlanStep(
+                "verify",
+                "verify",
+                f"Verify the proposed result for: {goal}",
+                verify_dep,
+            )
         )
 
         if self._action_terms.search(goal):
@@ -109,12 +116,16 @@ def validate_plan(
             raise ValueError(f"Duplicate plan step: {step.id}")
         ids.add(step.id)
         if step.capability in blocked:
-            raise PermissionError(f"Plan contains blocked capability: {step.capability}")
+            raise PermissionError(
+                f"Plan contains blocked capability: {step.capability}"
+            )
         if allowed is not None and step.capability not in allowed:
             raise PermissionError(f"Plan capability not allowlisted: {step.capability}")
         for dep in step.depends_on:
             if dep not in ids:
-                raise ValueError(f"Step {step.id} depends on unknown or later step: {dep}")
+                raise ValueError(
+                    f"Step {step.id} depends on unknown or later step: {dep}"
+                )
 
 
 def topological_steps(plan: Plan) -> tuple[PlanStep, ...]:
@@ -126,7 +137,8 @@ def topological_steps(plan: Plan) -> tuple[PlanStep, ...]:
 
     while remaining:
         ready = [
-            step for step in remaining.values()
+            step
+            for step in remaining.values()
             if all(dep in done for dep in step.depends_on)
         ]
         if not ready:

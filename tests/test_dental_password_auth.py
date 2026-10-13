@@ -1,9 +1,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine import dental_api, dental_auth
+from universal_intelligence_engine import dental_auth
 from universal_intelligence_engine.dental_api import router
-
 
 app = FastAPI()
 app.include_router(router)
@@ -25,8 +24,14 @@ def test_password_login_issues_session_for_active_doctor(monkeypatch):
 
         def doctor_by_email(self, email):
             assert email == "doctor@example.com"
-            return {"id": "doctor-1", "email": email, "password_hash": password_hash,
-                    "role": "doctor", "clinic_id": "clinic-a", "active": True}
+            return {
+                "id": "doctor-1",
+                "email": email,
+                "password_hash": password_hash,
+                "role": "doctor",
+                "clinic_id": "clinic-a",
+                "active": True,
+            }
 
         def create_session(self, doctor_id, token_hash, expires_at):
             self.created = (doctor_id, token_hash, expires_at)
@@ -37,7 +42,10 @@ def test_password_login_issues_session_for_active_doctor(monkeypatch):
     dental_auth._LOGIN_ATTEMPTS.clear()
     response = TestClient(app).post(
         "/v1/dental/auth/password/login",
-        json={"email": "DOCTOR@example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "DOCTOR@example.com",
+            "password": "correct horse battery staple",
+        },
     )
     assert response.status_code == 200
     body = response.json()
@@ -53,8 +61,14 @@ def test_password_login_rejects_wrong_password(monkeypatch):
 
     class FakeStore:
         def doctor_by_email(self, email):
-            return {"id": "doctor-1", "email": email, "password_hash": password_hash,
-                    "role": "doctor", "clinic_id": "clinic-a", "active": True}
+            return {
+                "id": "doctor-1",
+                "email": email,
+                "password_hash": password_hash,
+                "role": "doctor",
+                "clinic_id": "clinic-a",
+                "active": True,
+            }
 
     monkeypatch.setattr(dental_auth, "get_dental_store", lambda: FakeStore())
     monkeypatch.setattr(dental_auth, "_bootstrap_admin", lambda: None)
@@ -82,7 +96,12 @@ def test_bootstrap_admin_does_not_recreate_existing_admin(monkeypatch):
             self.created = []
 
         def doctor_by_email(self, email):
-            return {"id": "existing-admin", "email": email, "role": "admin", "clinic_id": "clinic-a"}
+            return {
+                "id": "existing-admin",
+                "email": email,
+                "role": "admin",
+                "clinic_id": "clinic-a",
+            }
 
         def create_doctor(self, payload):
             self.created.append(payload)

@@ -10,9 +10,7 @@ from universal_intelligence_engine.self_improvement import (
 
 def test_self_improvement_rejects_security_failure():
     engine = SelfImprovementEngine(
-        lambda _: [
-            CodeCandidate("a", "candidate", "patch")
-        ],
+        lambda _: [CodeCandidate("a", "candidate", "patch")],
         lambda _: [
             GateResult("unit_tests", True, 1.0),
             GateResult("security", False, 0.0),

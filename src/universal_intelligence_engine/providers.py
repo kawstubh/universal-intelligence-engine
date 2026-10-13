@@ -7,16 +7,17 @@ stored in source control.
 from __future__ import annotations
 
 import json
-import os
 import logging
+import os
 import socket
-import httpx
-from datetime import datetime, timezone
-from urllib.error import HTTPError, URLError
 import time
+from datetime import UTC, datetime
+from typing import Any, ClassVar
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
-from typing import Any
+
+import httpx
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from .reasoning import NativeReasoningProvider
@@ -44,9 +45,8 @@ class ProviderBadOutput(ProviderError):
     """Provider returned malformed JSON or an invalid response schema."""
 
 
-
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _json_request(
@@ -100,6 +100,7 @@ def _json_request(
 
 class ProviderRateLimitError(RuntimeError):
     """Raised when a provider returns HTTP 429 after retry handling."""
+
     def __init__(self, provider: str, retry_after: float | None = None):
         self.provider = provider
         self.retry_after = retry_after
@@ -109,6 +110,7 @@ class ProviderRateLimitError(RuntimeError):
 
 class ProviderNotConfiguredError(RuntimeError):
     """Raised when a live provider cannot run because its credentials/config are absent."""
+
     def __init__(self, provider: str, message: str):
         self.provider = provider
         self.code = "PROVIDER_NOT_CONFIGURED"
@@ -131,7 +133,10 @@ class BraveSearchProvider:
 
     def search(self, request: IntelligenceRequest) -> list[Evidence]:
         if not self.api_key:
-            raise ProviderNotConfiguredError("knowledge", "Knowledge provider is not configured: BRAVE_SEARCH_API_KEY is missing")
+            raise ProviderNotConfiguredError(
+                "knowledge",
+                "Knowledge provider is not configured: BRAVE_SEARCH_API_KEY is missing",
+            )
         query = request.goal.strip()
         if request.locale:
             query = f"{query} region:{request.locale}"
@@ -185,7 +190,7 @@ class OpenAIResponsesReasoningProvider:
       OPENAI_API_KEY=<OpenAI key, preferred for provider=openai>
     """
 
-    DEFAULT_BASE_URLS = {
+    DEFAULT_BASE_URLS: ClassVar[dict[str, str]] = {
         "openai": "https://api.openai.com/v1",
         "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
         "groq": "https://api.groq.com/openai/v1",
@@ -198,7 +203,9 @@ class OpenAIResponsesReasoningProvider:
         base_url: str | None = None,
         provider: str | None = None,
     ):
-        self.provider = (provider or os.getenv("REASONING_PROVIDER", "openai")).strip().lower()
+        self.provider = (
+            (provider or os.getenv("REASONING_PROVIDER", "openai")).strip().lower()
+        )
         self.model = model or os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL")
         self.base_url = (
             base_url
@@ -210,9 +217,17 @@ class OpenAIResponsesReasoningProvider:
             "gemini": os.getenv("GEMINI_API_KEY"),
             "groq": os.getenv("GROQ_API_KEY"),
         }
-        self.api_key = api_key or provider_keys.get(self.provider) or os.getenv("REASONING_API_KEY")
+        self.api_key = (
+            api_key
+            or provider_keys.get(self.provider)
+            or os.getenv("REASONING_API_KEY")
+        )
 
-    def _messages(self, request: IntelligenceRequest, evidence: list[Evidence] | tuple[Evidence, ...]) -> list[dict[str, str]]:
+    def _messages(
+        self,
+        request: IntelligenceRequest,
+        evidence: list[Evidence] | tuple[Evidence, ...],
+    ) -> list[dict[str, str]]:
         evidence_block = "\n\n".join(
             f"[{idx}] {item.title}\nSource: {item.source}\nURL: {item.url or 'n/a'}\n{item.content}"
             for idx, item in enumerate(evidence, start=1)
@@ -231,7 +246,10 @@ class OpenAIResponsesReasoningProvider:
             f"Constraints: {json.dumps(dict(request.constraints), ensure_ascii=False)}\n\n"
             f"Evidence:\n{evidence_block or 'No evidence was retrieved.'}"
         )
-        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
 
     def _reason_once(
         self,
@@ -239,11 +257,19 @@ class OpenAIResponsesReasoningProvider:
         evidence: list[Evidence] | tuple[Evidence, ...],
     ) -> IntelligenceResponse:
         if self.provider not in self.DEFAULT_BASE_URLS:
-            raise ProviderNotConfiguredError("reasoning", f"Unsupported reasoning provider: {self.provider}")
+            raise ProviderNotConfiguredError(
+                "reasoning", f"Unsupported reasoning provider: {self.provider}"
+            )
         if not self.api_key:
-            raise ProviderNotConfiguredError("reasoning", f"Reasoning provider is not configured: API key is missing for {self.provider}")
+            raise ProviderNotConfiguredError(
+                "reasoning",
+                f"Reasoning provider is not configured: API key is missing for {self.provider}",
+            )
         if not self.model:
-            raise ProviderNotConfiguredError("reasoning", "Reasoning provider is not configured: REASONING_MODEL is missing")
+            raise ProviderNotConfiguredError(
+                "reasoning",
+                "Reasoning provider is not configured: REASONING_MODEL is missing",
+            )
         messages = self._messages(request, evidence)
         if self.provider == "openai":
             data = _json_request(
@@ -256,8 +282,13 @@ class OpenAIResponsesReasoningProvider:
             if not answer:
                 parts = []
                 for item in data.get("output", []):
-                    for content in item.get("content", []) if isinstance(item, dict) else []:
-                        if isinstance(content, dict) and content.get("type") == "output_text":
+                    for content in (
+                        item.get("content", []) if isinstance(item, dict) else []
+                    ):
+                        if (
+                            isinstance(content, dict)
+                            and content.get("type") == "output_text"
+                        ):
                             parts.append(str(content.get("text", "")))
                 answer = "\n".join(p for p in parts if p).strip()
         else:
@@ -277,7 +308,12 @@ class OpenAIResponsesReasoningProvider:
             answer=str(answer),
             evidence=evidence,
             confidence=None,
-            metadata={"provider": self.provider, "model": self.model, "response_id": data.get("id"), "usage": data.get("usage", {})},
+            metadata={
+                "provider": self.provider,
+                "model": self.model,
+                "response_id": data.get("id"),
+                "usage": data.get("usage", {}),
+            },
         )
 
     def reason(
@@ -293,18 +329,22 @@ class OpenAIResponsesReasoningProvider:
                 except ProviderRateLimited:
                     primary_error = ProviderRateLimited("provider rate limited")
                     if attempt < 2:
-                        time.sleep(min(2 ** attempt, 8.0))
+                        time.sleep(min(2**attempt, 8.0))
                 except ProviderError as exc:
                     primary_error = exc
                     break
             return self._fallback_after_primary_failure(
-                request, evidence, primary_error or ProviderUnavailable("primary provider failed")
+                request,
+                evidence,
+                primary_error or ProviderUnavailable("primary provider failed"),
             )
         except ProviderNotConfiguredError:
             raise
         except Exception as exc:  # noqa: BLE001
             # Deliberately log only the exception type; never log exception text or payload.
-            logger.warning("provider guard caught exception class=%s", type(exc).__name__)
+            logger.warning(
+                "provider guard caught exception class=%s", type(exc).__name__
+            )
             try:
                 native = NativeReasoningProvider().reason(request, evidence)
                 metadata = dict(native.metadata)
@@ -323,7 +363,10 @@ class OpenAIResponsesReasoningProvider:
                     answer="AI unavailable",
                     evidence=[],
                     confidence=0,
-                    metadata={"provider_used": "static-fallback", "provider_error": "AI unavailable"},
+                    metadata={
+                        "provider_used": "static-fallback",
+                        "provider_error": "AI unavailable",
+                    },
                 )
 
     def _fallback_after_primary_failure(
@@ -338,7 +381,13 @@ class OpenAIResponsesReasoningProvider:
             metadata = dict(native.metadata)
             metadata["provider_used"] = "native-fallback"
             metadata["provider_error"] = "AI unavailable"
-            return IntelligenceResponse(answer=native.answer, evidence=native.evidence, confidence=native.confidence, actions=native.actions, metadata=metadata)
+            return IntelligenceResponse(
+                answer=native.answer,
+                evidence=native.evidence,
+                confidence=native.confidence,
+                actions=native.actions,
+                metadata=metadata,
+            )
         fallback_model = os.getenv("REASONING_FALLBACK_MODEL", "").strip() or None
         fallback_base = os.getenv("REASONING_FALLBACK_BASE_URL", "").strip() or None
         fallback_key = {
@@ -350,7 +399,13 @@ class OpenAIResponsesReasoningProvider:
             native = NativeReasoningProvider().reason(request, evidence)
             metadata = dict(native.metadata)
             metadata["provider_used"] = "native-fallback"
-            return IntelligenceResponse(answer=native.answer, evidence=native.evidence, confidence=native.confidence, actions=native.actions, metadata=metadata)
+            return IntelligenceResponse(
+                answer=native.answer,
+                evidence=native.evidence,
+                confidence=native.confidence,
+                actions=native.actions,
+                metadata=metadata,
+            )
         secondary = OpenAIResponsesReasoningProvider(
             api_key=fallback_key,
             model=fallback_model,
@@ -363,7 +418,13 @@ class OpenAIResponsesReasoningProvider:
             native = NativeReasoningProvider().reason(request, evidence)
             metadata = dict(native.metadata)
             metadata["provider_used"] = "native-fallback"
-            return IntelligenceResponse(answer=native.answer, evidence=native.evidence, confidence=native.confidence, actions=native.actions, metadata=metadata)
+            return IntelligenceResponse(
+                answer=native.answer,
+                evidence=native.evidence,
+                confidence=native.confidence,
+                actions=native.actions,
+                metadata=metadata,
+            )
 
 
 class NoKnowledgeProvider:

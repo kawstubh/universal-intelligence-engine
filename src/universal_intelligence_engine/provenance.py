@@ -1,7 +1,7 @@
 """Evidence provenance, freshness, and trust primitives."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -21,8 +21,8 @@ class ProvenanceRecord:
         if not self.published_at:
             return None
         try:
-            published = datetime.fromisoformat(self.published_at.replace("Z", "+00:00"))
-            now = datetime.now(timezone.utc)
+            published = datetime.fromisoformat(self.published_at)
+            now = datetime.now(UTC)
             return max(0.0, (now - published).total_seconds() / 3600)
         except ValueError:
             return None
@@ -30,4 +30,6 @@ class ProvenanceRecord:
     def trust_score(self) -> float:
         corroboration_bonus = min(0.2, self.corroboration * 0.04)
         contradiction_penalty = min(0.35, self.contradiction * 0.08)
-        return max(0.0, min(1.0, self.authority + corroboration_bonus - contradiction_penalty))
+        return max(
+            0.0, min(1.0, self.authority + corroboration_bonus - contradiction_penalty)
+        )

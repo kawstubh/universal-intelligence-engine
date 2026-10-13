@@ -1,6 +1,10 @@
 import pytest
 
-from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from universal_intelligence_engine.contracts import (
+    Evidence,
+    IntelligenceRequest,
+    IntelligenceResponse,
+)
 from universal_intelligence_engine.evaluation import BasicResponseEvaluator
 
 
@@ -39,7 +43,11 @@ def test_request_contract_remains_provider_agnostic():
 
 
 def test_missing_knowledge_provider_fails_closed(monkeypatch):
-    from universal_intelligence_engine.providers import BraveSearchProvider, ProviderNotConfiguredError
+    from universal_intelligence_engine.providers import (
+        BraveSearchProvider,
+        ProviderNotConfiguredError,
+    )
+
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
     try:
         BraveSearchProvider().search(IntelligenceRequest(goal="test"))
@@ -50,7 +58,11 @@ def test_missing_knowledge_provider_fails_closed(monkeypatch):
 
 
 def test_missing_reasoning_provider_fails_closed(monkeypatch):
-    from universal_intelligence_engine.providers import OpenAIResponsesReasoningProvider, ProviderNotConfiguredError
+    from universal_intelligence_engine.providers import (
+        OpenAIResponsesReasoningProvider,
+        ProviderNotConfiguredError,
+    )
+
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     try:
@@ -63,6 +75,7 @@ def test_missing_reasoning_provider_fails_closed(monkeypatch):
 
 def test_gemini_provider_uses_openai_compatible_endpoint(monkeypatch):
     from universal_intelligence_engine import providers
+
     monkeypatch.setenv("REASONING_PROVIDER", "gemini")
     monkeypatch.setenv("REASONING_MODEL", "gemini-3.6-flash")
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
@@ -72,10 +85,16 @@ def test_gemini_provider_uses_openai_compatible_endpoint(monkeypatch):
         captured["url"] = url
         captured["headers"] = kwargs["headers"]
         captured["payload"] = kwargs["payload"]
-        return {"id": "gemini-test", "choices": [{"message": {"content": "ok"}}], "usage": {}}
+        return {
+            "id": "gemini-test",
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {},
+        }
 
     monkeypatch.setattr(providers, "_json_request", fake_request)
-    result = providers.OpenAIResponsesReasoningProvider().reason(IntelligenceRequest(goal="test"), [])
+    result = providers.OpenAIResponsesReasoningProvider().reason(
+        IntelligenceRequest(goal="test"), []
+    )
     assert result.answer == "ok"
     assert captured["url"].endswith("/chat/completions")
     assert captured["headers"]["Authorization"] == "Bearer test-gemini-key"
@@ -84,6 +103,7 @@ def test_gemini_provider_uses_openai_compatible_endpoint(monkeypatch):
 
 def test_groq_provider_uses_openai_compatible_endpoint(monkeypatch):
     from universal_intelligence_engine import providers
+
     monkeypatch.setenv("REASONING_PROVIDER", "groq")
     monkeypatch.setenv("REASONING_MODEL", "openai/gpt-oss-20b")
     monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
@@ -91,21 +111,29 @@ def test_groq_provider_uses_openai_compatible_endpoint(monkeypatch):
 
     def fake_request(url, **kwargs):
         captured["url"] = url
-        return {"id": "groq-test", "choices": [{"message": {"content": "ok"}}], "usage": {}}
+        return {
+            "id": "groq-test",
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {},
+        }
 
     monkeypatch.setattr(providers, "_json_request", fake_request)
-    result = providers.OpenAIResponsesReasoningProvider().reason(IntelligenceRequest(goal="test"), [])
+    result = providers.OpenAIResponsesReasoningProvider().reason(
+        IntelligenceRequest(goal="test"), []
+    )
     assert result.answer == "ok"
     assert captured["url"] == "https://api.groq.com/openai/v1/chat/completions"
 
 
 def test_disabled_knowledge_provider_returns_empty_evidence():
     from universal_intelligence_engine.providers import DisabledKnowledgeProvider
+
     assert DisabledKnowledgeProvider().search(IntelligenceRequest(goal="test")) == []
 
 
 def test_gemini_falls_back_to_groq(monkeypatch):
     from universal_intelligence_engine import providers
+
     monkeypatch.setenv("REASONING_PROVIDER", "gemini")
     monkeypatch.setenv("REASONING_MODEL", "gemini-2.5-flash")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
@@ -118,24 +146,37 @@ def test_gemini_falls_back_to_groq(monkeypatch):
         calls.append((url, kwargs["headers"]["Authorization"]))
         if "generativelanguage" in url:
             raise providers.ProviderUnavailable("primary unavailable")
-        return {"id": "fallback", "choices": [{"message": {"content": "fallback ok"}}], "usage": {}}
+        return {
+            "id": "fallback",
+            "choices": [{"message": {"content": "fallback ok"}}],
+            "usage": {},
+        }
 
     monkeypatch.setattr(providers, "_json_request", fake_request)
-    result = providers.OpenAIResponsesReasoningProvider().reason(IntelligenceRequest(goal="test"), [])
+    result = providers.OpenAIResponsesReasoningProvider().reason(
+        IntelligenceRequest(goal="test"), []
+    )
     assert result.answer == "fallback ok"
     assert calls == [
-        ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "Bearer gemini-key"),
+        (
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "Bearer gemini-key",
+        ),
         ("https://api.groq.com/openai/v1/chat/completions", "Bearer groq-key"),
     ]
 
 
-@pytest.mark.parametrize("failure", ["timeout", "5xx", "429", "malformed-json", "non-json", "unexpected"])
+@pytest.mark.parametrize(
+    "failure", ["timeout", "5xx", "429", "malformed-json", "non-json", "unexpected"]
+)
 def test_provider_failure_returns_structured_native_fallback(monkeypatch, failure):
     from universal_intelligence_engine import providers
+
     monkeypatch.setenv("REASONING_PROVIDER", "openai")
     monkeypatch.setenv("REASONING_MODEL", "test-model")
     monkeypatch.setenv("OPENAI_API_KEY", "test-" + "key")
     monkeypatch.delenv("REASONING_FALLBACK_PROVIDER", raising=False)
+
     def broken(*args, **kwargs):
         if failure == "timeout":
             raise providers.ProviderTimeout("timeout")
@@ -146,8 +187,11 @@ def test_provider_failure_returns_structured_native_fallback(monkeypatch, failur
         if failure in ("malformed-json", "non-json"):
             raise providers.ProviderBadOutput("bad output")
         raise ValueError("unexpected private payload")
+
     monkeypatch.setattr(providers, "_json_request", broken)
-    response = providers.OpenAIResponsesReasoningProvider().reason(IntelligenceRequest(goal="fallback test"), [])
+    response = providers.OpenAIResponsesReasoningProvider().reason(
+        IntelligenceRequest(goal="fallback test"), []
+    )
     assert isinstance(response, IntelligenceResponse)
     assert isinstance(response.answer, str) and response.answer
     assert response.metadata["provider_used"] == "native-fallback"
@@ -155,7 +199,9 @@ def test_provider_failure_returns_structured_native_fallback(monkeypatch, failur
 
 def test_provider_failure_logs_do_not_leak_canary_data(monkeypatch, caplog):
     import logging
+
     from universal_intelligence_engine import providers
+
     monkeypatch.setenv("REASONING_PROVIDER", "openai")
     monkeypatch.setenv("REASONING_MODEL", "test-model")
     canary_key = "CANARY_" + "API_KEY_" + "49382"
@@ -165,28 +211,41 @@ def test_provider_failure_logs_do_not_leak_canary_data(monkeypatch, caplog):
         goal="Patient CANARY_PATIENT_Mira",
         context={"phone": "CANARY_PHONE_9876543210", "note": "CANARY_NOTE_private"},
     )
+
     def broken(*args, **kwargs):
-        raise ValueError("CANARY_PATIENT_Mira CANARY_PHONE_9876543210 CANARY_NOTE_private " + canary_key)
+        raise ValueError(
+            "CANARY_PATIENT_Mira CANARY_PHONE_9876543210 CANARY_NOTE_private "
+            + canary_key
+        )
+
     monkeypatch.setattr(providers, "_json_request", broken)
     with caplog.at_level(logging.WARNING):
         response = providers.OpenAIResponsesReasoningProvider().reason(request, [])
     assert response.metadata["provider_used"] == "native-fallback"
-    for value in ("CANARY_PATIENT_Mira", "CANARY_PHONE_9876543210", "CANARY_NOTE_private", canary_key):
+    for value in (
+        "CANARY_PATIENT_Mira",
+        "CANARY_PHONE_9876543210",
+        "CANARY_NOTE_private",
+        canary_key,
+    ):
         assert value not in caplog.text
 
 
 def test_timezone_z_normalization_preserves_timestamp_instant():
-    from datetime import datetime
     timestamp = "2026-10-12T18:30:00Z"
     from universal_intelligence_engine.temporal import _parse_time
+
     before = _parse_time(timestamp.replace("Z", "+00:00"))
     after = _parse_time(timestamp)
     assert before == after
     assert before.timestamp() == after.timestamp()
 
 
-def test_native_provider_failure_returns_static_fallback_without_log_leakage(monkeypatch, caplog):
+def test_native_provider_failure_returns_static_fallback_without_log_leakage(
+    monkeypatch, caplog
+):
     import logging
+
     from universal_intelligence_engine import providers
 
     monkeypatch.setenv("REASONING_PROVIDER", "openai")
@@ -213,10 +272,16 @@ def test_native_provider_failure_returns_static_fallback_without_log_leakage(mon
 
 def test_api_provider_exception_message_is_not_logged(monkeypatch, caplog):
     import logging
+
     from fastapi.testclient import TestClient
+
     from universal_intelligence_engine import api
 
-    canaries = ("CANARY_API_PATIENT_1842", "CANARY_API_PHONE_5550109", "CANARY_API_SECRET_773")
+    canaries = (
+        "CANARY_API_PATIENT_1842",
+        "CANARY_API_PHONE_5550109",
+        "CANARY_API_SECRET_773",
+    )
     api_key = "test-" + "api-" + "key"
     monkeypatch.setenv("UIE_API_KEY", api_key)
 

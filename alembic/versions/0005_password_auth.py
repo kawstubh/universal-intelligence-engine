@@ -1,9 +1,11 @@
 """Add active status to clinic doctor accounts for password authentication."""
+
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
+
+from alembic import op
 
 revision = "0005_password_auth"
 down_revision = "0004_patient_invites_billing"

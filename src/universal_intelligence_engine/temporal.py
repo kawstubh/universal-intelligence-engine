@@ -3,14 +3,15 @@
 This module is deliberately conservative: it flags likely conflicts rather than
 pretending that lexical similarity proves a factual contradiction.
 """
+
 from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from itertools import combinations
-from typing import Sequence
 
 from .contracts import Evidence
 
@@ -30,9 +31,38 @@ class TemporalAssessment:
     stale: bool
 
 
-_NEGATION = {"not", "no", "never", "without", "cannot", "can't", "failed", "rejected", "false", "denied"}
-_POSITIVE = {"approved", "accepted", "successful", "effective", "works", "true", "increased", "higher"}
-_NEGATIVE = {"rejected", "failed", "ineffective", "unsafe", "false", "decreased", "lower", "denied"}
+_NEGATION = {
+    "not",
+    "no",
+    "never",
+    "without",
+    "cannot",
+    "can't",
+    "failed",
+    "rejected",
+    "false",
+    "denied",
+}
+_POSITIVE = {
+    "approved",
+    "accepted",
+    "successful",
+    "effective",
+    "works",
+    "true",
+    "increased",
+    "higher",
+}
+_NEGATIVE = {
+    "rejected",
+    "failed",
+    "ineffective",
+    "unsafe",
+    "false",
+    "decreased",
+    "lower",
+    "denied",
+}
 
 
 def _tokens(text: str) -> set[str]:
@@ -58,16 +88,17 @@ def _parse_time(value: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def temporal_assessment(item: Evidence, now: datetime | None = None,
-                        stale_after_hours: float = 24 * 30) -> TemporalAssessment:
+def temporal_assessment(
+    item: Evidence, now: datetime | None = None, stale_after_hours: float = 24 * 30
+) -> TemporalAssessment:
     """Compute a bounded freshness score; unknown dates remain explicitly unknown."""
     published = _parse_time(item.published_at)
     if published is None:
         return TemporalAssessment(freshness=0.45, age_hours=None, stale=False)
-    current = now or datetime.now(timezone.utc)
+    current = now or datetime.now(UTC)
     age_hours = max(0.0, (current - published).total_seconds() / 3600.0)
     # Half-life of 30 days; this is a ranking signal, not a truth score.
     freshness = math.exp(-age_hours / (24 * 30))
@@ -89,14 +120,19 @@ def detect_contradictions(evidence: Sequence[Evidence]) -> tuple[EvidenceConflic
         similarity = overlap / denominator
         if similarity < 0.35:
             continue
-        lp, rp = _polarity(f"{left.title} {left.content}"), _polarity(f"{right.title} {right.content}")
+        lp, rp = (
+            _polarity(f"{left.title} {left.content}"),
+            _polarity(f"{right.title} {right.content}"),
+        )
         if lp == 0 or rp == 0 or lp == rp:
             continue
         severity = round(min(1.0, similarity), 4)
-        conflicts.append(EvidenceConflict(
-            left_source=left.source or "unknown",
-            right_source=right.source or "unknown",
-            reason="similar claims with opposing polarity markers",
-            severity=severity,
-        ))
+        conflicts.append(
+            EvidenceConflict(
+                left_source=left.source or "unknown",
+                right_source=right.source or "unknown",
+                reason="similar claims with opposing polarity markers",
+                severity=severity,
+            )
+        )
     return tuple(conflicts)

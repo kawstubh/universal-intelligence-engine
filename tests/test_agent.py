@@ -9,7 +9,11 @@ def test_goal_agent_never_executes_planned_action_without_human_approval():
     registry.register(ToolSpec("reason", "Reason", lambda **kwargs: "reasoned"))
     registry.register(ToolSpec("verify", "Verify", lambda **kwargs: "verified"))
     registry.register(
-        ToolSpec("act", "Publish or mutate an external system", lambda **kwargs: executed.append(kwargs))
+        ToolSpec(
+            "act",
+            "Publish or mutate an external system",
+            lambda **kwargs: executed.append(kwargs),
+        )
     )
 
     result = AutonomousAgent(registry).run_goal("publish a report")

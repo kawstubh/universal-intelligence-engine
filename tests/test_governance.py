@@ -47,9 +47,7 @@ def test_only_valid_human_signature_authorizes():
 def test_tampered_proposal_is_rejected():
     private = Ed25519PrivateKey.generate()
     public = private.public_key()
-    gate = HumanAuthorizationGate(
-        base64.b64encode(public.public_bytes_raw()).decode()
-    )
+    gate = HumanAuthorizationGate(base64.b64encode(public.public_bytes_raw()).decode())
 
     p = proposal()
     signature = base64.b64encode(private.sign(p.canonical_payload())).decode()

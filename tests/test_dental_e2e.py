@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine.api import app
 from universal_intelligence_engine import dental_api
+from universal_intelligence_engine.api import app
 
 
 @pytest.fixture()
@@ -32,7 +32,9 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
     patient_id = appointment["patient_id"]
 
     app.dependency_overrides[dental_api.require_doctor] = lambda: {
-        "id": "doctor-a", "clinic_id": "clinic-a", "role": "doctor"
+        "id": "doctor-a",
+        "clinic_id": "clinic-a",
+        "role": "doctor",
     }
     seen = client.get("/v1/dental/appointments")
     assert seen.status_code == 200
@@ -45,7 +47,12 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
     assert updated.status_code == 200
     chart = client.post(
         f"/v1/dental/patients/{patient_id}/chart",
-        json={"patient_id": patient_id, "tooth_fdi": "46", "status": "attention", "note": "private clinical note"},
+        json={
+            "patient_id": patient_id,
+            "tooth_fdi": "46",
+            "status": "attention",
+            "note": "private clinical note",
+        },
     )
     assert chart.status_code == 200
 
@@ -64,7 +71,9 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
         assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
 
     app.dependency_overrides[dental_api.require_doctor] = lambda: {
-        "id": "doctor-b", "clinic_id": "clinic-b", "role": "doctor"
+        "id": "doctor-b",
+        "clinic_id": "clinic-b",
+        "role": "doctor",
     }
     denied = client.post(
         "/v1/dental/ai/doctor/patient-summary",

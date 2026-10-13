@@ -1,4 +1,5 @@
 import asyncio
+
 import pytest
 
 from universal_intelligence_engine.scano_adapter import ScanOAdapter
@@ -21,4 +22,6 @@ def test_scano_requires_official_config(monkeypatch):
 def test_whatsapp_requires_official_config(monkeypatch):
     monkeypatch.setenv("WHATSAPP_MODE", "disabled")
     with pytest.raises(RuntimeError):
-        asyncio.run(WhatsAppAdapter().send_template("919999999999", "appointment_confirmation"))
+        asyncio.run(
+            WhatsAppAdapter().send_template("919999999999", "appointment_confirmation")
+        )

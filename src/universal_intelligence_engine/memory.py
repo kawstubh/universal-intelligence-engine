@@ -4,10 +4,11 @@ The engine learns from explicit outcomes and feedback. It does not rewrite
 source code or silently change application policy.
 """
 
-from dataclasses import asdict, dataclass
 import json
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -31,9 +32,16 @@ class LearningMemory:
             if not isinstance(evaluation, Mapping):
                 evaluation = {}
             normalized = {
-                "capability": str(event.get("capability") or event.get("goal") or "unknown"),
-                "outcome": str(event.get("outcome") or ("success" if evaluation.get("passed") else "completed")),
-                "reward": float(event.get("reward", evaluation.get("score", 0.0)) or 0.0),
+                "capability": str(
+                    event.get("capability") or event.get("goal") or "unknown"
+                ),
+                "outcome": str(
+                    event.get("outcome")
+                    or ("success" if evaluation.get("passed") else "completed")
+                ),
+                "reward": float(
+                    event.get("reward", evaluation.get("score", 0.0)) or 0.0
+                ),
                 "context": dict(event),
             }
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,7 +55,9 @@ class LearningMemory:
         for line in self.path.read_text(encoding="utf-8").splitlines():
             try:
                 event = json.loads(line)
-                bucket = totals.setdefault(event["capability"], {"count": 0, "reward": 0.0})
+                bucket = totals.setdefault(
+                    event["capability"], {"count": 0, "reward": 0.0}
+                )
                 bucket["count"] += 1
                 bucket["reward"] += float(event.get("reward", 0.0))
             except (ValueError, KeyError, TypeError):
