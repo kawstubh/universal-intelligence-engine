@@ -21,7 +21,7 @@ class CompositeKnowledgeProvider:
         for provider in self.providers:
             try:
                 results.extend(provider.search(request))
-            except Exception:
+            except (RuntimeError, OSError, TimeoutError, ValueError, ConnectionError):
                 # One provider outage must not take down the whole research pass.
                 continue
         return rank_evidence(results)
@@ -65,9 +65,7 @@ def evidence_score(item: Evidence) -> float:
         else max(0.0, min(1.0, 1.0 / (1.0 + freshness / 168.0)))
     )
     explicit_confidence = (
-        0.5
-        if item.confidence is None
-        else max(0.0, min(1.0, float(item.confidence)))
+        0.5 if item.confidence is None else max(0.0, min(1.0, float(item.confidence)))
     )
     return round(
         (trust * 0.55) + (explicit_confidence * 0.30) + (freshness_score * 0.15),

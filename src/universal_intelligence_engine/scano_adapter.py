@@ -4,6 +4,7 @@ Live mode is intentionally opt-in. No unofficial reverse engineering or fake
 provider calls are performed. Configure the official scanO API credentials
 when access is granted.
 """
+
 from __future__ import annotations
 
 import os

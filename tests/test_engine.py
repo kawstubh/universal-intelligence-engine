@@ -1,4 +1,8 @@
-from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from universal_intelligence_engine.contracts import (
+    Evidence,
+    IntelligenceRequest,
+    IntelligenceResponse,
+)
 from universal_intelligence_engine.engine import UniversalIntelligenceEngine
 
 
@@ -34,7 +38,9 @@ class Learning:
 
 def test_engine_orchestrates():
     learning = Learning()
-    engine = UniversalIntelligenceEngine(Knowledge(), Reasoning(), Evaluator(), learning)
+    engine = UniversalIntelligenceEngine(
+        Knowledge(), Reasoning(), Evaluator(), learning
+    )
 
     result = engine.run(IntelligenceRequest(goal="test"))
 

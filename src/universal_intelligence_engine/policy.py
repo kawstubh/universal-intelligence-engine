@@ -1,7 +1,7 @@
 """Safety and execution policy primitives for domain adapters."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -17,5 +17,9 @@ class CapabilityPolicy:
         return action in self.require_human_approval_for
 
 
-def policy_for(allowed: Iterable[str] = (), approval: Iterable[str] = (), blocked: Iterable[str] = ()) -> CapabilityPolicy:
+def policy_for(
+    allowed: Iterable[str] = (),
+    approval: Iterable[str] = (),
+    blocked: Iterable[str] = (),
+) -> CapabilityPolicy:
     return CapabilityPolicy(frozenset(allowed), frozenset(approval), frozenset(blocked))

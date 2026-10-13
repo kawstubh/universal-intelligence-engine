@@ -1,8 +1,9 @@
 """Bounded autonomous execution loop for UIE."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from .planner import AdaptivePlanner, Plan, topological_steps
@@ -47,7 +48,10 @@ class AutonomousAgent:
         ordered = topological_steps(plan)
         if len(ordered) > self.max_steps:
             return AgentRun(
-                goal, "failed", (), metadata={"reason": "step_limit_exceeded", "max_steps": self.max_steps}
+                goal,
+                "failed",
+                (),
+                metadata={"reason": "step_limit_exceeded", "max_steps": self.max_steps},
             )
 
         steps: list[AgentStep] = []
@@ -78,10 +82,22 @@ class AutonomousAgent:
                 result = self.tools.call(step.capability, **args)
                 outputs[step.id] = result
                 steps.append(AgentStep(index, step.capability, "completed", result))
-            except Exception as exc:
-                steps.append(AgentStep(index, step.capability, "failed", error=str(exc)))
+            except (
+                PermissionError,
+                ValueError,
+                TypeError,
+                RuntimeError,
+                OSError,
+                KeyError,
+            ) as exc:
+                steps.append(
+                    AgentStep(index, step.capability, "failed", error=str(exc))
+                )
                 return AgentRun(
-                    goal, "failed", tuple(steps), output=outputs.get("reason"),
+                    goal,
+                    "failed",
+                    tuple(steps),
+                    output=outputs.get("reason"),
                     metadata={"reason": "tool_failure", "failed_step": step.id},
                 )
 
@@ -92,7 +108,11 @@ class AutonomousAgent:
             "verified" if verified else "unverified",
             tuple(steps),
             output=output,
-            metadata={"step_count": len(steps), "verified": verified, "plan": [s.id for s in ordered]},
+            metadata={
+                "step_count": len(steps),
+                "verified": verified,
+                "plan": [s.id for s in ordered],
+            },
         )
 
     def run(self, goal: str, plan: list[Mapping[str, Any]]) -> AgentRun:
@@ -103,20 +123,41 @@ class AutonomousAgent:
             name = str(action.get("tool", "")).strip()
             args = action.get("args") or {}
             if not name:
-                steps.append(AgentStep(index, "invalid", "failed", error="Missing tool name"))
-                return AgentRun(goal, "failed", tuple(steps), metadata={"reason": "invalid_plan"})
+                steps.append(
+                    AgentStep(index, "invalid", "failed", error="Missing tool name")
+                )
+                return AgentRun(
+                    goal, "failed", tuple(steps), metadata={"reason": "invalid_plan"}
+                )
             try:
                 output = self.tools.call(name, **dict(args))
                 steps.append(AgentStep(index, name, "completed", output))
-            except Exception as exc:
+            except (
+                PermissionError,
+                ValueError,
+                TypeError,
+                RuntimeError,
+                OSError,
+                KeyError,
+            ) as exc:
                 steps.append(AgentStep(index, name, "failed", error=str(exc)))
                 return AgentRun(goal, "failed", tuple(steps), output=output)
         if len(plan) > self.max_steps:
-            return AgentRun(goal, "failed", tuple(steps), output=output,
-                            metadata={"reason": "step_limit_exceeded", "max_steps": self.max_steps})
+            return AgentRun(
+                goal,
+                "failed",
+                tuple(steps),
+                output=output,
+                metadata={"reason": "step_limit_exceeded", "max_steps": self.max_steps},
+            )
         verified = self.verifier(goal, output) if self.verifier else True
-        return AgentRun(goal, "verified" if verified else "unverified", tuple(steps), output=output,
-                        metadata={"step_count": len(steps), "verified": verified})
+        return AgentRun(
+            goal,
+            "verified" if verified else "unverified",
+            tuple(steps),
+            output=output,
+            metadata={"step_count": len(steps), "verified": verified},
+        )
 
     def run_goal(self, goal: str, context: Mapping[str, Any] | None = None) -> AgentRun:
         try:

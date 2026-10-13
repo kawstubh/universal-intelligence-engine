@@ -1,8 +1,8 @@
-from fastapi.testclient import TestClient
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from universal_intelligence_engine.dental_api import router, run_dental_intelligence
 from universal_intelligence_engine import dental_api
+from universal_intelligence_engine.dental_api import router
 
 app = FastAPI()
 app.include_router(router)
@@ -79,27 +79,54 @@ def test_intelligence_sends_minimum_patient_context(monkeypatch):
 
     class FakeStore:
         def get_patient(self, patient_id, clinic_id):
-            return {"id": patient_id, "name": "Sensitive Name", "phone": "9999999999", "age": "42", "clinic_id": clinic_id}
+            return {
+                "id": patient_id,
+                "name": "Sensitive Name",
+                "phone": "9999999999",
+                "age": "42",
+                "clinic_id": clinic_id,
+            }
+
         def chart(self, patient_id, clinic_id):
             return [{"tooth_fdi": "46", "status": "attention", "note": "private note"}]
+
         def periodontogram(self, patient_id, clinic_id):
-            return [{"tooth_fdi": "46", "measurements": {"B": "5"}, "note": "private note"}]
+            return [
+                {"tooth_fdi": "46", "measurements": {"B": "5"}, "note": "private note"}
+            ]
+
         def appointments(self, clinic_id, patient_id=None):
-            return [{"starts_at": "2026-10-08", "treatment_type": "RCT", "status": "scheduled", "note": "private"}]
+            return [
+                {
+                    "starts_at": "2026-10-08",
+                    "treatment_type": "RCT",
+                    "status": "scheduled",
+                    "note": "private",
+                }
+            ]
+
         def record_ai(self, *args):
             pass
+
         def audit(self, *args):
             pass
 
     class FakeResponse:
         status_code = 200
+
         def json(self):
             return {"answer": "test", "evidence": []}
 
     class FakeClient:
-        def __init__(self, *args, **kwargs): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): pass
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
         async def post(self, url, **kwargs):
             captured.update(kwargs)
             return FakeResponse()
@@ -113,7 +140,11 @@ def test_intelligence_sends_minimum_patient_context(monkeypatch):
     response = client.post(
         "/v1/dental/intelligence/run",
         headers={"Authorization": "Bearer test"},
-        json={"patient_id": "patient-a", "goal": "Assess risk", "context": {"phone": "leak", "free_text": "leak"}},
+        json={
+            "patient_id": "patient-a",
+            "goal": "Assess risk",
+            "context": {"phone": "leak", "free_text": "leak"},
+        },
     )
     assert response.status_code == 200
     context = captured["json"]["context"]
@@ -130,21 +161,45 @@ def test_intelligence_provider_not_configured_is_clear(monkeypatch):
     class FakeStore:
         def get_patient(self, patient_id, clinic_id):
             return {"id": patient_id, "age": "42", "clinic_id": clinic_id}
-        def chart(self, *args): return []
-        def periodontogram(self, *args): return []
-        def appointments(self, *args): return []
+
+        def chart(self, *args):
+            return []
+
+        def periodontogram(self, *args):
+            return []
+
+        def appointments(self, *args):
+            return []
+
     monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
     monkeypatch.setenv("UIE_API_URL", "https://uie.example")
     monkeypatch.setenv("UIE_API_KEY", "test")
+
     class FakeResponse:
         status_code = 503
+
         def json(self):
-            return {"detail": {"message": "Knowledge provider is not configured: BRAVE_SEARCH_API_KEY is missing", "code": "PROVIDER_NOT_CONFIGURED", "provider": "knowledge"}}
+            return {
+                "detail": {
+                    "message": "Knowledge provider is not configured: BRAVE_SEARCH_API_KEY is missing",
+                    "code": "PROVIDER_NOT_CONFIGURED",
+                    "provider": "knowledge",
+                }
+            }
+
     class FakeClient:
-        def __init__(self, *args, **kwargs): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): pass
-        async def post(self, *args, **kwargs): return FakeResponse()
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
     monkeypatch.setattr(dental_api.httpx, "AsyncClient", FakeClient)
     app.dependency_overrides[dental_api.require_doctor] = lambda: _doctor("clinic-a")
     response = TestClient(app).post(

@@ -15,12 +15,13 @@ ARC loop:
 This is deliberately bounded and deterministic: learning changes policy weights,
 never executable source code.
 """
+
 from __future__ import annotations
 
-import math
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from .contracts import Evidence, IntelligenceRequest
 
@@ -43,8 +44,10 @@ class AdaptiveReasoningCore:
     @staticmethod
     def _terms(text: str) -> set[str]:
         return {
-            word for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", text.lower())
-            if word not in {"what", "when", "where", "which", "with", "from", "this", "that"}
+            word
+            for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", text.lower())
+            if word
+            not in {"what", "when", "where", "which", "with", "from", "this", "that"}
         }
 
     @classmethod
@@ -75,10 +78,7 @@ class AdaptiveReasoningCore:
         freshness = self._freshness(item)
         provenance = 0.85 if item.url and item.source else 0.45
         return (
-            relevance * 0.40
-            + authority * 0.25
-            + freshness * 0.15
-            + provenance * 0.20
+            relevance * 0.40 + authority * 0.25 + freshness * 0.15 + provenance * 0.20
         )
 
     def decide(
@@ -110,20 +110,19 @@ class AdaptiveReasoningCore:
         relevance = (
             sum(self._relevance(request.goal, item) for item in selected)
             / len(selected)
-            if selected else 0.0
+            if selected
+            else 0.0
         )
         authority = (
             sum(self._authority(item) for item in selected) / len(selected)
-            if selected else 0.0
+            if selected
+            else 0.0
         )
         diversity = min(1.0, len(sources) / 3.0)
         grounding = min(1.0, len(selected) / 3.0)
 
         confidence = (
-            relevance * 0.35
-            + authority * 0.25
-            + diversity * 0.20
-            + grounding * 0.20
+            relevance * 0.35 + authority * 0.25 + diversity * 0.20 + grounding * 0.20
         )
 
         if not selected or confidence < 0.35:
@@ -154,7 +153,9 @@ class AdaptiveReasoningCore:
             trace=trace,
         )
 
-    def inspect(self, request: IntelligenceRequest, evidence: Iterable[Evidence]) -> dict[str, Any]:
+    def inspect(
+        self, request: IntelligenceRequest, evidence: Iterable[Evidence]
+    ) -> dict[str, Any]:
         decision = self.decide(request, evidence)
         return {
             "algorithm": "ARC",

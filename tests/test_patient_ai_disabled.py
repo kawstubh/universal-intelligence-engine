@@ -12,7 +12,11 @@ def test_patient_ai_routes_are_server_disabled():
         ("POST", "/v1/dental/ai/patient/link", {"invite_code": "ABCDEFGH"}),
         ("POST", "/v1/dental/ai/patient/triage", {"symptoms": "toothache"}),
         ("DELETE", "/v1/dental/ai/patient/history", None),
-        ("POST", "/v1/dental/ai/patient/device", {"expo_push_token": "ExponentPushToken[not-a-real-token]"}),
+        (
+            "POST",
+            "/v1/dental/ai/patient/device",
+            {"expo_push_token": "ExponentPushToken[not-a-real-token]"},
+        ),
     ]
     for method, path, payload in cases:
         response = client.request(method, path, json=payload)

@@ -1,6 +1,14 @@
-from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from universal_intelligence_engine.contracts import (
+    Evidence,
+    IntelligenceRequest,
+    IntelligenceResponse,
+)
 from universal_intelligence_engine.engine import UniversalIntelligenceEngine
-from universal_intelligence_engine.knowledge import deduplicate_evidence, evidence_score, rank_evidence
+from universal_intelligence_engine.knowledge import (
+    deduplicate_evidence,
+    evidence_score,
+    rank_evidence,
+)
 
 
 def make_evidence(title, *, authority, confidence=0.5, url=None, content="same"):
@@ -33,8 +41,12 @@ def test_rank_evidence_prefers_trusted_sources():
 
 
 def test_deduplicate_evidence_removes_exact_duplicate():
-    first = make_evidence("one", authority=0.8, url="https://example.com/a", content="same claim")
-    duplicate = make_evidence("one", authority=0.8, url="https://example.com/a", content="same claim")
+    first = make_evidence(
+        "one", authority=0.8, url="https://example.com/a", content="same claim"
+    )
+    duplicate = make_evidence(
+        "one", authority=0.8, url="https://example.com/a", content="same claim"
+    )
 
     assert len(deduplicate_evidence([first, duplicate])) == 1
 

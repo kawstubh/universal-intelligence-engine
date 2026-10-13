@@ -8,6 +8,7 @@ Usage:
 The script only copies rows. It never prints DATABASE_URL or patient content.
 Run Alembic first so the PostgreSQL schema exists.
 """
+
 from __future__ import annotations
 
 import os
@@ -15,7 +16,6 @@ import sqlite3
 from pathlib import Path
 
 import psycopg
-
 
 TABLES = [
     "dental_patients",
@@ -45,7 +45,7 @@ def main() -> None:
     pg = psycopg.connect(destination)
 
     try:
-        with pg:
+        with pg:  # noqa: SIM117 - keep transaction context explicit around cursor lifetime
             with pg.cursor() as cur:
                 total = 0
                 for table in TABLES:
@@ -55,7 +55,12 @@ def main() -> None:
                     ).fetchone()
                     if not exists:
                         continue
-                    columns = [r[1] for r in sqlite.execute(f"PRAGMA table_info({table})").fetchall()]
+                    columns = [
+                        r[1]
+                        for r in sqlite.execute(
+                            f"PRAGMA table_info({table})"
+                        ).fetchall()
+                    ]
                     rows = sqlite.execute(f"SELECT * FROM {table}").fetchall()
                     if not rows:
                         continue
@@ -63,12 +68,16 @@ def main() -> None:
                     # Legacy databases did not have clinic_id. Assign the explicit
                     # migration clinic only when it is absent.
                     if "clinic_id" not in columns and table in {
-                        "dental_patients", "dental_appointments",
-                        "dental_chart_entries", "dental_periodontal_entries",
+                        "dental_patients",
+                        "dental_appointments",
+                        "dental_chart_entries",
+                        "dental_periodontal_entries",
                         "dental_ai_events",
                     }:
                         columns.append("clinic_id")
-                        default_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "dr-pranali")
+                        default_clinic = os.getenv(
+                            "DENTAL_MASTER_CLINIC_ID", "dr-pranali"
+                        )
                         rows = [tuple(row) + (default_clinic,) for row in rows]
                     else:
                         rows = [tuple(row) for row in rows]

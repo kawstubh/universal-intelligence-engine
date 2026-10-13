@@ -6,9 +6,10 @@ It treats source-code changes as candidates that must pass gates before promotio
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 
 class CandidateStatus(str, Enum):
@@ -82,9 +83,14 @@ class SelfImprovementEngine:
             return 0.0
         # Failed safety/security gates have veto power.
         for gate in gates:
-            if gate.name.lower() in {"security", "policy", "regression"} and not gate.passed:
+            if (
+                gate.name.lower() in {"security", "policy", "regression"}
+                and not gate.passed
+            ):
                 return 0.0
-        return sum(max(0.0, min(1.0, g.score if g.passed else 0.0)) for g in gates) / len(gates)
+        return sum(
+            max(0.0, min(1.0, g.score if g.passed else 0.0)) for g in gates
+        ) / len(gates)
 
     def evaluate(self, signal: ImprovementSignal) -> Sequence[ImprovementResult]:
         results: list[ImprovementResult] = []

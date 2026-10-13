@@ -13,5 +13,11 @@ def test_patient_ai_routes_are_disabled_server_side():
         ("post", "/v1/dental/ai/patient/link", {"invite_code": "test-invite"}),
     ]
     for method, path, payload in cases:
-        response = getattr(client, method)(path, json=payload) if payload is not None else getattr(client, method)(path)
-        assert response.status_code == 404, f"{method.upper()} {path} should be disabled, got {response.status_code}"
+        response = (
+            getattr(client, method)(path, json=payload)
+            if payload is not None
+            else getattr(client, method)(path)
+        )
+        assert response.status_code == 404, (
+            f"{method.upper()} {path} should be disabled, got {response.status_code}"
+        )

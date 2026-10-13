@@ -23,11 +23,27 @@ def _setup(tmp_path, monkeypatch):
 def _seed_order(store, *, order_id="plink_test_1", plan_id="clinic", status="created"):
     store._execute(
         "INSERT INTO dental_membership_orders(id,clinic_id,plan_id,razorpay_order_id,amount_inr,status,created_at) VALUES (?,?,?,?,?,?,?)",
-        ("order-" + order_id, "clinic-a", plan_id, order_id, 4999, status, str(int(time.time()))),
+        (
+            "order-" + order_id,
+            "clinic-a",
+            plan_id,
+            order_id,
+            4999,
+            status,
+            str(int(time.time())),
+        ),
     )
 
 
-def _event(event_id, event_name, *, order_id="plink_test_1", plan_id="clinic", clinic_id="clinic-a", payment_id="pay_test_1"):
+def _event(
+    event_id,
+    event_name,
+    *,
+    order_id="plink_test_1",
+    plan_id="clinic",
+    clinic_id="clinic-a",
+    payment_id="pay_test_1",
+):
     entity = {
         "id": order_id,
         "notes": {"clinic_id": clinic_id, "plan_id": plan_id},
@@ -39,9 +55,20 @@ def _event(event_id, event_name, *, order_id="plink_test_1", plan_id="clinic", c
         "payload": {
             "payment_link": {"entity": entity},
             "payment": {"entity": {"id": payment_id, "order_id": order_id}},
-            "order": {"entity": {"id": order_id, "notes": {"clinic_id": clinic_id, "plan_id": plan_id}}},
+            "order": {
+                "entity": {
+                    "id": order_id,
+                    "notes": {"clinic_id": clinic_id, "plan_id": plan_id},
+                }
+            },
             "refund": {"entity": {"id": "rf_test_1"}},
-            "subscription": {"entity": {"id": order_id, "plan_id": plan_id, "notes": {"clinic_id": clinic_id, "plan_id": plan_id}}},
+            "subscription": {
+                "entity": {
+                    "id": order_id,
+                    "plan_id": plan_id,
+                    "notes": {"clinic_id": clinic_id, "plan_id": plan_id},
+                }
+            },
         },
     }
 
@@ -53,7 +80,10 @@ def _signed(event):
 
 
 def _status(store):
-    rows = store._execute("SELECT plan_id,status,current_period_end,cancelled_at FROM dental_memberships WHERE clinic_id=? ORDER BY created_at DESC LIMIT 1", ("clinic-a",))
+    rows = store._execute(
+        "SELECT plan_id,status,current_period_end,cancelled_at FROM dental_memberships WHERE clinic_id=? ORDER BY created_at DESC LIMIT 1",
+        ("clinic-a",),
+    )
     return rows[0] if rows else None
 
 
@@ -76,22 +106,38 @@ def test_payment_success_and_replay_are_idempotent(tmp_path, monkeypatch):
     assert first["entitlement_status"] == "active"
     assert second["duplicate"] is True
     assert _status(store)["status"] == "active"
-    assert len(store._execute("SELECT * FROM dental_memberships WHERE clinic_id=?", ("clinic-a",))) == 1
+    assert (
+        len(
+            store._execute(
+                "SELECT * FROM dental_memberships WHERE clinic_id=?", ("clinic-a",)
+            )
+        )
+        == 1
+    )
 
 
-def test_payment_failed_does_not_activate_and_marks_existing_membership_past_due(tmp_path, monkeypatch):
+def test_payment_failed_does_not_activate_and_marks_existing_membership_past_due(
+    tmp_path, monkeypatch
+):
     store = _setup(tmp_path, monkeypatch)
     _seed_order(store, order_id="plink_failed")
     body, sig = _signed(_event("evt_failed", "payment.failed", order_id="plink_failed"))
     result = handle_webhook(body, sig)
     assert result["entitlement_status"] is None
-    order = store._execute("SELECT status FROM dental_membership_orders WHERE razorpay_order_id=?", ("plink_failed",))[0]
+    order = store._execute(
+        "SELECT status FROM dental_membership_orders WHERE razorpay_order_id=?",
+        ("plink_failed",),
+    )[0]
     assert order["status"] == "failed"
 
     _seed_order(store, order_id="plink_active")
-    paid, paid_sig = _signed(_event("evt_active", "payment_link.paid", order_id="plink_active"))
+    paid, paid_sig = _signed(
+        _event("evt_active", "payment_link.paid", order_id="plink_active")
+    )
     handle_webhook(paid, paid_sig)
-    failed2, failed2_sig = _signed(_event("evt_failed2", "payment.failed", order_id="plink_active"))
+    failed2, failed2_sig = _signed(
+        _event("evt_failed2", "payment.failed", order_id="plink_active")
+    )
     assert handle_webhook(failed2, failed2_sig)["entitlement_status"] == "past_due"
 
 
@@ -132,7 +178,9 @@ def test_plan_change_updates_entitlement_plan(tmp_path, monkeypatch):
     _seed_order(store)
     paid, paid_sig = _signed(_event("evt_plan_paid", "payment_link.paid"))
     handle_webhook(paid, paid_sig)
-    changed, changed_sig = _signed(_event("evt_plan_change", "subscription.updated", plan_id="enterprise"))
+    changed, changed_sig = _signed(
+        _event("evt_plan_change", "subscription.updated", plan_id="enterprise")
+    )
     result = handle_webhook(changed, changed_sig)
     assert result["entitlement_status"] == "active"
     assert _status(store)["plan_id"] == "enterprise"

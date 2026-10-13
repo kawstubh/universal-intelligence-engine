@@ -1,4 +1,10 @@
-from universal_intelligence_engine.planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
+from universal_intelligence_engine.planner import (
+    AdaptivePlanner,
+    Plan,
+    PlanStep,
+    topological_steps,
+    validate_plan,
+)
 
 
 def test_adaptive_planner_creates_research_reason_verify():
@@ -13,10 +19,13 @@ def test_adaptive_planner_gates_consequential_action():
 
 
 def test_plan_rejects_dependency_cycle():
-    plan = Plan("x", (
-        PlanStep("a", "a", "a", ("b",)),
-        PlanStep("b", "b", "b", ("a",)),
-    ))
+    plan = Plan(
+        "x",
+        (
+            PlanStep("a", "a", "a", ("b",)),
+            PlanStep("b", "b", "b", ("a",)),
+        ),
+    )
     try:
         topological_steps(plan)
         assert False, "cycle should fail"

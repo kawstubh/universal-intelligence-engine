@@ -3,6 +3,7 @@
 Uses the official Meta Cloud API only. Credentials are environment variables;
 no credentials are stored in the app or database.
 """
+
 from __future__ import annotations
 
 import os

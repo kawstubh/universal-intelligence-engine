@@ -23,3 +23,7 @@ build-backend = "setuptools.build_meta"
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+
+[tool.ruff.lint.per-file-ignores]
+"src/universal_intelligence_engine/dental_ai.py" = ["B008"]
+"src/universal_intelligence_engine/dental_api.py" = ["B008"]
