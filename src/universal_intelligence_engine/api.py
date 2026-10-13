@@ -109,7 +109,7 @@ def _doctor_only_openapi():
     return schema
 
 
-app.openapi = _doctor_only_openapi
+app.__dict__["openapi"] = _doctor_only_openapi
 
 
 def _authorize(authorization: str | None) -> None:

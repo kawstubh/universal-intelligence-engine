@@ -290,10 +290,16 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
     elif event_name in {"payment.failed", "order.failed", "payment_link.failed"}:
         _update_order(order_id, "failed", payment_id)
         current = _membership(clinic_id) if clinic_id else None
-        if current and current.get("status") == "active":
+        current_plan_id = str((current or {}).get("plan_id") or "").strip()
+        if (
+            clinic_id
+            and current
+            and current.get("status") == "active"
+            and current_plan_id
+        ):
             _set_membership(
                 clinic_id,
-                current["plan_id"],
+                current_plan_id,
                 "past_due",
                 period_end=current.get("current_period_end"),
             )

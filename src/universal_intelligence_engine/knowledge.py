@@ -21,7 +21,7 @@ class CompositeKnowledgeProvider:
         for provider in self.providers:
             try:
                 results.extend(provider.search(request))
-            except Exception:  # noqa: BLE001, S112 - isolate provider outages and continue with available evidence
+            except (RuntimeError, OSError, TimeoutError, ValueError, ConnectionError):
                 # One provider outage must not take down the whole research pass.
                 continue
         return rank_evidence(results)

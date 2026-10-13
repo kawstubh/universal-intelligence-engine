@@ -77,7 +77,10 @@ class DentalStore:
 
     def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         if self.database_url:
-            with self._pg.connect(self.database_url) as conn:
+            pg = self._pg
+            if pg is None:
+                raise RuntimeError("PostgreSQL driver is not configured")
+            with pg.connect(self.database_url) as conn:
                 with conn.cursor() as cur:
                     cur.execute(sql, params)
                     rows = []
@@ -253,7 +256,7 @@ class DentalStore:
         for row in rows:
             try:
                 row["measurements"] = json.loads(row.pop("measurements_json"))
-            except Exception:  # noqa: BLE001 - malformed persisted JSON must not break reads
+            except (json.JSONDecodeError, TypeError, KeyError):
                 row["measurements"] = {}
         return rows
 
@@ -596,7 +599,7 @@ class DentalStore:
             return None
         try:
             return json.loads(rows[0]["result_json"])
-        except Exception:  # noqa: BLE001 - malformed persisted JSON must not break reads
+        except (json.JSONDecodeError, TypeError, KeyError):
             return None
 
     def put_ai_cache(

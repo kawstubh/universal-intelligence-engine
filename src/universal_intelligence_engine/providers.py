@@ -11,6 +11,7 @@ import logging
 import os
 import socket
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 from urllib.error import HTTPError, URLError
@@ -204,9 +205,11 @@ class OpenAIResponsesReasoningProvider:
         provider: str | None = None,
     ):
         self.provider = (
-            (provider or os.getenv("REASONING_PROVIDER", "openai")).strip().lower()
+            (provider or os.getenv("REASONING_PROVIDER") or "openai").strip().lower()
         )
-        self.model = model or os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL")
+        self.model = (
+            model or os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL") or ""
+        ).strip() or None
         self.base_url = (
             base_url
             or os.getenv("REASONING_BASE_URL")
@@ -224,9 +227,7 @@ class OpenAIResponsesReasoningProvider:
         )
 
     def _messages(
-        self,
-        request: IntelligenceRequest,
-        evidence: list[Evidence] | tuple[Evidence, ...],
+        self, request: IntelligenceRequest, evidence: Sequence[Evidence]
     ) -> list[dict[str, str]]:
         evidence_block = "\n\n".join(
             f"[{idx}] {item.title}\nSource: {item.source}\nURL: {item.url or 'n/a'}\n{item.content}"
@@ -254,7 +255,7 @@ class OpenAIResponsesReasoningProvider:
     def _reason_once(
         self,
         request: IntelligenceRequest,
-        evidence: list[Evidence] | tuple[Evidence, ...],
+        evidence: Sequence[Evidence],
     ) -> IntelligenceResponse:
         if self.provider not in self.DEFAULT_BASE_URLS:
             raise ProviderNotConfiguredError(
@@ -319,7 +320,7 @@ class OpenAIResponsesReasoningProvider:
     def reason(
         self,
         request: IntelligenceRequest,
-        evidence: list[Evidence] | tuple[Evidence, ...],
+        evidence: Sequence[Evidence],
     ) -> IntelligenceResponse:
         try:
             primary_error: ProviderError | None = None
@@ -372,7 +373,7 @@ class OpenAIResponsesReasoningProvider:
     def _fallback_after_primary_failure(
         self,
         request: IntelligenceRequest,
-        evidence: list[Evidence] | tuple[Evidence, ...],
+        evidence: Sequence[Evidence],
         primary_error: Exception,
     ) -> IntelligenceResponse:
         fallback = os.getenv("REASONING_FALLBACK_PROVIDER", "").strip().lower()
