@@ -1,6 +1,7 @@
 from universal_intelligence_engine.algorithm import AdaptiveReasoningCore
 from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest
 
+
 def test_arc_selects_relevant_evidence():
     core = AdaptiveReasoningCore()
     request = IntelligenceRequest(goal="dental implant research")

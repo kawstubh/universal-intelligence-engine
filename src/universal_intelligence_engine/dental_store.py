@@ -14,13 +14,13 @@ import sqlite3
 import string
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _id() -> str:
@@ -30,8 +30,9 @@ def _id() -> str:
 def _run_local_migrations() -> None:
     if os.getenv("DENTAL_AUTO_MIGRATE", "false").lower() != "true":
         return
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     candidates = []
     explicit = os.getenv("ALEMBIC_CONFIG", "").strip()
@@ -204,7 +205,7 @@ class DentalStore:
         for row in rows:
             try:
                 row["measurements"] = json.loads(row.pop("measurements_json"))
-            except Exception:
+            except (TypeError, json.JSONDecodeError):
                 row["measurements"] = {}
         return rows
 
@@ -414,7 +415,7 @@ class DentalStore:
             return None
         try:
             return json.loads(rows[0]["result_json"])
-        except Exception:
+        except (TypeError, json.JSONDecodeError):
             return None
 
     def put_ai_cache(self, cache_key: str, result: dict[str, Any], expires_at: int) -> None:
@@ -466,7 +467,7 @@ class DentalStore:
 
 
 def _iso_from_epoch(value: int) -> str:
-    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(value, tz=UTC).isoformat()
 
 
 _store: DentalStore | None = None

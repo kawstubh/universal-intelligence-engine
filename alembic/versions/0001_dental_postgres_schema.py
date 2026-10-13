@@ -7,9 +7,11 @@ DENTAL_MASTER_CLINIC_ID (or dr-pranali) clinic id when no clinic id existed.
 from __future__ import annotations
 
 import os
-from alembic import op
+
 import sqlalchemy as sa
 from sqlalchemy import inspect
+
+from alembic import op
 
 revision = "0001_dental_postgres_schema"
 down_revision = None

@@ -6,9 +6,10 @@ It treats source-code changes as candidates that must pass gates before promotio
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 
 class CandidateStatus(str, Enum):

@@ -6,14 +6,16 @@ import os
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Header
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .dental_auth import hash_password, login_password, logout_doctor, require_doctor
+from .dental_billing import create_order as create_membership_order_impl
+from .dental_billing import handle_webhook as handle_membership_webhook
+from .dental_billing import plans as membership_plans
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
-from .dental_billing import plans as membership_plans, create_order as create_membership_order_impl, handle_webhook as handle_membership_webhook
 
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 

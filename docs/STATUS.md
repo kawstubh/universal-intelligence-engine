@@ -40,3 +40,18 @@ Last cycle: 2026-10-13. Latest correction commit: `ef84256d00e31cfecdd31e2da155c
 2. Continue fixing Ruff findings at source without relaxing the lint gate.
 3. Add a locked first-run setup path and explicit security tests without introducing a setup bypass; preserve existing cross-clinic isolation tests.
 4. Verify repository branch protection/required checks and Actions permissions. Only then enable auto-merge for PR #17 and proceed through deploy + live smoke if gates are green.
+
+
+## Ruff gate follow-up — 2026-10-13
+- Latest inspected required-gates run on integration commit `19d70212a2cc9365f6055acc99c50fecb18e7ead` failed at Ruff with 103 findings; unit/safety and Gitleaks passed, Mypy and post-deploy smoke were skipped.
+- Opened PR #18 (`fix/ruff-fastapi-depends`) to configure Ruff Bugbear's `extend-immutable-calls = ["fastapi.Depends"]`. FastAPI's `Depends()` in route signatures is standard dependency injection; this narrow configuration addresses those framework false positives without disabling B008 generally.
+- PR #18 has not yet produced a confirmed passing lint run. Remaining import sorting, unused imports, modern typing/UTC, and other rule findings remain blockers. Do not merge or deploy until CI is green.
+- CI log: https://github.com/kawstubh/universal-intelligence-engine/actions/runs/38313203057
+- PR: https://github.com/kawstubh/universal-intelligence-engine/pull/18
+
+
+## Ruff autofix workflow — 2026-10-13
+- Confirmed Render's configured Python version is 3.11.11; the project requires Python >=3.11 and required-gates uses Python 3.11, so UP017 autofixes are runtime-compatible.
+- Added `.github/workflows/ruff-autofix.yml` on `fix/ruff-fastapi-depends` (commit `28cce5c3fd73e2879f281383622dff912caf5c0e`). It is `workflow_dispatch` only, guarded against main/master, integration, and deployment branches, uses the same Python 3.11 and dependency install command as required-gates, runs `ruff check --fix .`, does not run Ruff format because required-gates has no format-check step, and dispatches required-gates after the push using the workflow token.
+- The GitHub connector available in this session can read workflow runs and rerun failed jobs but does not expose a workflow-dispatch action. Therefore the new workflow has not been run by this session; manually start it from Actions → “Ruff Autofix (manual only)” → “Run workflow” on branch `fix/ruff-fastapi-depends`. The workflow will push a `style: ruff autofix` commit if safe fixes modify files, then dispatch required-gates.
+- Baseline at `022fb11fc9d9e5725c45f8c21be216816ebda263`: unit/safety and Gitleaks passed; Ruff failed with 64 findings; Mypy skipped. No source autofixes or deployment have been claimed yet.
