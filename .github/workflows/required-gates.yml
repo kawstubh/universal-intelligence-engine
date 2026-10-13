@@ -57,7 +57,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
-      - name: Run live smoke checks (status codes only)
+      - name: Run live smoke checks (status codes and OpenAPI policy)
         env:
           LIVE_BASE_URL: ${{ vars.UIE_LIVE_BASE_URL }}
           SMOKE_CREDENTIAL: ${{ secrets.UIE_SMOKE_CREDENTIAL }}
@@ -68,38 +68,95 @@ jobs:
           if not base:
               print("FAILED: UIE_LIVE_BASE_URL is empty or unset")
               sys.exit(2)
-          def check(name, path, expected, method="GET", payload=None, token=None):
+
+          def request(path, method="GET", payload=None, token=None):
               data = None if payload is None else json.dumps(payload).encode("utf-8")
-              headers = {"Content-Type": "application/json"}
+              headers = {"Content-Type": "application/json", "Accept": "application/json"}
               if token:
                   headers["Authorization"] = "Bearer " + token
+              req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as response:
+                      body = response.read()
+                      return response.status, body
+              except urllib.error.HTTPError as exc:
+                  return exc.code, exc.read()
+              except (urllib.error.URLError, TimeoutError, OSError):
+                  return 0, b""
+
+          def check_status(name, path, expected, method="GET", payload=None, token=None):
               code = 0
               for attempt in range(6):
-                  req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
-                  try:
-                      with urllib.request.urlopen(req, timeout=15) as response:
-                          code = response.status
-                  except urllib.error.HTTPError as exc:
-                      code = exc.code
-                  except (urllib.error.URLError, TimeoutError, OSError):
-                      code = 0
+                  code, body = request(path, method, payload, token)
                   if code == expected:
                       print(f"PASS: {name} HTTP {code}")
-                      return True
+                      return True, body
                   if attempt < 5:
                       time.sleep(15)
-              print(f"FAIL: {name} HTTP {code}")
-              return False
+              print(f"FAIL: {name} expected HTTP {expected}, got HTTP {code}")
+              return False, body
+
           ok = True
-          ok = check("health", "/health", 200) and ok
-          ok = check("dental-health", "/v1/dental/health", 200) and ok
-          ok = check("patient-ai-disabled", "/v1/dental/ai/patient/anything", 404) and ok
-          ok = check("unauthenticated-doctor-ai", "/v1/dental/ai/doctor/anything", 401, "POST", {"prompt": "smoke"}) and ok
+          for name, path in [
+              ("health", "/health"),
+              ("dental-health", "/v1/dental/health"),
+              ("docs", "/docs"),
+          ]:
+              passed, _ = check_status(name, path, 200)
+              ok = passed and ok
+
+          passed, openapi_body = check_status("openapi-json", "/openapi.json", 200)
+          ok = passed and ok
+          if passed:
+              try:
+                  schema = json.loads(openapi_body)
+                  patient_routes = [
+                      path for path in schema.get("paths", {})
+                      if "/v1/dental/ai/patient" in path
+                  ]
+                  if patient_routes:
+                      print("FAIL: OpenAPI contains patient AI routes: " + ", ".join(sorted(patient_routes)))
+                      ok = False
+                  else:
+                      print("PASS: OpenAPI schema clean; no route contains /v1/dental/ai/patient")
+              except (json.JSONDecodeError, AttributeError) as exc:
+                  print(f"FAIL: OpenAPI JSON invalid: {exc}")
+                  ok = False
+
+          patient_payload = {"message": "smoke test; do not provide diagnosis", "language": "en"}
+          patient_passed, patient_body = check_status(
+              "patient-chat-disabled", "/v1/dental/ai/patient/chat", 404,
+              "POST", patient_payload
+          )
+          ok = patient_passed and ok
+          if patient_passed:
+              try:
+                  detail = json.loads(patient_body).get("detail", {})
+                  if detail.get("code") == "PATIENT_AI_DISABLED":
+                      print("PASS: patient chat 404 detail code PATIENT_AI_DISABLED")
+                  else:
+                      print("FAIL: patient chat returned 404 but not PATIENT_AI_DISABLED")
+                      ok = False
+              except (json.JSONDecodeError, AttributeError):
+                  print("FAIL: patient chat 404 response did not contain valid JSON detail")
+                  ok = False
+
+          # Exercise a real registered doctor endpoint: /doctor/diagnose is not
+          # registered in this API; patient-summary is the existing auth-protected route.
+          doctor_passed, _ = check_status(
+              "unauthenticated-doctor-ai", "/v1/dental/ai/doctor/patient-summary", 401,
+              "POST", {"patient_id": "smoke-test", "language": "en"}
+          )
+          ok = doctor_passed and ok
+
           credential = os.environ.get("SMOKE_CREDENTIAL", "").strip()
           if not credential:
-              print("SKIPPED: no smoke credential")
+              print("SKIPPED: no smoke credential; authenticated native-fallback check not run")
           else:
-              ok = check("authenticated-native-fallback", "/v1/intelligence/run", 200, "POST",
-                         {"goal": "status", "context": {}, "constraints": {}}, credential) and ok
+              passed, _ = check_status(
+                  "authenticated-native-fallback", "/v1/intelligence/run", 200, "POST",
+                  {"goal": "status", "context": {}, "constraints": {}}, credential
+              )
+              ok = passed and ok
           sys.exit(0 if ok else 1)
           PY
