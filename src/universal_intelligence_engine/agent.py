@@ -78,7 +78,7 @@ class AutonomousAgent:
                 result = self.tools.call(step.capability, **args)
                 outputs[step.id] = result
                 steps.append(AgentStep(index, step.capability, "completed", result))
-            except Exception as exc:
+            except (KeyError, RuntimeError, TypeError, ValueError) as exc:
                 steps.append(AgentStep(index, step.capability, "failed", error=str(exc)))
                 return AgentRun(
                     goal, "failed", tuple(steps), output=outputs.get("reason"),
@@ -108,7 +108,7 @@ class AutonomousAgent:
             try:
                 output = self.tools.call(name, **dict(args))
                 steps.append(AgentStep(index, name, "completed", output))
-            except Exception as exc:
+            except (KeyError, RuntimeError, TypeError, ValueError) as exc:
                 steps.append(AgentStep(index, name, "failed", error=str(exc)))
                 return AgentRun(goal, "failed", tuple(steps), output=output)
         if len(plan) > self.max_steps:
