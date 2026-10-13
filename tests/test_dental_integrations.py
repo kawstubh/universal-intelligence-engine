@@ -1,4 +1,5 @@
 import asyncio
+
 import pytest
 
 from universal_intelligence_engine.scano_adapter import ScanOAdapter

@@ -1,8 +1,8 @@
 """Bounded autonomous execution loop for UIE."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from .planner import AdaptivePlanner, Plan, topological_steps

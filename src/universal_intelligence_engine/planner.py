@@ -8,8 +8,9 @@ and capability policy outside the model.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -35,11 +36,11 @@ class AdaptivePlanner:
 
     _research_terms = re.compile(
         r"\b(research|find|latest|current|compare|investigate|analy[sz]e|verify|check|study)\b",
-        re.I,
+        re.IGNORECASE,
     )
     _action_terms = re.compile(
         r"\b(send|create|publish|deploy|delete|modify|buy|book|execute|contact|update)\b",
-        re.I,
+        re.IGNORECASE,
     )
 
     def __init__(self, max_steps: int = 8) -> None:

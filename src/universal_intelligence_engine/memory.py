@@ -4,10 +4,11 @@ The engine learns from explicit outcomes and feedback. It does not rewrite
 source code or silently change application policy.
 """
 
-from dataclasses import asdict, dataclass
 import json
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclass(frozen=True)

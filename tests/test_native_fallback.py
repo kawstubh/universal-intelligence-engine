@@ -1,4 +1,4 @@
-from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from universal_intelligence_engine.contracts import IntelligenceRequest
 from universal_intelligence_engine.engine import UniversalIntelligenceEngine
 from universal_intelligence_engine.evaluation import BasicResponseEvaluator
 from universal_intelligence_engine.providers import NoKnowledgeProvider

@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from itertools import combinations
-from typing import Sequence
 
 from .contracts import Evidence
 
@@ -58,7 +58,7 @@ def _parse_time(value: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def temporal_assessment(item: Evidence, now: datetime | None = None,
@@ -67,7 +67,7 @@ def temporal_assessment(item: Evidence, now: datetime | None = None,
     published = _parse_time(item.published_at)
     if published is None:
         return TemporalAssessment(freshness=0.45, age_hours=None, stale=False)
-    current = now or datetime.now(timezone.utc)
+    current = now or datetime.now(UTC)
     age_hours = max(0.0, (current - published).total_seconds() / 3600.0)
     # Half-life of 30 days; this is a ranking signal, not a truth score.
     freshness = math.exp(-age_hours / (24 * 30))

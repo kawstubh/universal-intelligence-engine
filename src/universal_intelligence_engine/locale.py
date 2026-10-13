@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 
-
 RTL_LANGUAGES = {"ar", "arc", "dv", "fa", "he", "ku", "ps", "sd", "ug", "ur", "yi"}
 
 

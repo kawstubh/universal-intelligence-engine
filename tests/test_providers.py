@@ -1,5 +1,9 @@
 ﻿
-from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from universal_intelligence_engine.contracts import (
+    Evidence,
+    IntelligenceRequest,
+    IntelligenceResponse,
+)
 from universal_intelligence_engine.evaluation import BasicResponseEvaluator
 
 
@@ -38,7 +42,10 @@ def test_request_contract_remains_provider_agnostic():
 
 
 def test_missing_knowledge_provider_fails_closed(monkeypatch):
-    from universal_intelligence_engine.providers import BraveSearchProvider, ProviderNotConfiguredError
+    from universal_intelligence_engine.providers import (
+        BraveSearchProvider,
+        ProviderNotConfiguredError,
+    )
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
     try:
         BraveSearchProvider().search(IntelligenceRequest(goal="test"))
@@ -49,7 +56,10 @@ def test_missing_knowledge_provider_fails_closed(monkeypatch):
 
 
 def test_missing_reasoning_provider_fails_closed(monkeypatch):
-    from universal_intelligence_engine.providers import OpenAIResponsesReasoningProvider, ProviderNotConfiguredError
+    from universal_intelligence_engine.providers import (
+        OpenAIResponsesReasoningProvider,
+        ProviderNotConfiguredError,
+    )
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     try:
