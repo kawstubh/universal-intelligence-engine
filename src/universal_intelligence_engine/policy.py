@@ -1,7 +1,7 @@
 """Safety and execution policy primitives for domain adapters."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 @dataclass(frozen=True)

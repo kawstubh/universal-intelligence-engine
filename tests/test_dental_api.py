@@ -1,8 +1,8 @@
-from fastapi.testclient import TestClient
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from universal_intelligence_engine.dental_api import router, run_dental_intelligence
 from universal_intelligence_engine import dental_api
+from universal_intelligence_engine.dental_api import router
 
 app = FastAPI()
 app.include_router(router)

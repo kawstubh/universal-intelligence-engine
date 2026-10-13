@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Sequence
+from collections.abc import Sequence
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from .temporal import detect_contradictions, temporal_assessment

@@ -9,18 +9,18 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
-from urllib.error import HTTPError, URLError
 import time
+from datetime import UTC, datetime
+from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
-from typing import Any
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _json_request(

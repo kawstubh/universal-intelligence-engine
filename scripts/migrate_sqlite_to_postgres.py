@@ -16,7 +16,6 @@ from pathlib import Path
 
 import psycopg
 
-
 TABLES = [
     "dental_patients",
     "dental_appointments",

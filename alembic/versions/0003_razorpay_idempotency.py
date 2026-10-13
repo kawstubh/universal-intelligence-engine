@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
+
+from alembic import op
 
 revision = "0003_razorpay_idempotency"
 down_revision = "0002_dental_ai_safety"
