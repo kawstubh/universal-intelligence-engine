@@ -199,9 +199,8 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
     elif event_name in {"subscription.paused"}:
         if clinic_id and plan_id:
             _set_membership(clinic_id, plan_id, "paused", period_end=_membership(clinic_id).get("current_period_end") if _membership(clinic_id) else None)
-    elif event_name in {"subscription.updated", "subscription.plan_changed"}:
-        if clinic_id and plan_id:
-            _plan(plan_id)
-            _set_membership(clinic_id, plan_id, "active", period_end=_membership(clinic_id).get("current_period_end") if _membership(clinic_id) else _period_end())
+    elif event_name in {"subscription.updated", "subscription.plan_changed"} and clinic_id and plan_id:
+    _plan(plan_id)
+    _set_membership(clinic_id, plan_id, "active", period_end=_membership(clinic_id).get("current_period_end") if _membership(clinic_id) else _period_end())
 
     return {"ok": True, "event_id": event_id, "event": event_name, "entitlement_status": _membership(clinic_id).get("status") if clinic_id and _membership(clinic_id) else None}

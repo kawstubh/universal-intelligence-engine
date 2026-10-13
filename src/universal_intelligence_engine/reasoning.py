@@ -91,14 +91,14 @@ class NativeReasoningProvider:
             if conflicts:
                 lines.extend([
                     "",
-                    "Uncertainty: the available evidence contains conflicting claims. "
-                    "The conflict should be resolved before treating the conclusion as established.",
+                    ("Uncertainty: the available evidence contains conflicting claims. "
+                    "The conflict should be resolved before treating the conclusion as established."),
                 ])
             else:
                 lines.extend([
                     "",
-                    "Assessment: this synthesis is limited to the retrieved evidence; "
-                    "it does not invent unsupported facts.",
+                    ("Assessment: this synthesis is limited to the retrieved evidence; "
+                    "it does not invent unsupported facts."),
                 ])
             answer = "\n".join(lines)
 

@@ -11,7 +11,7 @@ import json
 import os
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
@@ -56,7 +56,7 @@ def _json_request(
     except json.JSONDecodeError as exc:
         raise RuntimeError("Provider returned invalid JSON") from exc
     if not isinstance(value, dict):
-        raise RuntimeError("Provider returned a non-object JSON response")
+        raise TypeError("Provider returned a non-object JSON response")
     return value
 
 
@@ -147,7 +147,7 @@ class OpenAIResponsesReasoningProvider:
       OPENAI_API_KEY=<OpenAI key, preferred for provider=openai>
     """
 
-    DEFAULT_BASE_URLS = {
+    DEFAULT_BASE_URLS: ClassVar[dict[str, str]] = {
         "openai": "https://api.openai.com/v1",
         "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
         "groq": "https://api.groq.com/openai/v1",
@@ -257,7 +257,7 @@ class OpenAIResponsesReasoningProvider:
                     break
                 delay = exc.retry_after if exc.retry_after is not None else 2 ** attempt
                 time.sleep(min(max(delay, 1.0), 8.0))
-            except Exception as exc:
+            except (RuntimeError, TimeoutError, ValueError, TypeError, OSError) as exc:
                 primary_error = exc
                 break
         return self._fallback_after_primary_failure(request, evidence, primary_error or RuntimeError("Primary provider failed"))
