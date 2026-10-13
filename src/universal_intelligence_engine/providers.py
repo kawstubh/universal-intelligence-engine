@@ -7,16 +7,18 @@ stored in source control.
 from __future__ import annotations
 
 import json
-import os
 import logging
+import os
 import socket
-import httpx
-from datetime import datetime, timezone
-from urllib.error import HTTPError, URLError
 import time
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any, ClassVar
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
-from typing import Any
+
+import httpx
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from .reasoning import NativeReasoningProvider
@@ -46,7 +48,7 @@ class ProviderBadOutput(ProviderError):
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _json_request(
@@ -185,7 +187,7 @@ class OpenAIResponsesReasoningProvider:
       OPENAI_API_KEY=<OpenAI key, preferred for provider=openai>
     """
 
-    DEFAULT_BASE_URLS = {
+    DEFAULT_BASE_URLS: ClassVar[dict[str, str]] = {
         "openai": "https://api.openai.com/v1",
         "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
         "groq": "https://api.groq.com/openai/v1",
@@ -198,8 +200,8 @@ class OpenAIResponsesReasoningProvider:
         base_url: str | None = None,
         provider: str | None = None,
     ):
-        self.provider = (provider or os.getenv("REASONING_PROVIDER", "openai")).strip().lower()
-        self.model = model or os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL")
+        self.provider = (provider or os.getenv("REASONING_PROVIDER") or "openai").strip().lower()
+        self.model = (model or os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL") or "").strip() or None
         self.base_url = (
             base_url
             or os.getenv("REASONING_BASE_URL")
@@ -212,7 +214,7 @@ class OpenAIResponsesReasoningProvider:
         }
         self.api_key = api_key or provider_keys.get(self.provider) or os.getenv("REASONING_API_KEY")
 
-    def _messages(self, request: IntelligenceRequest, evidence: list[Evidence] | tuple[Evidence, ...]) -> list[dict[str, str]]:
+    def _messages(self, request: IntelligenceRequest, evidence: Sequence[Evidence]) -> list[dict[str, str]]:
         evidence_block = "\n\n".join(
             f"[{idx}] {item.title}\nSource: {item.source}\nURL: {item.url or 'n/a'}\n{item.content}"
             for idx, item in enumerate(evidence, start=1)
@@ -236,7 +238,7 @@ class OpenAIResponsesReasoningProvider:
     def _reason_once(
         self,
         request: IntelligenceRequest,
-        evidence: list[Evidence] | tuple[Evidence, ...],
+        evidence: Sequence[Evidence],
     ) -> IntelligenceResponse:
         if self.provider not in self.DEFAULT_BASE_URLS:
             raise ProviderNotConfiguredError("reasoning", f"Unsupported reasoning provider: {self.provider}")
@@ -283,7 +285,7 @@ class OpenAIResponsesReasoningProvider:
     def reason(
         self,
         request: IntelligenceRequest,
-        evidence: list[Evidence] | tuple[Evidence, ...],
+        evidence: Sequence[Evidence],
     ) -> IntelligenceResponse:
         try:
             primary_error: ProviderError | None = None
@@ -329,7 +331,7 @@ class OpenAIResponsesReasoningProvider:
     def _fallback_after_primary_failure(
         self,
         request: IntelligenceRequest,
-        evidence: list[Evidence] | tuple[Evidence, ...],
+        evidence: Sequence[Evidence],
         primary_error: Exception,
     ) -> IntelligenceResponse:
         fallback = os.getenv("REASONING_FALLBACK_PROVIDER", "").strip().lower()

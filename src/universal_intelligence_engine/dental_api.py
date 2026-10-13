@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Header
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .dental_auth import hash_password, login_password, logout_doctor, require_doctor
+from .dental_billing import create_order as create_membership_order_impl
+from .dental_billing import handle_webhook as handle_membership_webhook
+from .dental_billing import plans as membership_plans
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
-from .dental_billing import plans as membership_plans, create_order as create_membership_order_impl, handle_webhook as handle_membership_webhook
 
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
@@ -102,7 +104,7 @@ async def get_membership_plans():
     return {"plans": membership_plans()}
 
 @router.get("/billing/membership")
-async def get_membership(doctor=Depends(require_doctor)):
+async def get_membership(doctor: Annotated[dict, Depends(require_doctor)]):
     clinic_id = doctor.get("clinic_id", "dr-pranali")
     master = clinic_id == os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip()
     if master:
@@ -112,7 +114,7 @@ async def get_membership(doctor=Depends(require_doctor)):
     return {"clinic_id": clinic_id, "membership": rows[0] if rows else None, "master": False}
 
 @router.post("/billing/order")
-async def create_membership_order(body: MembershipOrderIn, doctor=Depends(require_doctor)):
+async def create_membership_order(body: MembershipOrderIn, doctor: Annotated[dict, Depends(require_doctor)]):
     clinic_id = doctor.get("clinic_id")
     if not clinic_id:
         raise HTTPException(400, "Clinic context is required")
@@ -128,7 +130,7 @@ async def doctor_password_login(body: DoctorPasswordLoginIn, request: Request):
 
 
 @router.post("/auth/doctors")
-async def create_doctor_account(body: DoctorAccountCreateIn, actor=Depends(require_doctor)):
+async def create_doctor_account(body: DoctorAccountCreateIn, actor: Annotated[dict, Depends(require_doctor)]):
     if actor.get("role") != "admin":
         raise HTTPException(status_code=403, detail={"code": "ADMIN_REQUIRED", "message": "Clinic administrator required"})
     email = body.email.strip().lower()
@@ -141,7 +143,7 @@ async def create_doctor_account(body: DoctorAccountCreateIn, actor=Depends(requi
 
 
 @router.post("/auth/doctors/{doctor_id}/deactivate")
-async def deactivate_doctor_account(doctor_id: str, actor=Depends(require_doctor)):
+async def deactivate_doctor_account(doctor_id: str, actor: Annotated[dict, Depends(require_doctor)]):
     if actor.get("role") != "admin":
         raise HTTPException(status_code=403, detail={"code": "ADMIN_REQUIRED", "message": "Clinic administrator required"})
     store = get_dental_store()
@@ -154,12 +156,12 @@ async def deactivate_doctor_account(doctor_id: str, actor=Depends(require_doctor
     return {"ok": True, "id": doctor_id, "active": False}
 
 @router.get("/auth/me")
-async def doctor_session_me(doctor=Depends(require_doctor)):
+async def doctor_session_me(doctor: Annotated[dict, Depends(require_doctor)]):
     return {"user": {"id": doctor["id"], "email": doctor["email"], "role": doctor["role"], "clinic_id": doctor["clinic_id"]}}
 
 
 @router.post("/auth/logout")
-async def doctor_logout(authorization: str | None = Header(default=None), doctor=Depends(require_doctor)):
+async def doctor_logout(doctor: Annotated[dict, Depends(require_doctor)], authorization: str | None = Header(default=None)):
     await logout_doctor(authorization)
     return {"ok": True}
 
@@ -170,15 +172,25 @@ async def dental_health():
             "uie_configured": bool(os.getenv("UIE_API_URL") and os.getenv("UIE_API_KEY"))}
 
 
+def _clinic_id(actor: dict) -> str:
+    clinic_id = str(actor.get("clinic_id") or "").strip()
+    if not clinic_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"message": "Doctor clinic context is required", "code": "CLINIC_CONTEXT_REQUIRED"},
+        )
+    return clinic_id
+
+
 @router.get("/patients")
-async def list_patients(actor: dict = Depends(require_doctor)):
-    return get_dental_store().patients(actor.get("clinic_id"))
+async def list_patients(actor: Annotated[dict, Depends(require_doctor)]):
+    return get_dental_store().patients(_clinic_id(actor))
 
 
 @router.post("/patients")
-async def create_patient(body: PatientIn, actor: dict = Depends(require_doctor)):
+async def create_patient(body: PatientIn, actor: Annotated[dict, Depends(require_doctor)]):
     store = get_dental_store()
-    item = store.create_patient(body.model_dump(), actor.get("clinic_id"))
+    item = store.create_patient(body.model_dump(), _clinic_id(actor))
     store.audit(actor.get("user_id"), "create", "patient", item["id"])
     return item
 
@@ -205,7 +217,7 @@ async def create_public_appointment(body: PublicAppointmentIn):
 
 
 @router.post("/scans/screen")
-async def screen_scan(body: ScanScreenIn, actor: dict = Depends(require_doctor)):
+async def screen_scan(body: ScanScreenIn, actor: Annotated[dict, Depends(require_doctor)]):
     adapter = get_scano_adapter()
     try:
         result = await adapter.screen({
@@ -221,7 +233,7 @@ async def screen_scan(body: ScanScreenIn, actor: dict = Depends(require_doctor))
 
 
 @router.post("/whatsapp/template")
-async def send_whatsapp_template(body: WhatsAppTemplateIn, actor: dict = Depends(require_doctor)):
+async def send_whatsapp_template(body: WhatsAppTemplateIn, actor: Annotated[dict, Depends(require_doctor)]):
     adapter = get_whatsapp_adapter()
     try:
         result = await adapter.send_template(body.to.strip(), body.template_name.strip(), body.language_code.strip(), body.components)
@@ -232,9 +244,9 @@ async def send_whatsapp_template(body: WhatsAppTemplateIn, actor: dict = Depends
 
 
 @router.get("/appointments")
-async def list_appointments(actor: dict = Depends(require_doctor)):
+async def list_appointments(actor: Annotated[dict, Depends(require_doctor)]):
     store = get_dental_store()
-    clinic_id = actor.get("clinic_id")
+    clinic_id = _clinic_id(actor)
     patients = {p["id"]: p for p in store.patients(clinic_id)}
     return [
         {**appointment,
@@ -245,12 +257,12 @@ async def list_appointments(actor: dict = Depends(require_doctor)):
 
 
 @router.patch("/appointments/{appointment_id}")
-async def update_appointment(appointment_id: str, body: AppointmentUpdateIn, actor: dict = Depends(require_doctor)):
+async def update_appointment(appointment_id: str, body: AppointmentUpdateIn, actor: Annotated[dict, Depends(require_doctor)]):
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     if not changes:
         raise HTTPException(status_code=400, detail="At least one appointment field is required")
     store = get_dental_store()
-    item = store.update_appointment(appointment_id, changes, actor.get("clinic_id"))
+    item = store.update_appointment(appointment_id, changes, _clinic_id(actor))
     if not item:
         raise HTTPException(status_code=404, detail="Appointment not found")
     store.audit(actor.get("user_id"), "update", "appointment", appointment_id)
@@ -258,44 +270,44 @@ async def update_appointment(appointment_id: str, body: AppointmentUpdateIn, act
 
 
 @router.post("/appointments")
-async def create_appointment(body: AppointmentIn, actor: dict = Depends(require_doctor)):
+async def create_appointment(body: AppointmentIn, actor: Annotated[dict, Depends(require_doctor)]):
     store = get_dental_store()
-    item = store.create_appointment(body.model_dump(), actor.get("clinic_id"))
+    item = store.create_appointment(body.model_dump(), _clinic_id(actor))
     store.audit(actor.get("user_id"), "create", "appointment", item["id"])
     return item
 
 
 @router.get("/patients/{patient_id}/chart")
-async def get_chart(patient_id: str, actor: dict = Depends(require_doctor)):
-    return get_dental_store().chart(patient_id, actor.get("clinic_id"))
+async def get_chart(patient_id: str, actor: Annotated[dict, Depends(require_doctor)]):
+    return get_dental_store().chart(patient_id, _clinic_id(actor))
 
 
 @router.post("/patients/{patient_id}/chart")
-async def save_chart(patient_id: str, body: ChartEntryIn, actor: dict = Depends(require_doctor)):
+async def save_chart(patient_id: str, body: ChartEntryIn, actor: Annotated[dict, Depends(require_doctor)]):
     if body.patient_id != patient_id:
         raise HTTPException(status_code=400, detail="patient_id mismatch")
     store = get_dental_store()
-    item = store.save_chart(body.model_dump(), actor.get("clinic_id"))
+    item = store.save_chart(body.model_dump(), _clinic_id(actor))
     store.audit(actor.get("user_id"), "write", "dental_chart", item["id"])
     return item
 
 
 @router.get("/patients/{patient_id}/periodontogram")
-async def get_periodontogram(patient_id: str, actor: dict = Depends(require_doctor)):
-    return get_dental_store().periodontogram(patient_id, actor.get("clinic_id"))
+async def get_periodontogram(patient_id: str, actor: Annotated[dict, Depends(require_doctor)]):
+    return get_dental_store().periodontogram(patient_id, _clinic_id(actor))
 
 
 @router.post("/patients/{patient_id}/periodontogram")
-async def save_periodontogram(patient_id: str, body: PeriodontalEntryIn, actor: dict = Depends(require_doctor)):
+async def save_periodontogram(patient_id: str, body: PeriodontalEntryIn, actor: Annotated[dict, Depends(require_doctor)]):
     if body.patient_id != patient_id:
         raise HTTPException(status_code=400, detail="patient_id mismatch")
-    item = get_dental_store().save_periodontogram(body.model_dump(), actor.get("clinic_id"))
+    item = get_dental_store().save_periodontogram(body.model_dump(), _clinic_id(actor))
     get_dental_store().audit(actor.get("user_id"), "write", "periodontogram", item["id"])
     return item
 
 
 @router.post("/intelligence/run")
-async def run_dental_intelligence(body: IntelligenceIn, actor: dict = Depends(require_doctor)):
+async def run_dental_intelligence(body: IntelligenceIn, actor: Annotated[dict, Depends(require_doctor)]):
     clinic_id = str(actor.get("clinic_id") or "").strip()
     if not clinic_id:
         raise HTTPException(status_code=403, detail={"message": "Doctor clinic context is required", "code": "CLINIC_CONTEXT_REQUIRED"})

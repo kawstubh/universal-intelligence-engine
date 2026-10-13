@@ -6,7 +6,7 @@ import json
 import os
 import time
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -232,33 +232,33 @@ async def _doctor_call(capability: str, body: DoctorAIIn, actor: dict, goal: str
 
 
 @router.post("/doctor/patient-summary")
-async def doctor_patient_summary(body: DoctorAIIn, actor=Depends(require_doctor)):
+async def doctor_patient_summary(body: DoctorAIIn, actor: Annotated[dict, Depends(require_doctor)]):
     return await _doctor_call("patient_summary", body, actor, "Provide a concise patient summary and evidence-based risk flags from the authorized dental record. Separate known findings, risk signals, and uncertainty. Do not invent diagnoses.")
 
 
 @router.post("/doctor/treatment-plan")
-async def doctor_treatment_plan(body: DoctorAIIn, actor=Depends(require_doctor)):
+async def doctor_treatment_plan(body: DoctorAIIn, actor: Annotated[dict, Depends(require_doctor)]):
     return await _doctor_call("treatment_plan", body, actor, "Suggest evidence-based treatment-plan options from the authorized dental record, including rationale, alternatives, uncertainty, and verification points. Never write a treatment plan.")
 
 
 @router.post("/doctor/chart-insights")
-async def doctor_chart_insights(body: DoctorAIIn, actor=Depends(require_doctor)):
+async def doctor_chart_insights(body: DoctorAIIn, actor: Annotated[dict, Depends(require_doctor)]):
     return await _doctor_call("chart_insights", body, actor, "Analyze dental chart and periodontogram patterns, highlighting teeth or findings that merit clinician review. Do not diagnose or alter records.")
 
 
 @router.post("/doctor/clinical-note")
-async def doctor_clinical_note(body: NoteAIIn, actor=Depends(require_doctor)):
+async def doctor_clinical_note(body: NoteAIIn, actor: Annotated[dict, Depends(require_doctor)]):
     result = await _doctor_call("clinical_note", body, actor, "Draft a concise clinical note from the authorized dental record and the supplied visit context. Mark missing information and do not invent findings.")
     return result
 
 
 @router.post("/doctor/follow-up")
-async def doctor_follow_up(body: DoctorAIIn, actor=Depends(require_doctor)):
+async def doctor_follow_up(body: DoctorAIIn, actor: Annotated[dict, Depends(require_doctor)]):
     return await _doctor_call("follow_up", body, actor, "Recommend follow-up timing and recall considerations based only on the authorized dental record. Give reasons and uncertainties; do not create an appointment.")
 
 
 @router.post("/doctor/daily-summary")
-async def doctor_daily_summary(actor=Depends(require_doctor)):
+async def doctor_daily_summary(actor: Annotated[dict, Depends(require_doctor)]):
     clinic_id = actor["clinic_id"]
     _limits(actor["id"], clinic_id, "daily_summary")
     store = get_dental_store()
@@ -268,7 +268,7 @@ async def doctor_daily_summary(actor=Depends(require_doctor)):
 
 
 @router.post("/doctor/scan-analysis")
-async def doctor_scan_analysis(body: ScanAIIn, actor=Depends(require_doctor)):
+async def doctor_scan_analysis(body: ScanAIIn, actor: Annotated[dict, Depends(require_doctor)]):
     clinic_id = actor["clinic_id"]
     _limits(actor["id"], clinic_id, "scan_analysis")
     _safe_context(body.patient_id, clinic_id)
@@ -295,7 +295,7 @@ async def doctor_scan_analysis(body: ScanAIIn, actor=Depends(require_doctor)):
 
 
 @router.post("/doctor/approve")
-async def doctor_approve(body: ApprovalIn, actor=Depends(require_doctor)):
+async def doctor_approve(body: ApprovalIn, actor: Annotated[dict, Depends(require_doctor)]):
     clinic_id = actor["clinic_id"]
     _safe_context(body.patient_id, clinic_id)
     approval_id = get_dental_store().save_ai_approval(
@@ -338,7 +338,7 @@ async def _patient_record(actor: dict, patient_id: str | None = None) -> dict[st
 
 
 @router.post("/patient/link")
-async def patient_link(body: PatientLinkIn, actor=Depends(require_patient)):
+async def patient_link(body: PatientLinkIn, actor: Annotated[dict, Depends(require_patient)]):
     patient = get_dental_store().consume_patient_invite(body.invite_code, actor["user_id"])
     if not patient:
         raise HTTPException(403, detail={"message": "Invalid, expired, or already-used clinic invite code", "code": "PATIENT_INVITE_INVALID"})
@@ -346,7 +346,7 @@ async def patient_link(body: PatientLinkIn, actor=Depends(require_patient)):
 
 
 @router.post("/doctor/patients/{patient_id}/invite")
-async def create_patient_invite(patient_id: str, actor=Depends(require_doctor)):
+async def create_patient_invite(patient_id: str, actor: Annotated[dict, Depends(require_doctor)]):
     clinic_id = actor["clinic_id"]
     if not get_dental_store().get_patient(patient_id, clinic_id):
         raise HTTPException(404, "Patient not found")
@@ -355,7 +355,7 @@ async def create_patient_invite(patient_id: str, actor=Depends(require_doctor)):
 
 
 @router.post("/patient/consent")
-async def patient_consent(body: ConsentIn, actor=Depends(require_patient)):
+async def patient_consent(body: ConsentIn, actor: Annotated[dict, Depends(require_patient)]):
     get_dental_store().set_ai_consent(actor["user_id"], bool(body.consent))
     return {"result": {"consent": bool(body.consent)}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
 
@@ -378,7 +378,7 @@ async def _patient_ai(capability: str, actor: dict, message: str, patient_id: st
     if not store.ai_consent(actor["user_id"]):
         raise HTTPException(403, detail={"message": "AI consent is required before first use", "code": "AI_CONSENT_REQUIRED"})
     patient = await _patient_record(actor, patient_id)
-    clinic_id = patient.get("clinic_id") if patient else "patient"
+    clinic_id = str((patient or {}).get("clinic_id") or "patient").strip() or "patient"
     _limits(actor["user_id"], clinic_id, capability)
     if patient:
         safe = _safe_context(patient["id"], clinic_id)
@@ -405,7 +405,7 @@ async def _patient_ai(capability: str, actor: dict, message: str, patient_id: st
 
 
 @router.post("/patient/chat")
-async def patient_chat(body: PatientAIIn, actor=Depends(require_patient)):
+async def patient_chat(body: PatientAIIn, actor: Annotated[dict, Depends(require_patient)]):
     emergency, matched = _triage_emergency(body.message)
     if emergency:
         safe = _result(
@@ -420,7 +420,7 @@ async def patient_chat(body: PatientAIIn, actor=Depends(require_patient)):
 
 
 @router.post("/patient/triage")
-async def patient_triage(body: PatientTriageIn, actor=Depends(require_patient)):
+async def patient_triage(body: PatientTriageIn, actor: Annotated[dict, Depends(require_patient)]):
     emergency, matched = _triage_emergency(body.symptoms)
     if emergency:
         return _result(
@@ -434,30 +434,30 @@ async def patient_triage(body: PatientTriageIn, actor=Depends(require_patient)):
 
 
 @router.post("/patient/treatment-explanation")
-async def patient_treatment_explanation(body: PatientPlanIn, actor=Depends(require_patient)):
+async def patient_treatment_explanation(body: PatientPlanIn, actor: Annotated[dict, Depends(require_patient)]):
     return await _patient_ai("treatment_explanation", actor, body.treatment_plan, body.patient_id, body.language, "Explain the supplied dental treatment plan in simple language, including what each step is for, common questions, and what to confirm with the dentist. Do not change the plan.")
 
 
 @router.post("/patient/aftercare")
-async def patient_aftercare(body: PatientAftercareIn, actor=Depends(require_patient)):
+async def patient_aftercare(body: PatientAftercareIn, actor: Annotated[dict, Depends(require_patient)]):
     return await _patient_ai("aftercare", actor, body.treatment, body.patient_id, body.language, "Give general dental aftercare information for the supplied treatment. Do not prescribe medication or dosage. Tell the patient when to contact the clinic urgently.")
 
 
 @router.get("/patient/history")
-async def patient_history(actor=Depends(require_patient)):
+async def patient_history(actor: Annotated[dict, Depends(require_patient)]):
     patient = await _patient_record(actor)
     rows = get_dental_store().patient_ai_messages(actor["user_id"], patient.get("id") if patient else None)
     return {"result": rows, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
 
 
 @router.delete("/patient/history")
-async def patient_delete_history(actor=Depends(require_patient)):
+async def patient_delete_history(actor: Annotated[dict, Depends(require_patient)]):
     get_dental_store().delete_patient_ai_messages(actor["user_id"])
     return {"result": {"deleted": True}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
 
 
 @router.get("/patient/appointments")
-async def patient_appointments(actor=Depends(require_patient)):
+async def patient_appointments(actor: Annotated[dict, Depends(require_patient)]):
     patient = await _patient_record(actor)
     if not patient:
         return {"result": [], "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
@@ -467,7 +467,7 @@ async def patient_appointments(actor=Depends(require_patient)):
 
 
 @router.get("/patient/chart")
-async def patient_chart(actor=Depends(require_patient)):
+async def patient_chart(actor: Annotated[dict, Depends(require_patient)]):
     patient = await _patient_record(actor)
     if not patient:
         return {"result": [], "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
@@ -477,15 +477,15 @@ async def patient_chart(actor=Depends(require_patient)):
 
 
 @router.post("/patient/device")
-async def patient_device(body: DeviceIn, actor=Depends(require_patient)):
+async def patient_device(body: DeviceIn, actor: Annotated[dict, Depends(require_patient)]):
     patient = await _patient_record(actor, body.patient_id)
-    clinic_id = patient.get("clinic_id") if patient else "patient"
+    clinic_id = str((patient or {}).get("clinic_id") or "patient").strip() or "patient"
     get_dental_store().save_patient_device(actor["user_id"], patient.get("id") if patient else None, clinic_id, body.expo_push_token)
     return {"result": {"registered": True}, "confidence": 1.0, "sources": [], "disclaimers": [DISCLAIMER_PATIENT], "request_id": str(uuid.uuid4())}
 
 
 @router.post("/patient/recall")
-async def patient_recall(actor=Depends(require_patient)):
+async def patient_recall(actor: Annotated[dict, Depends(require_patient)]):
     patient = await _patient_record(actor)
     if not patient:
         return _result({"message": "No linked clinic record yet.", "push_sent": False}, confidence=1.0, sources=[], disclaimer=DISCLAIMER_PATIENT)

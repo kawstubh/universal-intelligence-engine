@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import re
+from collections.abc import Sequence
 from typing import Any
 
 from .contracts import Evidence, IntelligenceRequest, KnowledgeProvider
@@ -21,7 +21,7 @@ class CompositeKnowledgeProvider:
         for provider in self.providers:
             try:
                 results.extend(provider.search(request))
-            except Exception:
+            except (RuntimeError, OSError, TimeoutError, ValueError, ConnectionError):
                 # One provider outage must not take down the whole research pass.
                 continue
         return rank_evidence(results)

@@ -1,6 +1,10 @@
 import pytest
 
-from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from universal_intelligence_engine.contracts import (
+    Evidence,
+    IntelligenceRequest,
+    IntelligenceResponse,
+)
 from universal_intelligence_engine.evaluation import BasicResponseEvaluator
 
 
@@ -39,7 +43,10 @@ def test_request_contract_remains_provider_agnostic():
 
 
 def test_missing_knowledge_provider_fails_closed(monkeypatch):
-    from universal_intelligence_engine.providers import BraveSearchProvider, ProviderNotConfiguredError
+    from universal_intelligence_engine.providers import (
+        BraveSearchProvider,
+        ProviderNotConfiguredError,
+    )
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
     try:
         BraveSearchProvider().search(IntelligenceRequest(goal="test"))
@@ -50,7 +57,10 @@ def test_missing_knowledge_provider_fails_closed(monkeypatch):
 
 
 def test_missing_reasoning_provider_fails_closed(monkeypatch):
-    from universal_intelligence_engine.providers import OpenAIResponsesReasoningProvider, ProviderNotConfiguredError
+    from universal_intelligence_engine.providers import (
+        OpenAIResponsesReasoningProvider,
+        ProviderNotConfiguredError,
+    )
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     try:
@@ -155,6 +165,7 @@ def test_provider_failure_returns_structured_native_fallback(monkeypatch, failur
 
 def test_provider_failure_logs_do_not_leak_canary_data(monkeypatch, caplog):
     import logging
+
     from universal_intelligence_engine import providers
     monkeypatch.setenv("REASONING_PROVIDER", "openai")
     monkeypatch.setenv("REASONING_MODEL", "test-model")
@@ -176,7 +187,6 @@ def test_provider_failure_logs_do_not_leak_canary_data(monkeypatch, caplog):
 
 
 def test_timezone_z_normalization_preserves_timestamp_instant():
-    from datetime import datetime
     timestamp = "2026-10-12T18:30:00Z"
     from universal_intelligence_engine.temporal import _parse_time
     before = _parse_time(timestamp.replace("Z", "+00:00"))
@@ -187,6 +197,7 @@ def test_timezone_z_normalization_preserves_timestamp_instant():
 
 def test_native_provider_failure_returns_static_fallback_without_log_leakage(monkeypatch, caplog):
     import logging
+
     from universal_intelligence_engine import providers
 
     monkeypatch.setenv("REASONING_PROVIDER", "openai")
@@ -213,7 +224,9 @@ def test_native_provider_failure_returns_static_fallback_without_log_leakage(mon
 
 def test_api_provider_exception_message_is_not_logged(monkeypatch, caplog):
     import logging
+
     from fastapi.testclient import TestClient
+
     from universal_intelligence_engine import api
 
     canaries = ("CANARY_API_PATIENT_1842", "CANARY_API_PHONE_5550109", "CANARY_API_SECRET_773")

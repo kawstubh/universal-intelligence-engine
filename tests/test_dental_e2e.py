@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine.api import app
 from universal_intelligence_engine import dental_api
+from universal_intelligence_engine.api import app
 
 
 @pytest.fixture()

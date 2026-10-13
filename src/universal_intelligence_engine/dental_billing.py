@@ -183,8 +183,9 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
     elif event_name in {"payment.failed", "order.failed", "payment_link.failed"}:
         _update_order(order_id, "failed", payment_id)
         current = _membership(clinic_id) if clinic_id else None
-        if current and current.get("status") == "active":
-            _set_membership(clinic_id, current["plan_id"], "past_due", period_end=current.get("current_period_end"))
+        current_plan_id = str((current or {}).get("plan_id") or "").strip()
+        if clinic_id and current and current.get("status") == "active" and current_plan_id:
+            _set_membership(clinic_id, current_plan_id, "past_due", period_end=current.get("current_period_end"))
     elif event_name in {"refund.created", "refund.processed", "payment.refunded"}:
         _update_order(order_id, "refunded", payment_id)
         if clinic_id and plan_id:
@@ -199,9 +200,8 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
     elif event_name in {"subscription.paused"}:
         if clinic_id and plan_id:
             _set_membership(clinic_id, plan_id, "paused", period_end=_membership(clinic_id).get("current_period_end") if _membership(clinic_id) else None)
-    elif event_name in {"subscription.updated", "subscription.plan_changed"}:
-        if clinic_id and plan_id:
-            _plan(plan_id)
-            _set_membership(clinic_id, plan_id, "active", period_end=_membership(clinic_id).get("current_period_end") if _membership(clinic_id) else _period_end())
+    elif event_name in {"subscription.updated", "subscription.plan_changed"} and clinic_id and plan_id:
+        _plan(plan_id)
+        _set_membership(clinic_id, plan_id, "active", period_end=_membership(clinic_id).get("current_period_end") if _membership(clinic_id) else _period_end())
 
     return {"ok": True, "event_id": event_id, "event": event_name, "entitlement_status": _membership(clinic_id).get("status") if clinic_id and _membership(clinic_id) else None}

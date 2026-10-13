@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
-from universal_intelligence_engine.api import app
 
+from universal_intelligence_engine.api import app
 
 PUBLIC_PATHS = {
     "/v1/dental/health",
@@ -16,8 +16,8 @@ def _sample_path(path: str) -> str:
 
 
 def test_no_demo_or_otp_release_auth_symbols():
-    import universal_intelligence_engine.dental_auth as auth
     import universal_intelligence_engine.dental_api as api
+    import universal_intelligence_engine.dental_auth as auth
 
     assert not hasattr(auth, "DEMO_AUTH")
     assert not hasattr(auth, "DEMO_OTP")
@@ -27,7 +27,6 @@ def test_no_demo_or_otp_release_auth_symbols():
 
 
 def test_protected_dental_routes_require_auth_dependency():
-    from universal_intelligence_engine.dental_auth import require_doctor
 
     for route in app.routes:
         if not getattr(route, "path", "").startswith("/v1/dental/"):
@@ -58,7 +57,7 @@ def test_protected_dental_requests_return_401_without_bearer():
 def test_demo_bearer_never_authenticates(monkeypatch):
     monkeypatch.delenv("DENTAL_DEMO_AUTH", raising=False)
     monkeypatch.setenv("DENTAL_SQLITE_PATH", ":memory:")
-    import universal_intelligence_engine.dental_api as dental_api
+    from universal_intelligence_engine import dental_api
     dental_api._store = None
     response = TestClient(app).get(
         "/v1/dental/patients",
