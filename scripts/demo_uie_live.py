@@ -225,6 +225,9 @@ def run_demo(db_path: str | None = None, *, pause: bool = True) -> int:
 
 
 def main() -> int:
+    from m4_scenarios import run_m4_scenarios
+    if run_m4_scenarios() != 0:
+        return 1
     parser = argparse.ArgumentParser(description="Run UIE's local cognitive-stack verification demo.")
     parser.add_argument(
         "--db",
