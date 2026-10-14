@@ -12,6 +12,7 @@ from .contracts import IntelligenceRequest
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
+from .persistent_memory import PersistentMemoryEngine
 from .providers import FreePublicKnowledgeProvider, OpenAIResponsesReasoningProvider
 from .service import IntelligenceService
 
@@ -39,6 +40,9 @@ def build_service() -> IntelligenceService:
         reasoning=reasoning,
         evaluator=BasicResponseEvaluator(),
         learning_store=memory,
+        lesson_memory=PersistentMemoryEngine(
+            os.getenv("UIE_PERSISTENT_MEMORY_PATH", ".data/persistent_memory.sqlite3")
+        ),
     )
     return IntelligenceService(engine)
 

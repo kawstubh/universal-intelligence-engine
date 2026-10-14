@@ -6,6 +6,7 @@ stores lessons only; callers must still apply authorization and safety policy.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import sqlite3
@@ -92,7 +93,7 @@ class PersistentMemoryEngine:
     def validate_lesson(self, lesson_id: str, reviewer_id: str, review_token: str) -> None:
         """Promote a proposal only when a deployment-configured review token matches."""
         expected = os.getenv("UIE_LESSON_REVIEW_TOKEN")
-        if not expected or not review_token or not __import__("hmac").compare_digest(expected, review_token):
+        if not expected or not review_token or not hmac.compare_digest(expected, review_token):
             raise PermissionError("authorized lesson review is not configured or token is invalid")
         if not reviewer_id.strip():
             raise ValueError("reviewer_id is required")
@@ -133,5 +134,5 @@ class PersistentMemoryEngine:
                 item["trigger_pattern"] = triggers
                 item["match_terms"] = score
                 ranked.append((score, item))
-        ranked.sort(key=lambda pair: (-pair[0], pair[1]["updated_at"]), reverse=False)
+        ranked.sort(key=lambda pair: (pair[0], pair[1]["updated_at"]), reverse=True)
         return [item for _, item in ranked[:limit]]

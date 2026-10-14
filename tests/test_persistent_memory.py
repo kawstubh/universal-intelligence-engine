@@ -1,5 +1,8 @@
 import pytest
 
+from universal_intelligence_engine.contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from universal_intelligence_engine.engine import UniversalIntelligenceEngine
+
 from universal_intelligence_engine.persistent_memory import PersistentMemoryEngine
 
 
@@ -61,3 +64,43 @@ def test_confidence_bounds_are_enforced(tmp_path, confidence):
     memory = PersistentMemoryEngine(tmp_path / "memory.sqlite3")
     with pytest.raises(ValueError):
         memory.store_lesson("general", ["trigger"], "Lesson.", "test", confidence=confidence)
+
+
+class _NoKnowledge:
+    def search(self, request):
+        return [Evidence(source="fixture", title="test", retrieved_at="2026-10-14T00:00:00Z", content="Supported fixture evidence.", confidence=0.8)]
+
+
+class _CaptureReasoning:
+    def __init__(self):
+        self.context = None
+
+    def reason(self, request, evidence):
+        self.context = dict(request.context)
+        return IntelligenceResponse(answer="ok", evidence=tuple(evidence), confidence=0.8)
+
+
+def test_engine_only_injects_reviewed_lessons_for_explicit_matching_domain(tmp_path, monkeypatch):
+    monkeypatch.setenv("UIE_LESSON_REVIEW_TOKEN", "test-review-token")
+    memory = PersistentMemoryEngine(tmp_path / "memory.sqlite3")
+    lesson_id = memory.store_lesson(
+        "dental", ["apical abscess", "systemic signs"],
+        "Screen for fever and facial cellulitis before giving advice.", "reviewed_test_fixture",
+    )
+    reasoning = _CaptureReasoning()
+    engine = UniversalIntelligenceEngine(_NoKnowledge(), reasoning, lesson_memory=memory)
+
+    # Proposals must not reach reasoning, even when domain matches.
+    engine.run(IntelligenceRequest(goal="apical abscess systemic signs", context={"domain": "dental"}))
+    assert "uie_reviewed_lessons" not in reasoning.context
+
+    memory.validate_lesson(lesson_id, "authorized-test-reviewer", "test-review-token")
+    result = engine.run(IntelligenceRequest(goal="apical abscess systemic signs", context={"domain": "dental"}))
+    assert reasoning.context["uie_reviewed_lessons"][0]["validation_status"] == "doctor_validated"
+    assert result.metadata["reviewed_lessons_recalled"] == 1
+
+    # No explicit domain or a different domain must not recall dental lessons.
+    engine.run(IntelligenceRequest(goal="apical abscess systemic signs", context={"domain": "general"}))
+    assert "uie_reviewed_lessons" not in reasoning.context
+    engine.run(IntelligenceRequest(goal="apical abscess systemic signs"))
+    assert "uie_reviewed_lessons" not in reasoning.context
