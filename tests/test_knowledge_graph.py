@@ -70,3 +70,34 @@ def test_claim_engine_projects_new_claims_into_graph(tmp_path):
     graph = KnowledgeGraphStore(db).get_entity_subgraph("Source concept", max_hops=1)
     assert len(graph["relations"]) == 1
     assert graph["relations"][0]["target_name"] == "Target concept"
+from universal_intelligence_engine.learning.contradiction import ContradictionEngine
+from universal_intelligence_engine.learning.distiller import DistilledClaim
+from universal_intelligence_engine.learning.query_claims import ClaimQueryService
+
+
+def test_claim_query_returns_connected_graph_with_provenance_and_warnings(tmp_path):
+    memory = ContradictionEngine(tmp_path / "query-graph.sqlite3")
+    memory.process_claim(DistilledClaim("W3C PNG specification", "defines", "portable network graphics",
+                                        None, 0.8, "https://www.w3.org/TR/PNG/", "technology_science"))
+    memory.process_claim(DistilledClaim("portable network graphics", "used_in", "medical imaging systems",
+                                        None, 0.6, "https://www.who.int/example", "health_life_sciences"))
+
+    result = ClaimQueryService(memory=memory).query("W3C PNG specification", max_hops=2)
+
+    graph = result["knowledge_graph"]
+    assert graph["root"]["name"] == "W3C PNG specification"
+    assert {node["name"] for node in graph["nodes"]} >= {
+        "W3C PNG specification", "portable network graphics", "medical imaging systems"
+    }
+    assert any(edge["provenance_url"] == "https://www.w3.org/TR/PNG/" for edge in graph["relations"])
+    assert result["graph_warnings"]
+    assert all(item["warning"] for item in result["graph_warnings"])
+
+
+def test_claim_query_can_disable_graph_for_legacy_consumers(tmp_path):
+    memory = ContradictionEngine(tmp_path / "query-graph-optout.sqlite3")
+    memory.process_claim(DistilledClaim("A concept", "relates_to", "B concept", None, 0.5,
+                                        "https://example.org/a", "general_reference"))
+    result = ClaimQueryService(memory=memory).query("A concept", include_graph=False)
+    assert "knowledge_graph" not in result
+    assert "graph_warnings" not in result
