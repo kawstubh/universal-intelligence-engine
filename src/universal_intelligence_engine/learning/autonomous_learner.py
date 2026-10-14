@@ -7,14 +7,19 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from .contradiction import ContradictionEngine
 from .curiosity_agent import CuriosityAgent
 from .heuristic_memory import HeuristicMemory
 from .query_claims import ClaimQueryService
+from .cognitive_memory import CognitiveMemoryEngine
+from .epistemic_dispatcher import EpistemicDiscoveryDispatcher
+from .temporal_resolver import TemporalResolver
 from ..ingestion.pipeline import CrossDomainIngestionPipeline
 from ..web_knowledge import PublicWebKnowledgeStore
+from ..security.provenance_crypto import append_integrity_event
 
 
 class AutonomousLearner:
@@ -42,11 +47,106 @@ class AutonomousLearner:
         hosts = {(urlparse(url).hostname or "").lower().removeprefix("www.") for url in urls}
         return len({host for host in hosts if host})
 
+    def _drain_epistemic_missions(self, max_entities: int = 2) -> dict:
+        """Harvest at most two queued epistemic missions using only their reviewed seed URLs."""
+        dispatcher = EpistemicDiscoveryDispatcher(
+            self.claim_memory.db_path,
+            seed_path=getattr(self.pipeline, "seed_path", None),
+        )
+        memory = CognitiveMemoryEngine(self.claim_memory.db_path)
+        missions = dispatcher.claim_batch(max_entities)
+        summary = {"missions_claimed": len(missions), "missions": [], "urls_processed": 0, "graph_relations_added": 0}
+        for mission in missions[:2]:
+            urls = list(dict.fromkeys(mission["seed_allowlist"]))[:5]
+            enqueue_results = []
+            for url in urls:
+                try:
+                    enqueue_results.append(self.pipeline.enqueue([url]))
+                except Exception as exc:
+                    enqueue_results.append({"error": type(exc).__name__})
+            try:
+                batch = self.pipeline.run_batch(limit=min(5, len(urls)), urls=urls)
+            except TypeError:
+                batch = self.pipeline.run_batch(limit=min(5, len(urls)))
+            except Exception as exc:
+                batch = {"error": type(exc).__name__, "results": []}
+            relations_added = 0
+            stored_urls = {item.get("url") for item in batch.get("results", []) if item.get("status") == "stored"}
+            stored_urls |= {item.get("canonical_url") for item in batch.get("results", []) if item.get("status") == "stored"}
+            claims = self.claim_memory.get_claims()
+            for claim in claims:
+                if claim.get("provenance_url") not in stored_urls:
+                    continue
+                try:
+                    memory.graph.ingest_claim(claim, claim_id=str(claim.get("id") or "") or None)
+                    relations_added += 1
+                except (ValueError, TypeError):
+                    continue
+            try:
+                memory.graph.sync_existing_claims()
+                resolver = TemporalResolver(memory.graph)
+                # Only explicitly dated, same-subject/same-predicate revisions are
+                # eligible; TemporalResolver itself rejects unsupported supersession.
+                all_claims = self.claim_memory.get_claims()
+                harvested_claims = [claim for claim in all_claims if claim.get("provenance_url") in stored_urls]
+                for newer in harvested_claims:
+                    for older in all_claims:
+                        if older.get("id") == newer.get("id"):
+                            continue
+                        if (str(older.get("subject", "")).casefold() != str(newer.get("subject", "")).casefold()
+                                or str(older.get("predicate", "")).casefold() != str(newer.get("predicate", "")).casefold()):
+                            continue
+                        if str(older.get("object_claim", "")).casefold() == str(newer.get("object_claim", "")).casefold():
+                            continue
+                        resolver.resolve(
+                            older, newer,
+                            older_metadata=str(older.get("title", "")),
+                            newer_metadata=" ".join((str(newer.get("title", "")),
+                                                     str(newer.get("revision_header", "")))),
+                        )
+            except (ValueError, TypeError, OSError, KeyError):
+                pass
+            resolved = relations_added > 0
+            result = {"urls_attempted": len(urls), "enqueue": enqueue_results, "batch": batch,
+                      "graph_relations_added": relations_added, "resolved": resolved}
+            dispatcher.finish(mission["id"], result, resolved=resolved)
+            if resolved:
+                now = datetime.now(timezone.utc).isoformat()
+                with memory._connect() as conn:
+                    rows = conn.execute(
+                        "SELECT id,goal,feedback_json FROM uie_episodes WHERE lower(goal) LIKE ? ORDER BY created_at DESC LIMIT 20",
+                        (f"%{mission['focus_entity'].lower()}%",),
+                    ).fetchall()
+                    for row in rows:
+                        try:
+                            feedback = json.loads(row["feedback_json"])
+                        except (TypeError, json.JSONDecodeError):
+                            feedback = {}
+                        feedback["epistemic_resolution"] = {
+                            "mission_id": mission["id"], "resolved_at": now,
+                            "graph_relations_added": relations_added, "seed_urls": list(stored_urls)[:5],
+                        }
+                        conn.execute("UPDATE uie_episodes SET feedback_json=? WHERE id=?",
+                                     (json.dumps(feedback, sort_keys=True), row["id"]))
+                        append_integrity_event(conn, "episode", row["id"], "EPISTEMIC_DEFICIT_RESOLVED",
+                            {"id": row["id"], "mission_id": mission["id"], "resolved_at": now,
+                             "graph_relations_added": relations_added})
+            summary["urls_processed"] += len(batch.get("results", []))
+            summary["graph_relations_added"] += relations_added
+            summary["missions"].append({"id": mission["id"], "focus_entity": mission["focus_entity"],
+                                        "resolved": resolved, "graph_relations_added": relations_added,
+                                        "processed": len(batch.get("results", []))})
+        return summary
+
     def run_cycle(self, query: str) -> dict:
         started = time.monotonic()
         deadline = started + self.timeout_seconds
         targets = self.curiosity.inspect(query, max_targets=self.MAX_DOMAINS)[:self.MAX_DOMAINS]
-        summary = {"query": query[:300], "targets": targets, "domains_processed": 0, "discovery": [], "ingestion": [], "heuristics": [], "elapsed_seconds": 0.0, "timed_out": False}
+        try:
+            epistemic = self._drain_epistemic_missions(max_entities=2)
+        except Exception as exc:
+            epistemic = {"error": type(exc).__name__, "missions_claimed": 0, "missions": []}
+        summary = {"query": query[:300], "targets": targets, "domains_processed": 0, "discovery": [], "ingestion": [], "heuristics": [], "epistemic_discovery": epistemic, "elapsed_seconds": 0.0, "timed_out": False}
         for target in targets:
             if time.monotonic() >= deadline:
                 summary["timed_out"] = True

@@ -15,6 +15,7 @@ from ..contracts import Evidence, IntelligenceRequest, IntelligenceResponse, Rea
 from ..temporal import detect_contradictions, temporal_assessment
 from .tool_reflexion import ToolReflexionEngine
 from ..learning.deep_reflexion import DeepReflexionEngine
+from ..learning.epistemic_dispatcher import EpistemicDiscoveryDispatcher
 
 
 @dataclass(frozen=True)
@@ -43,13 +44,16 @@ class ProcessRewardEvaluator:
         novelty = 0.15 if evidence.source and evidence.source not in prior_sources else 0.0
         # Reward grounding and relevance; no reward for claims that cannot be tied to evidence.
         score = max(0.0, min(1.0, 0.50 * relevance + 0.30 * confidence + 0.15 * freshness + novelty))
+        # Keep the legacy grounded flag for source-attributed evidence, while the
+        # continuous grounding score distinguishes source labels from verifiable citations.
         grounded = bool(evidence.content.strip() and (evidence.source or evidence.url or evidence.metadata.get("provenance")))
         logical_consistency = 0.0 if not evidence.content.strip() else 1.0
         domain_constraint_adherence = 1.0
         # The evaluator cannot certify clinical advice; it can only enforce explicit safety flags.
         if evidence.metadata.get("unsafe") or evidence.metadata.get("violates_constraints"):
             domain_constraint_adherence = 0.0
-        evidence_grounding = max(0.0, min(1.0, 0.7 * float(grounded) + 0.3 * (1.0 if evidence.url or evidence.metadata.get("provenance") else 0.0)))
+        evidence_grounding = (1.0 if evidence.content.strip() and (evidence.url or evidence.metadata.get("provenance"))
+                              else (0.35 if evidence.content.strip() and evidence.source else 0.0))
         score = max(0.0, min(1.0, score * 0.75 + 0.10 * logical_consistency + 0.10 * evidence_grounding + 0.05 * domain_constraint_adherence))
         return score, {"source": evidence.source, "relevance": round(relevance, 4), "confidence": round(confidence, 4),
                        "freshness": round(freshness, 4), "grounded": grounded, "step_reward": round(score, 4),
@@ -144,6 +148,7 @@ class UIEReasoningCoordinator:
         self.controller = controller or DeliberationController()
         self.reflexion = reflexion or ToolReflexionEngine()
         self.deep_reflexion = deep_reflexion or DeepReflexionEngine()
+        self.epistemic_dispatcher = EpistemicDiscoveryDispatcher(self.deep_reflexion.memory.db_path)
 
     def reason(self, request: IntelligenceRequest, evidence: Sequence[Evidence], provider: ReasoningProvider) -> IntelligenceResponse:
         safe_context = dict(request.context)
@@ -165,6 +170,26 @@ class UIEReasoningCoordinator:
         metadata["reasoning_mode"] = "test_time_deliberation" if search["enabled"] else "direct"
         metadata["procedural_heuristics_applied"] = len(procedural_rules)
         selected_score = search.get("selected_score")
+        selected_signals = next((item.get("signals", {}) for item in search.get("trajectories", [])
+                                 if item.get("trajectory_id") == search.get("selected_trajectory_id")), {})
+        grounding = float(selected_signals.get("evidence_grounding", 0.0) or 0.0)
+        focus_entity = self.epistemic_dispatcher.focus_entity(request.goal, safe_context)
+        graph_void = bool(safe_context.get("knowledge_graph_void") or safe_context.get("missing_graph_relations"))
+        if search.get("enabled") and not graph_void:
+            try:
+                subgraph = self.deep_reflexion.memory.graph.get_entity_subgraph(focus_entity, max_hops=1)
+                graph_void = not bool(subgraph.get("relations"))
+            except (AttributeError, OSError, ValueError):
+                graph_void = False
+        if search.get("enabled") and (grounding < 0.60 or graph_void):
+            try:
+                dispatch = self.epistemic_dispatcher.enqueue_void(
+                    query_text=request.goal, context={**safe_context, "focus_entity": focus_entity},
+                    reason="low_evidence_grounding" if grounding < 0.60 else "missing_graph_relations")
+                metadata["epistemic_discovery"] = {**dispatch, "evidence_grounding": grounding,
+                    "graph_void_detected": graph_void, "non_blocking": True}
+            except (OSError, ValueError, TypeError):
+                metadata["epistemic_discovery"] = {"enqueued": False, "reason": "dispatch_error"}
         if search.get("enabled") and selected_score is not None and (selected_score < 0.45 or not search.get("selected_verified", False)):
             domain = selected_domain if isinstance(selected_domain, str) and selected_domain.strip() else "general_reference"
             reflection = self.deep_reflexion.reflect(goal=request.goal,

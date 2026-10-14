@@ -15,7 +15,7 @@ __all__ = [
     "ClaimDistiller", "DistilledClaim", "distill_claims",
     "ContradictionEngine", "ClaimQueryService", "query_claims",
     "CuriosityAgent", "HeuristicMemory", "AutonomousLearner", "SemanticMatcher",
-    "KnowledgeGraphStore", "ReflexiveGraphValidator", "TemporalResolver", "CuriosityScheduler",
+    "KnowledgeGraphStore", "ReflexiveGraphValidator", "TemporalResolver", "CuriosityScheduler", "EpistemicDiscoveryDispatcher",
 ]
 
 from .temporal_resolver import TemporalResolver
@@ -23,3 +23,5 @@ from .scheduler import CuriosityScheduler
 
 from .cognitive_memory import CognitiveMemoryEngine
 from .deep_reflexion import DeepReflexionEngine
+
+from .epistemic_dispatcher import EpistemicDiscoveryDispatcher

@@ -145,10 +145,21 @@ class CrossDomainIngestionPipeline:
                 added += conn.execute("INSERT OR IGNORE INTO ingestion_queue(url,category) VALUES (?,?)", (url, category)).rowcount
         return {"sources_checked": checked, "discovered_candidates": len(discovered), "rejected_candidates": rejected, "queued_new": added, "queue": self.stats()}
 
-    def run_batch(self, limit: int = 5) -> dict:
+    def run_batch(self, limit: int = 5, urls: list[str] | None = None) -> dict:
         limit = max(1, min(int(limit), 10))
         with self._connect() as conn:
-            rows = conn.execute("SELECT url,category FROM ingestion_queue WHERE status='queued' ORDER BY rowid LIMIT ?", (limit,)).fetchall()
+            if urls is not None:
+                safe_urls = list(dict.fromkeys(urls))[:limit]
+                if not safe_urls:
+                    rows = []
+                else:
+                    placeholders = ",".join("?" for _ in safe_urls)
+                    rows = conn.execute(
+                        f"SELECT url,category FROM ingestion_queue WHERE status='queued' AND url IN ({placeholders}) ORDER BY rowid LIMIT ?",
+                        (*safe_urls, limit),
+                    ).fetchall()
+            else:
+                rows = conn.execute("SELECT url,category FROM ingestion_queue WHERE status='queued' ORDER BY rowid LIMIT ?", (limit,)).fetchall()
         results = []
         for row in rows:
             url = row["url"]
