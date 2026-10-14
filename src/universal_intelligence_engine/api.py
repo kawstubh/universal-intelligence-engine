@@ -19,11 +19,10 @@ from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
 from .providers import (
-    BraveSearchProvider,
+    FreePublicKnowledgeProvider,
     OpenAIResponsesReasoningProvider,
     ProviderNotConfiguredError,
     ProviderRateLimitError,
-    TavilySearchProvider,
 )
 from .reasoning import NativeReasoningProvider
 from .service import IntelligenceService
@@ -38,12 +37,8 @@ class IntelligenceRunBody(BaseModel):
 
 
 def build_service() -> IntelligenceService:
-    knowledge: KnowledgeProvider
-    if os.getenv("BRAVE_SEARCH_API_KEY") and not os.getenv("TAVILY_API_KEY"):
-        knowledge = BraveSearchProvider()
-    else:
-        # Tavily's public keyless mode keeps knowledge available without a paid key.
-        knowledge = TavilySearchProvider()
+    # Public reference and biomedical APIs require no paid search subscription or key.
+    knowledge: KnowledgeProvider = FreePublicKnowledgeProvider()
     reasoning = (
         OpenAIResponsesReasoningProvider()
         if os.getenv("OPENAI_API_KEY")
@@ -135,13 +130,9 @@ def health() -> dict[str, Any]:
         "providers": {
             "knowledge": True,
             "reasoning": True,
-            "knowledge_provider": (
-                "tavily-search"
-                if os.getenv("TAVILY_API_KEY")
-                else "brave-search"
-                if os.getenv("BRAVE_SEARCH_API_KEY")
-                else "tavily-search-keyless"
-            ),
+            "knowledge_provider": "wikipedia+europe-pmc-public-api",
+            "knowledge_mode": "best-effort-public-sources",
+            "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
             "reasoning_provider": (
                 "openai-responses" if os.getenv("OPENAI_API_KEY") else "native"
             ),

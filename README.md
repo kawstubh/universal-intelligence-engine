@@ -71,13 +71,13 @@ POST /v1/dental/patients/{patient_id}/chart
 POST /v1/dental/intelligence/run
 ```
 
-Production secrets stay server-side. Never put `SUPABASE_SERVICE_ROLE_KEY`, `UIE_API_KEY`, `OPENAI_API_KEY`, `TAVILY_API_KEY`, or `BRAVE_SEARCH_API_KEY` in the mobile app.
+Production secrets stay server-side. Never put `SUPABASE_SERVICE_ROLE_KEY`, `UIE_API_KEY`, or `OPENAI_API_KEY` in the mobile app.
 
-## Live providers
+## Knowledge and reasoning providers
 
-- **TavilySearchProvider**: live web research; defaults to Tavily's rate-limited keyless mode (no account/key required), with optional `TAVILY_API_KEY` for the free tier
-- **BraveSearchProvider**: optional live web research using `BRAVE_SEARCH_API_KEY`
-- **OpenAIResponsesReasoningProvider**: reasoning using `OPENAI_API_KEY` and `OPENAI_MODEL`
+- **FreePublicKnowledgeProvider**: keyless, best-effort retrieval from Wikipedia's public API; medical and dental queries also search Europe PMC's public biomedical literature API.
+- These sources do not require a paid search subscription or API key. They are not a replacement for broad web search; availability and evidence quality vary by query, and the engine must not invent evidence when results are empty.
+- **OpenAIResponsesReasoningProvider**: optional reasoning using `OPENAI_API_KEY` and `OPENAI_MODEL`; native reasoning remains the no-key fallback.
 
 No credentials are stored in source control.
 
@@ -121,7 +121,6 @@ Required production backend values include:
 - `UIE_API_URL`
 - `UIE_API_KEY` — server only
 - `OPENAI_API_KEY` — server only
-- `TAVILY_API_KEY` — preferred free-tier web search credential, server only (or optional `BRAVE_SEARCH_API_KEY`)
 
 ## Dental authentication
 
