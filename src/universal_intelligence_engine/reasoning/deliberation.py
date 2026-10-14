@@ -16,6 +16,7 @@ from ..temporal import detect_contradictions, temporal_assessment
 from .tool_reflexion import ToolReflexionEngine
 from ..learning.deep_reflexion import DeepReflexionEngine
 from ..learning.epistemic_dispatcher import EpistemicDiscoveryDispatcher
+from .symbolic_verifier import verify_numeric_claims
 
 
 @dataclass(frozen=True)
@@ -52,13 +53,19 @@ class ProcessRewardEvaluator:
         # The evaluator cannot certify clinical advice; it can only enforce explicit safety flags.
         if evidence.metadata.get("unsafe") or evidence.metadata.get("violates_constraints"):
             domain_constraint_adherence = 0.0
+        numeric_findings = verify_numeric_claims(evidence.content)
+        if numeric_findings:
+            # Deterministic arithmetic contradictions cannot be treated as verified evidence.
+            domain_constraint_adherence = 0.0
         evidence_grounding = (1.0 if evidence.content.strip() and (evidence.url or evidence.metadata.get("provenance"))
                               else (0.35 if evidence.content.strip() and evidence.source else 0.0))
         score = max(0.0, min(1.0, score * 0.75 + 0.10 * logical_consistency + 0.10 * evidence_grounding + 0.05 * domain_constraint_adherence))
         return score, {"source": evidence.source, "relevance": round(relevance, 4), "confidence": round(confidence, 4),
                        "freshness": round(freshness, 4), "grounded": grounded, "step_reward": round(score, 4),
                        "logical_consistency": logical_consistency, "evidence_grounding": round(evidence_grounding, 4),
-                       "domain_constraint_adherence": domain_constraint_adherence}
+                       "domain_constraint_adherence": domain_constraint_adherence,
+                       "symbolic_numeric_findings": numeric_findings,
+                       "symbolic_numeric_valid": not numeric_findings}
 
     def score_trajectory(self, goal: str, path: Sequence[Evidence]) -> tuple[float, list[dict], dict]:
         steps = []

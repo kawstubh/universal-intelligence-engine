@@ -6,7 +6,8 @@ free-form hidden reasoning; each step exposes auditable PRM dimensions.
 from .deliberation import DeliberationBudget, DeliberationController, ProcessRewardEvaluator
 
 PRMDeliberationEngine = DeliberationController
+PRMDeliberationController = DeliberationController
 StepLevelProcessRewardModel = ProcessRewardEvaluator
 
 __all__ = ["DeliberationBudget", "DeliberationController", "ProcessRewardEvaluator",
-           "PRMDeliberationEngine", "StepLevelProcessRewardModel"]
+           "PRMDeliberationEngine", "PRMDeliberationController", "StepLevelProcessRewardModel"]

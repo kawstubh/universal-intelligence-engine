@@ -21,6 +21,7 @@ from urllib.request import Request
 from .ingestion.security import UnsafeTargetError, safe_urlopen, validate_outbound_url
 
 from .contracts import Evidence
+from .security.adversarial_filter import sanitize_untrusted_text
 
 # A broad, curated public-source seed allowlist spanning many disciplines.
 # Extend through reviewed configuration; do not treat domains as equally authoritative.
@@ -204,6 +205,8 @@ class PublicWebKnowledgeStore:
         title = re.sub(r"\s+", " ", " ".join(parser.title)).strip()[:500] or final_host
         content = re.sub(r"[ \t]+", " ", "".join(parser.parts))
         content = re.sub(r"\n\s*\n+", "\n\n", content).strip()[:MAX_TEXT]
+        filtered = sanitize_untrusted_text(content, ledger_db_path=self.db_path, source=final_url)
+        content = filtered.text
         if len(content) < 200:
             return {"url": original_url, "status": "skipped_insufficient_text"}
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -218,7 +221,8 @@ class PublicWebKnowledgeStore:
                 content_type=excluded.content_type,source_domain=excluded.source_domain""",
                 (original_url, final_url, title, content, digest, now, status, content_type, final_host))
         return {"url": original_url, "status": "stored", "title": title,
-                "characters": len(content), "sha256": digest, "fetched_at": now}
+                "characters": len(content), "sha256": digest, "fetched_at": now,
+                "adversarial_content_flagged": filtered.flagged}
 
     def get_document(self, url: str) -> dict | None:
         """Return stored extracted text and provenance for one exact queued URL."""
