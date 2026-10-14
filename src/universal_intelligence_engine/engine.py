@@ -49,6 +49,7 @@ class UniversalIntelligenceEngine:
         if recalled_lessons:
             safe_context["uie_reviewed_lessons"] = [
                 {
+                    "id": item["id"],
                     "lesson_text": item["lesson_text"],
                     "domain": item["domain"],
                     "validation_status": item["validation_status"],
@@ -94,6 +95,7 @@ class UniversalIntelligenceEngine:
             "decision_signals": decision.signals,
             "decision_trace": list(decision.trace),
             "reviewed_lessons_recalled": len(recalled_lessons),
+            "applied_lesson_ids": [item["id"] for item in recalled_lessons],
         })
         if evaluation is not None:
             metadata["evaluation"] = evaluation
