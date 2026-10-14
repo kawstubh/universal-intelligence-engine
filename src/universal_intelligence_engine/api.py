@@ -15,6 +15,7 @@ from .memory import LearningMemory
 from .persistent_memory import PersistentMemoryEngine
 from .providers import FreePublicKnowledgeProvider, OpenAIResponsesReasoningProvider
 from .web_knowledge import PublicWebKnowledgeStore
+from .ingestion.pipeline import CrossDomainIngestionPipeline
 from .service import IntelligenceService
 
 
@@ -137,6 +138,37 @@ def knowledge_stats(authorization: str | None = Header(default=None)) -> dict[st
             "mode": "bounded-public-web-harvesting",
             "limitations": ["approved-domain allowlist", "robots.txt required",
                             "HTML text extraction", "lexical retrieval; no model-weight training"]}
+
+
+@app.post("/v1/knowledge/queue/seed")
+def seed_knowledge_queue(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3"))
+    pipeline = CrossDomainIngestionPipeline(store, os.getenv("UIE_INGESTION_QUEUE_PATH", ".data/ingestion_queue.sqlite3"))
+    return {"status": "ok", **pipeline.seed(), "queue": pipeline.stats()}
+
+
+@app.post("/v1/knowledge/queue/discover")
+def discover_knowledge_queue(
+    max_sources: int = 3,
+    max_urls_per_source: int = 20,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3"))
+    pipeline = CrossDomainIngestionPipeline(store, os.getenv("UIE_INGESTION_QUEUE_PATH", ".data/ingestion_queue.sqlite3"))
+    return {"status": "ok", **pipeline.discover(max_sources, max_urls_per_source)}
+
+
+@app.post("/v1/knowledge/queue/run")
+def run_knowledge_queue(
+    limit: int = 5,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3"))
+    pipeline = CrossDomainIngestionPipeline(store, os.getenv("UIE_INGESTION_QUEUE_PATH", ".data/ingestion_queue.sqlite3"))
+    return {"status": "ok", **pipeline.run_batch(limit)}
 
 
 @app.post("/v1/knowledge/harvest")

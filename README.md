@@ -179,3 +179,13 @@ default ephemeral filesystem is not production-durable. Before production use,
 configure a persistent disk or move this corpus to a dedicated PostgreSQL/vector
 store and implement a scheduled, rate-limited discovery pipeline with monitoring,
 retention, source licensing, and content-quality controls.
+
+### Bounded cross-domain discovery queue
+
+The initial seven-category seed catalog is in `src/universal_intelligence_engine/config/seeds.json`. The authenticated queue endpoints allow an operator to seed the queue, discover a bounded number of approved URLs from sitemap/RSS/Atom-style XML sources, and process a small batch at a time:
+
+- `POST /v1/knowledge/queue/seed`
+- `POST /v1/knowledge/queue/discover?max_sources=3&max_urls_per_source=20`
+- `POST /v1/knowledge/queue/run?limit=5`
+
+The queue deduplicates URLs and tags each queued item with a category. Each discovery/run call is bounded; this is **operator-triggered**, not a background scheduler. Sitemap/feed access also checks the source allowlist and robots.txt; discovered page URLs must independently pass the allowlist. The worker uses the existing corpus fetch policy and does not write scraped text into validated lesson memory. Seed endpoints and discovery do not mean every listed source is available or that any pages have been harvested yet. Configure durable storage and a real scheduler only after staging validation.
