@@ -75,6 +75,44 @@ class HeuristicMemory:
                 conn.execute("UPDATE heuristic_rules SET prev_hash=?,record_hash=? WHERE id=?",(previous,digest,result["id"]))
         return result
 
+
+    def store_constraint(self, *, domain: str, subject: str, predicate: str,
+                         rule_text: str, provenance_urls: list[str] | None = None,
+                         confidence: float = 0.65, rule_type: str = "graph_constraint") -> dict:
+        """Persist an idempotent negative constraint without requiring corroboration."""
+        urls = list(dict.fromkeys(url for url in (provenance_urls or []) if url))
+        confidence = min(0.75, max(0.0, float(confidence)))
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM heuristic_rules WHERE domain=? AND subject=? AND predicate=? AND rule_type=?",
+                (domain, subject, predicate, rule_type),
+            ).fetchone()
+            if row:
+                merged_urls = list(dict.fromkeys(json.loads(row["provenance_urls"]) + urls))
+                confidence = min(0.75, max(confidence, float(row["confidence"])))
+                conn.execute(
+                    "UPDATE heuristic_rules SET rule_text=?,confidence=?,provenance_urls=?,updated_at=? WHERE id=?",
+                    (rule_text, confidence, json.dumps(merged_urls), now, row["id"]),
+                )
+                rule_id, action = row["id"], "updated"
+            else:
+                rule_id, action = str(uuid.uuid4()), "inserted"
+                conn.execute(
+                    "INSERT INTO heuristic_rules(id,domain,subject,predicate,rule_text,confidence,provenance_urls,rule_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (rule_id, domain, subject, predicate, rule_text, confidence, json.dumps(urls), rule_type, now, now),
+                )
+            item = dict(conn.execute("SELECT * FROM heuristic_rules WHERE id=?", (rule_id,)).fetchone())
+            payload = {k: item.get(k) for k in ("id","domain","subject","predicate","rule_text","confidence","provenance_urls","rule_type","created_at","updated_at")}
+            head = conn.execute("SELECT record_hash FROM memory_chain ORDER BY sequence DESC LIMIT 1").fetchone()
+            previous = head["record_hash"] if head else GENESIS_HASH
+            wrapped = {"record_type":"heuristic", "record_id":rule_id, "payload":payload}
+            digest = calculate_record_hash(wrapped, previous)
+            conn.execute("INSERT INTO memory_chain(record_type,record_id,payload_json,prev_hash,record_hash,created_at) VALUES(?,?,?,?,?,?)",
+                         ("heuristic", rule_id, json.dumps(wrapped, sort_keys=True, separators=(",",":"), ensure_ascii=False), previous, digest, now))
+            conn.execute("UPDATE heuristic_rules SET prev_hash=?,record_hash=? WHERE id=?", (previous, digest, rule_id))
+        return {"stored": True, "id": rule_id, "confidence": confidence, "action": action, "rule_type": rule_type}
+
     def get_rules(self, domain: str | None = None) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM heuristic_rules WHERE (? IS NULL OR domain=?) ORDER BY updated_at DESC", (domain, domain)).fetchall()

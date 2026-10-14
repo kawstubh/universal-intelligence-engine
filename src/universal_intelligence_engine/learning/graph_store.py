@@ -9,6 +9,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 def _now() -> str:
@@ -131,7 +132,8 @@ class KnowledgeGraphStore:
         domain = str(get("domain", "general_reference") or "general_reference")
         provenance = str(get("provenance_url", "") or "")
         status = str(get("status", "unverified_claim") or "unverified_claim")
-        confidence = min(1.0, max(0.0, float(get("confidence", 0.0))))
+        # Automated public-web claims are provisional: never let a graph edge exceed 0.75.
+        confidence = min(0.75, max(0.0, float(get("confidence", 0.0))))
         now = _now()
         with self._connect() as conn:
             source_id = self._entity(conn, subject, domain, subject_type)
@@ -142,6 +144,19 @@ class KnowledgeGraphStore:
                      AND status NOT IN ('superseded_temporal','rejected')""",
                 (source_id, predicate, target_id),
             ).fetchall()
+            matching = conn.execute(
+                """SELECT * FROM uie_relations WHERE source_entity_id=? AND lower(predicate)=lower(?)
+                   AND target_entity_id=? AND status NOT IN ('superseded_temporal','rejected')""",
+                (source_id, predicate, target_id),
+            ).fetchall()
+            incoming_host = (urlparse(provenance).hostname or "").lower().removeprefix("www.")
+            for old_edge in matching:
+                old_host = (urlparse(old_edge["provenance_url"]).hostname or "").lower().removeprefix("www.")
+                if incoming_host and old_host and incoming_host != old_host:
+                    # Asymptotic boost approaches, but never exceeds, the public-web cap.
+                    boosted = min(0.75, float(old_edge["confidence"]) + 0.25 * (0.75 - float(old_edge["confidence"])))
+                    conn.execute("UPDATE uie_relations SET confidence=?,updated_at=? WHERE id=?",
+                                 (boosted, now, old_edge["id"]))
             relation_id = str(uuid.uuid4())
             conn.execute(
                 """INSERT INTO uie_relations(id,source_entity_id,target_entity_id,predicate,confidence,

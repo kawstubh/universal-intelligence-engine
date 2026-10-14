@@ -8,6 +8,7 @@ from typing import Any
 from .contradiction import ContradictionEngine
 from .semantic_matcher import SemanticMatcher
 from .graph_store import KnowledgeGraphStore
+from .graph_reflexion import ReflexiveGraphValidator
 
 
 class ClaimQueryService:
@@ -61,12 +62,15 @@ class ClaimQueryService:
                     })
             response["knowledge_graph"] = graph
             response["graph_warnings"] = graph_warnings
+            reflexion = ReflexiveGraphValidator(self.memory.db_path, learner=self.learner)
+            response["graph_reflexion"] = reflexion.inspect(subject, graph, claims=all_claims)
         if trigger_learning and subject:
             if self.learner is None:
                 from .autonomous_learner import AutonomousLearner
                 self.learner = AutonomousLearner(claim_memory=self.memory)
             unresolved = not claims or bool(warnings)
-            if unresolved:
+            already_dispatched = bool(response.get("graph_reflexion", {}).get("discovery", {}).get("scheduled"))
+            if unresolved and not already_dispatched:
                 response["learning_trigger"] = self.learner.trigger_background(subject)
             else:
                 response["learning_trigger"] = {"scheduled": False, "status": "knowledge_has_no_flagged_claims"}
