@@ -14,6 +14,7 @@ from typing import Sequence
 from ..contracts import Evidence, IntelligenceRequest, IntelligenceResponse, ReasoningProvider
 from ..temporal import detect_contradictions, temporal_assessment
 from .tool_reflexion import ToolReflexionEngine
+from ..learning.deep_reflexion import DeepReflexionEngine
 
 
 @dataclass(frozen=True)
@@ -42,8 +43,18 @@ class ProcessRewardEvaluator:
         novelty = 0.15 if evidence.source and evidence.source not in prior_sources else 0.0
         # Reward grounding and relevance; no reward for claims that cannot be tied to evidence.
         score = max(0.0, min(1.0, 0.50 * relevance + 0.30 * confidence + 0.15 * freshness + novelty))
+        grounded = bool(evidence.content.strip() and (evidence.source or evidence.url or evidence.metadata.get("provenance")))
+        logical_consistency = 0.0 if not evidence.content.strip() else 1.0
+        domain_constraint_adherence = 1.0
+        # The evaluator cannot certify clinical advice; it can only enforce explicit safety flags.
+        if evidence.metadata.get("unsafe") or evidence.metadata.get("violates_constraints"):
+            domain_constraint_adherence = 0.0
+        evidence_grounding = max(0.0, min(1.0, 0.7 * float(grounded) + 0.3 * (1.0 if evidence.url or evidence.metadata.get("provenance") else 0.0)))
+        score = max(0.0, min(1.0, score * 0.75 + 0.10 * logical_consistency + 0.10 * evidence_grounding + 0.05 * domain_constraint_adherence))
         return score, {"source": evidence.source, "relevance": round(relevance, 4), "confidence": round(confidence, 4),
-                       "freshness": round(freshness, 4), "grounded": bool(evidence.content.strip()), "step_reward": round(score, 4)}
+                       "freshness": round(freshness, 4), "grounded": grounded, "step_reward": round(score, 4),
+                       "logical_consistency": logical_consistency, "evidence_grounding": round(evidence_grounding, 4),
+                       "domain_constraint_adherence": domain_constraint_adherence}
 
     def score_trajectory(self, goal: str, path: Sequence[Evidence]) -> tuple[float, list[dict], dict]:
         steps = []
@@ -63,7 +74,10 @@ class ProcessRewardEvaluator:
         score = max(0.0, min(1.0, 0.62 * mean_reward + 0.23 * coverage + 0.15 * diversity - penalty))
         return score, steps, {"mean_step_reward": round(mean_reward, 4), "goal_coverage": round(coverage, 4),
                               "source_diversity": round(diversity, 4), "contradictions": contradictions,
-                              "contradiction_penalty": round(penalty, 4), "verified": bool(path) and all(s["grounded"] for s in steps) and contradictions == 0}
+                              "contradiction_penalty": round(penalty, 4), "verified": bool(path) and all(s["grounded"] and s["domain_constraint_adherence"] == 1.0 for s in steps) and contradictions == 0,
+                              "logical_consistency": round(sum(s["logical_consistency"] for s in steps) / max(1, len(steps)), 4),
+                              "evidence_grounding": round(sum(s["evidence_grounding"] for s in steps) / max(1, len(steps)), 4),
+                              "domain_constraint_adherence": round(sum(s["domain_constraint_adherence"] for s in steps) / max(1, len(steps)), 4)}
 
 
 class DeliberationController:
@@ -76,7 +90,13 @@ class DeliberationController:
 
     def budget(self, request: IntelligenceRequest, evidence: Sequence[Evidence]) -> DeliberationBudget:
         goal = request.goal.strip()
-        conflicts = len(detect_contradictions(evidence))
+        evidence_conflicts = len(detect_contradictions(evidence))
+        graph_conflicts = request.context.get("graph_conflicts", request.context.get("graph_contradictions", 0))
+        try:
+            graph_conflicts = len(graph_conflicts) if isinstance(graph_conflicts, (list, tuple, set)) else max(0, int(graph_conflicts))
+        except (TypeError, ValueError):
+            graph_conflicts = 0
+        conflicts = evidence_conflicts + graph_conflicts
         words = ProcessRewardEvaluator.terms(goal)
         explicit_complexity = any(term in goal.lower() for term in ("compare", "versus", "vs", "why", "trade-off", "tradeoff", "across", "conflict", "contradict", "step-by-step", "multi-step"))
         cross_domain = len({str(e.metadata.get("domain", "")) for e in evidence if e.metadata.get("domain")}) > 1
@@ -120,14 +140,17 @@ class DeliberationController:
 class UIEReasoningCoordinator:
     """Coordinate bounded deliberation and final synthesis through a pluggable provider."""
 
-    def __init__(self, controller: DeliberationController | None = None, reflexion: ToolReflexionEngine | None = None):
+    def __init__(self, controller: DeliberationController | None = None, reflexion: ToolReflexionEngine | None = None, deep_reflexion: DeepReflexionEngine | None = None):
         self.controller = controller or DeliberationController()
         self.reflexion = reflexion or ToolReflexionEngine()
+        self.deep_reflexion = deep_reflexion or DeepReflexionEngine()
 
     def reason(self, request: IntelligenceRequest, evidence: Sequence[Evidence], provider: ReasoningProvider) -> IntelligenceResponse:
         safe_context = dict(request.context)
         selected_domain = safe_context.get("domain")
         procedural_rules = self.reflexion.applicable_rules(selected_domain if isinstance(selected_domain, str) else None)
+        procedural_rules.extend(self.deep_reflexion.active_heuristics(selected_domain if isinstance(selected_domain, str) else None))
+        procedural_rules = procedural_rules[:12]
         if procedural_rules:
             safe_context["uie_procedural_heuristics"] = procedural_rules
             request = IntelligenceRequest(goal=request.goal, context=safe_context, locale=request.locale,
@@ -141,5 +164,23 @@ class UIEReasoningCoordinator:
         metadata["deliberation"]["selected_evidence_count"] = len(selected)
         metadata["reasoning_mode"] = "test_time_deliberation" if search["enabled"] else "direct"
         metadata["procedural_heuristics_applied"] = len(procedural_rules)
+        selected_score = search.get("selected_score")
+        if search.get("enabled") and selected_score is not None and (selected_score < 0.45 or not search.get("selected_verified", False)):
+            domain = selected_domain if isinstance(selected_domain, str) and selected_domain.strip() else "general_reference"
+            reflection = self.deep_reflexion.reflect(goal=request.goal,
+                failure="PRM trajectory fell below acceptance threshold or failed grounding/consistency checks",
+                domain=domain, evidence=list(selected))
+            metadata["deep_reflexion"] = reflection
+        try:
+            episode = self.deep_reflexion.memory.record_episode(
+                goal=request.goal, domain=selected_domain if isinstance(selected_domain, str) else None,
+                trace={"reasoning_mode": metadata["reasoning_mode"], "trajectory_count": search.get("trajectory_count", 0),
+                       "selection_reason": search.get("selection_reason"), "input_evidence_count": len(evidence)},
+                trajectory_scores=search.get("trajectories", []),
+                chosen_path_index=search.get("selected_trajectory_id"),
+                feedback={"selected_score": selected_score, "selected_verified": search.get("selected_verified", False)})
+            metadata["episode_id"] = episode["id"]
+        except (OSError, ValueError, TypeError):
+            metadata["episode_persisted"] = False
         return IntelligenceResponse(answer=response.answer, evidence=response.evidence or selected, actions=response.actions,
                                     confidence=response.confidence, metadata=metadata)

@@ -11,6 +11,7 @@ from .graph_store import KnowledgeGraphStore
 from .graph_reflexion import ReflexiveGraphValidator
 
 __all__ = [
+    "CognitiveMemoryEngine", "DeepReflexionEngine",
     "ClaimDistiller", "DistilledClaim", "distill_claims",
     "ContradictionEngine", "ClaimQueryService", "query_claims",
     "CuriosityAgent", "HeuristicMemory", "AutonomousLearner", "SemanticMatcher",
@@ -19,3 +20,6 @@ __all__ = [
 
 from .temporal_resolver import TemporalResolver
 from .scheduler import CuriosityScheduler
+
+from .cognitive_memory import CognitiveMemoryEngine
+from .deep_reflexion import DeepReflexionEngine

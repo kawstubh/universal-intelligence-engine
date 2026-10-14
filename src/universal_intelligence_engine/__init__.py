@@ -14,7 +14,7 @@ from .memory import LearningEvent, LearningMemory
 from .planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
 from .provenance import ProvenanceRecord
 from .providers import FreePublicKnowledgeProvider, OpenAIResponsesReasoningProvider
-from .reasoning import DeliberationBudget, DeliberationController, ProcessRewardEvaluator, UIEReasoningCoordinator, ToolReflexionEngine, NativeReasoningProvider
+from .reasoning import DeliberationBudget, DeliberationController, ProcessRewardEvaluator, UIEReasoningCoordinator, ToolReflexionEngine, PRMDeliberationEngine, StepLevelProcessRewardModel, NativeReasoningProvider
 from .runtime import RuntimeEvent, SenseActRuntime
 from .service import IntelligenceService
 
@@ -30,12 +30,16 @@ __all__ = [
     "BasicResponseEvaluator",
     "ChangeProposal",
     "CompositeKnowledgeProvider",
+    "CognitiveMemoryEngine",
+    "DeepReflexionEngine",
     "Evidence",
     "DeliberationBudget",
     "DeliberationController",
     "ProcessRewardEvaluator",
     "UIEReasoningCoordinator",
     "ToolReflexionEngine",
+    "PRMDeliberationEngine",
+    "StepLevelProcessRewardModel",
     "FreePublicKnowledgeProvider",
     "GovernanceError",
     "HttpHand",
@@ -62,3 +66,6 @@ __all__ = [
     "topological_steps",
     "validate_plan",
 ]
+
+from .learning.cognitive_memory import CognitiveMemoryEngine
+from .learning.deep_reflexion import DeepReflexionEngine
