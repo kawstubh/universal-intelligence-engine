@@ -37,13 +37,16 @@ class UniversalIntelligenceEngine:
         # clinical/domain scope from untrusted free text. Only reviewed lessons
         # are injected into the separate, provenance-labelled context field.
         recalled_lessons = []
-        domain = request.context.get("domain")
+        # Reserve this namespace for engine-generated data; clients cannot forge
+        # trusted review metadata by sending the same context key themselves.
+        safe_context = dict(request.context)
+        safe_context.pop("uie_reviewed_lessons", None)
+        domain = safe_context.get("domain")
         if self.lesson_memory is not None and isinstance(domain, str) and domain.strip():
             recalled_lessons = self.lesson_memory.recall_lessons(
                 domain=domain, query=request.goal, require_validated_only=True, limit=5
             )
         if recalled_lessons:
-            safe_context = dict(request.context)
             safe_context["uie_reviewed_lessons"] = [
                 {
                     "lesson_text": item["lesson_text"],
@@ -55,6 +58,7 @@ class UniversalIntelligenceEngine:
                 }
                 for item in recalled_lessons
             ]
+        if safe_context != dict(request.context):
             request = IntelligenceRequest(
                 goal=request.goal, context=safe_context, locale=request.locale,
                 language=request.language, constraints=request.constraints,
