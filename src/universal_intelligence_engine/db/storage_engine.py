@@ -70,6 +70,29 @@ class StorageEngine:
         async with self._pool.acquire() as conn: return list(await conn.fetch(_pg_sql(sql),*params))
     async def fetchone(self,sql,params=()):
         rows=await self.fetchall(sql,params); return rows[0] if rows else None
+    async def initialize_schema(self):
+        """Create the current schema and safely upgrade legacy v1 episode columns."""
+        await self.apply_migrations()
+        episode_columns = {
+            "domain": "TEXT",
+            "trace_json": "TEXT NOT NULL DEFAULT '{}'",
+            "trajectory_scores_json": "TEXT NOT NULL DEFAULT '[]'",
+            "chosen_path_index": "INTEGER",
+            "feedback_json": "TEXT NOT NULL DEFAULT '{}'",
+            "payload_json": "TEXT",
+        }
+        if self.dialect == "sqlite":
+            rows = await self.fetchall("PRAGMA table_info(uie_episodes)")
+            existing = {row["name"] for row in rows}
+            for name, declaration in episode_columns.items():
+                if name not in existing:
+                    await self.execute(f"ALTER TABLE uie_episodes ADD COLUMN {name} {declaration}")
+        else:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    for name, declaration in episode_columns.items():
+                        await conn.execute(f"ALTER TABLE uie_episodes ADD COLUMN IF NOT EXISTS {name} {declaration}")
+
     async def apply_migrations(self):
         folder=Path(__file__).with_name('migrations'); filename='001_initial_cognitive_schema.postgres.sql' if self.dialect=='postgresql' else '001_initial_cognitive_schema.sql'; script=(folder/filename).read_text(encoding='utf-8-sig')
         if self.dialect=='sqlite':

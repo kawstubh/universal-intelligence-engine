@@ -269,3 +269,55 @@ class UIEReasoningCoordinator:
             metadata["episode_persisted"] = False
         return IntelligenceResponse(answer=response.answer, evidence=response.evidence or selected, actions=response.actions,
                                     confidence=response.confidence, metadata=metadata)
+
+
+    async def areason(self, request: IntelligenceRequest, evidence: Sequence[Evidence],
+                      provider: ReasoningProvider, *, storage=None) -> IntelligenceResponse:
+        """Async reasoning entry point; graph and episodic I/O use StorageEngine only."""
+        from ..db.storage_engine import StorageEngine
+        engine = storage or StorageEngine.from_env()
+        owns = storage is None
+        if owns:
+            await engine.connect()
+        try:
+            await engine.initialize_schema()
+            safe_context = dict(request.context)
+            domain = safe_context.get("domain")
+            procedural_rules = self.reflexion.applicable_rules(domain if isinstance(domain, str) else None)
+            procedural_rules.extend(self.deep_reflexion.active_heuristics(domain if isinstance(domain, str) else None))
+            if procedural_rules:
+                safe_context["uie_procedural_heuristics"] = procedural_rules[:12]
+                request = IntelligenceRequest(goal=request.goal, context=safe_context, locale=request.locale,
+                    language=request.language, constraints=request.constraints)
+            focus = self.epistemic_dispatcher.focus_entity(request.goal, safe_context)
+            graph = await self.deep_reflexion.memory.graph.aget_entity_subgraph(focus, max_hops=1, storage=engine)
+            episodes = await self.deep_reflexion.memory.arecall_episodes(request.goal, limit=5, storage=engine)
+            safe_context["uie_graph_context"] = graph
+            safe_context["uie_episode_context"] = episodes
+            request = IntelligenceRequest(goal=request.goal, context=safe_context, locale=request.locale,
+                language=request.language, constraints=request.constraints)
+            search = self.controller.search(request, evidence)
+            selected = search["selected_evidence"]
+            response = provider.reason(request, selected)
+            metadata = dict(response.metadata)
+            metadata["deliberation"] = {k: v for k, v in search.items() if k != "selected_evidence"}
+            metadata["deliberation"]["input_evidence_count"] = len(evidence)
+            metadata["deliberation"]["selected_evidence_count"] = len(selected)
+            metadata["reasoning_mode"] = "test_time_deliberation" if search["enabled"] else "direct"
+            metadata["graph_context_relation_count"] = len(graph.get("relations", []))
+            metadata["episodic_context_count"] = len(episodes)
+            episode = await self.deep_reflexion.memory.arecord_episode(
+                goal=request.goal, domain=domain if isinstance(domain, str) else None,
+                trace={"reasoning_mode": metadata["reasoning_mode"], "trajectory_count": search.get("trajectory_count", 0),
+                       "selection_reason": search.get("selection_reason"), "input_evidence_count": len(evidence),
+                       "graph_relation_count": len(graph.get("relations", [])), "episodic_context_count": len(episodes)},
+                trajectory_scores=search.get("trajectories", []),
+                chosen_path_index=search.get("selected_trajectory_id"),
+                feedback={"selected_score": search.get("selected_score"),
+                          "selected_verified": search.get("selected_verified", False)}, storage=engine)
+            metadata["episode_id"] = episode["id"]
+            return IntelligenceResponse(answer=response.answer, evidence=response.evidence or selected,
+                actions=response.actions, confidence=response.confidence, metadata=metadata)
+        finally:
+            if owns:
+                await engine.close()
