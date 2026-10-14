@@ -63,35 +63,37 @@ def test_tavily_provider_maps_search_results_to_evidence(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
     captured = {}
 
-    def fake_request(url, **kwargs):
-        captured["url"] = url
-        captured["method"] = kwargs["method"]
-        captured["payload"] = kwargs["payload"]
-        return {
-            "results": [
-                {
-                    "title": "Dental evidence",
-                    "url": "https://example.org/dental",
-                    "content": "Evidence summary",
-                    "score": 0.91,
-                },
-                {
-                    "title": "Invalid result",
-                    "url": "javascript:alert(1)",
-                    "content": "Should be ignored",
-                },
-            ]
-        }
+    class FakeTavilyClient:
+        def __init__(self, api_key=None):
+            captured["api_key"] = api_key
 
-    monkeypatch.setattr(providers, "_json_request", fake_request)
+        def search(self, **kwargs):
+            captured["search_args"] = kwargs
+            return {
+                "results": [
+                    {
+                        "title": "Dental evidence",
+                        "url": "https://example.org/dental",
+                        "content": "Evidence summary",
+                        "score": 0.91,
+                    },
+                    {
+                        "title": "Invalid result",
+                        "url": "javascript:alert(1)",
+                        "content": "Should be ignored",
+                    },
+                ]
+            }
+
+    monkeypatch.setattr(providers, "TavilyClient", FakeTavilyClient)
     evidence = providers.TavilySearchProvider().search(
         IntelligenceRequest(goal="dental evidence", locale="IN-MH", language="en")
     )
 
-    assert captured["url"] == "https://api.tavily.com/search"
-    assert captured["method"] == "POST"
-    assert captured["payload"]["api_key"] == "test-tavily-key"
-    assert captured["payload"]["query"] == "dental evidence region:IN-MH"
+    assert captured["api_key"] == "test-tavily-key"
+    assert captured["search_args"]["query"] == "dental evidence region:IN-MH"
+    assert captured["search_args"]["search_depth"] == "basic"
+    assert captured["search_args"]["max_results"] == 8
     assert len(evidence) == 1
     assert evidence[0].source == "tavily-web"
     assert evidence[0].url == "https://example.org/dental"
@@ -99,17 +101,26 @@ def test_tavily_provider_maps_search_results_to_evidence(monkeypatch):
     assert evidence[0].metadata["provider"] == "tavily"
 
 
-def test_tavily_provider_fails_closed_without_key(monkeypatch):
-    from universal_intelligence_engine.providers import (
-        ProviderNotConfiguredError,
-        TavilySearchProvider,
-    )
+def test_tavily_provider_uses_keyless_mode_without_key(monkeypatch):
+    from universal_intelligence_engine import providers
 
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    with pytest.raises(ProviderNotConfiguredError) as exc_info:
-        TavilySearchProvider().search(IntelligenceRequest(goal="test"))
-    assert exc_info.value.provider == "knowledge"
-    assert exc_info.value.code == "PROVIDER_NOT_CONFIGURED"
+    captured = {}
+
+    class FakeTavilyClient:
+        def __init__(self, *args, **kwargs):
+            captured["constructed_without_key"] = not args and not kwargs
+
+        def search(self, **kwargs):
+            return {"results": []}
+
+    monkeypatch.setattr(providers, "TavilyClient", FakeTavilyClient)
+    evidence = providers.TavilySearchProvider().search(
+        IntelligenceRequest(goal="keyless test")
+    )
+
+    assert evidence == []
+    assert captured["constructed_without_key"] is True
 
 
 def test_missing_reasoning_provider_fails_closed(monkeypatch):

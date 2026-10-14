@@ -1,7 +1,7 @@
 from universal_intelligence_engine import api
 
 
-def test_health_reports_native_reasoning_fallback_when_openai_is_unconfigured(
+def test_health_reports_native_reasoning_and_keyless_knowledge_when_unconfigured(
     monkeypatch,
 ):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -14,8 +14,8 @@ def test_health_reports_native_reasoning_fallback_when_openai_is_unconfigured(
     assert providers["reasoning"] is True
     assert providers["reasoning_provider"] == "native"
     assert providers["reasoning_model"] == "native"
-    assert providers["knowledge"] is False
-    assert providers["knowledge_provider"] == "unavailable"
+    assert providers["knowledge"] is True
+    assert providers["knowledge_provider"] == "tavily-search-keyless"
 
 
 def test_health_reports_configured_live_provider(monkeypatch):

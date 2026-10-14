@@ -19,6 +19,11 @@ from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
 import httpx
+from tavily import (  # type: ignore[import-untyped]
+    TavilyClient,
+    TavilyKeylessLimitError,
+    UsageLimitExceededError,
+)
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from .reasoning import NativeReasoningProvider
@@ -126,39 +131,35 @@ class DisabledKnowledgeProvider:
 
 
 class TavilySearchProvider:
-    """Live web search through Tavily's search API.
-
-    Configure TAVILY_API_KEY with a key from the provider's free tier.
-    The key is sent only in the HTTPS request body and is never logged.
-    """
+    """Live web search through Tavily's API, including its rate-limited keyless mode."""
 
     def __init__(self, api_key: str | None = None, max_results: int = 8):
         self.api_key = api_key or os.getenv("TAVILY_API_KEY")
         self.max_results = max(1, min(max_results, 20))
 
     def search(self, request: IntelligenceRequest) -> list[Evidence]:
-        if not self.api_key:
-            raise ProviderNotConfiguredError(
-                "knowledge",
-                "Knowledge provider is not configured: TAVILY_API_KEY is missing",
-            )
         query = request.goal.strip()
         if request.locale:
             query = f"{query} region:{request.locale}"
-        data = _json_request(
-            "https://api.tavily.com/search",
-            method="POST",
-            payload={
-                "api_key": self.api_key,
-                "query": query,
-                "search_depth": "basic",
-                "max_results": self.max_results,
-                "include_answer": False,
-                "include_raw_content": False,
-            },
-            timeout=15.0,
-        )
-        results = data.get("results", [])
+        client = TavilyClient(api_key=self.api_key) if self.api_key else TavilyClient()
+        try:
+            data = client.search(
+                query=query,
+                search_depth="basic",
+                max_results=self.max_results,
+                include_answer=False,
+                include_raw_content=False,
+            )
+        except (TavilyKeylessLimitError, UsageLimitExceededError) as exc:
+            raise ProviderRateLimited("Tavily search usage limit reached") from exc
+        except Exception as exc:
+            # Never log exception text: provider exceptions may contain request details.
+            logger.warning(
+                "knowledge provider request failed provider=tavily error_class=%s",
+                type(exc).__name__,
+            )
+            raise ProviderUnavailable("Tavily search request failed") from exc
+        results = data.get("results", []) if isinstance(data, dict) else []
         if not isinstance(results, list):
             raise ProviderBadOutput("Tavily returned an invalid results field")
         evidence: list[Evidence] = []

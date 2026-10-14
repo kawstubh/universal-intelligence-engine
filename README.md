@@ -71,11 +71,11 @@ POST /v1/dental/patients/{patient_id}/chart
 POST /v1/dental/intelligence/run
 ```
 
-Production secrets stay server-side. Never put `SUPABASE_SERVICE_ROLE_KEY`, `UIE_API_KEY`, `OPENAI_API_KEY`, or `BRAVE_SEARCH_API_KEY` in the mobile app.
+Production secrets stay server-side. Never put `SUPABASE_SERVICE_ROLE_KEY`, `UIE_API_KEY`, `OPENAI_API_KEY`, `TAVILY_API_KEY`, or `BRAVE_SEARCH_API_KEY` in the mobile app.
 
 ## Live providers
 
-- **TavilySearchProvider**: live web research using `TAVILY_API_KEY` (preferred; supports a free tier)
+- **TavilySearchProvider**: live web research; defaults to Tavily's rate-limited keyless mode (no account/key required), with optional `TAVILY_API_KEY` for the free tier
 - **BraveSearchProvider**: optional live web research using `BRAVE_SEARCH_API_KEY`
 - **OpenAIResponsesReasoningProvider**: reasoning using `OPENAI_API_KEY` and `OPENAI_MODEL`
 
