@@ -7,9 +7,11 @@ from .curiosity_agent import CuriosityAgent
 from .heuristic_memory import HeuristicMemory
 from .autonomous_learner import AutonomousLearner
 from .semantic_matcher import SemanticMatcher
+from .graph_store import KnowledgeGraphStore
 
 __all__ = [
     "ClaimDistiller", "DistilledClaim", "distill_claims",
     "ContradictionEngine", "ClaimQueryService", "query_claims",
     "CuriosityAgent", "HeuristicMemory", "AutonomousLearner", "SemanticMatcher",
+    "KnowledgeGraphStore",
 ]

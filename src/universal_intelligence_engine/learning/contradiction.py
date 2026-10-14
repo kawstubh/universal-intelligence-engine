@@ -182,6 +182,9 @@ class ContradictionEngine:
         matcher=SemanticMatcher()
         for item in self.get_claims():
             matcher.persist_vector(self.db_path,"claim",item["id"]," ".join(str(item.get(k,"")) for k in ("subject","predicate","object_claim")))
+        # Maintain the graph as a compatible projection of the canonical flat claim store.
+        from .graph_store import KnowledgeGraphStore
+        KnowledgeGraphStore(self.db_path).sync_existing_claims()
         return result
 
     def verify_chain(self) -> tuple[bool, str | None]:

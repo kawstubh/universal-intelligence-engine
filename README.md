@@ -238,3 +238,10 @@ Learned claim and heuristic writes are appended to a SHA-256 hash chain in the s
 Clinical lesson promotion requires the configured reviewer token and stores an HMAC-SHA256 signature over the lesson ID, domain, text, reviewer, and doctor_validated status. Configure UIE_DOCTOR_SIGNING_KEY as a high-entropy secret distinct from application credentials; when absent, the existing UIE_LESSON_REVIEW_TOKEN is used for compatibility. Validated lessons with missing/invalid signatures are not recalled.
 
 Semantic retrieval uses cosine scoring over deterministic 384-dimensional token/character-ngram hashing vectors by default, with a small explicit synonym bridge. NumPy is used if installed; otherwise cosine scoring uses the Python standard library. An external embedding callback can supply 384-dimensional vectors, and float32 vectors can be persisted in the SQLite semantic_vectors table. Hashed vectors are a lexical-similarity fallback, not a pretrained semantic embedding model and can miss domain-specific paraphrases.
+
+
+### Entity knowledge graph and traversal
+
+The learning.graph_store.KnowledgeGraphStore projects the canonical claims store into uie_entities and uie_relations; it can also backfill compatible legacy uie_claims tables via sync_existing_claims(). Claim ingestion automatically refreshes this projection. Relations retain domain, provenance URL, confidence, status, and the originating claim ID. Conflicting targets for the same source and predicate are marked conflicted_evidence and recorded in uie_graph_contradictions.
+
+get_entity_subgraph(entity_name, max_hops=2) performs bounded bidirectional traversal (up to six hops), returns connected nodes/edges and logged contradictions, and includes a traversal_confidence value decayed by the configured per-hop factor. Decay is a traversal ranking heuristic, not a recalibration of the source claim's stored confidence.
