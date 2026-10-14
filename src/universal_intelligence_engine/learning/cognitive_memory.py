@@ -10,7 +10,9 @@ from typing import Any, Mapping
 
 from .graph_store import KnowledgeGraphStore
 from .heuristic_memory import HeuristicMemory
-from ..security.provenance_crypto import ensure_integrity_ledger, append_integrity_event, verify_integrity_ledger
+from ..security.provenance_crypto import ensure_integrity_ledger, append_integrity_event, verify_integrity_ledger, canonical_json, GENESIS_HASH
+from ..db.storage_engine import StorageEngine
+import hashlib
 
 
 def _now() -> str:
@@ -21,6 +23,7 @@ class CognitiveMemoryEngine:
     """Unify durable episodic, semantic, and procedural memory over a shared SQLite file."""
     def __init__(self, db_path: str | Path = ".data/claim_memory.sqlite3"):
         self.db_path = str(db_path)
+        self._async_storage_url = ":memory:" if self.db_path == ":memory:" else "sqlite:///" + self.db_path
         if self.db_path != ":memory:":
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.heuristics = HeuristicMemory(self.db_path)
@@ -64,6 +67,38 @@ class CognitiveMemoryEngine:
                  "trace": json.loads(row["trace_json"]), "trajectory_scores": json.loads(row["trajectory_scores_json"]),
                  "chosen_path_index": row["chosen_path_index"], "feedback": json.loads(row["feedback_json"]),
                  "created_at": row["created_at"]} for row in rows]
+
+    async def arecord_episode(self, *, goal: str, domain: str | None = None, trace: Mapping[str, Any] | None = None,
+                              trajectory_scores: list[Mapping[str, Any]] | None = None, chosen_path_index: int | None = None,
+                              feedback: Mapping[str, Any] | None = None, storage: StorageEngine | None = None) -> dict:
+        """Async durable episode write using the shared storage adapter and atomic ledger append."""
+        engine = storage or StorageEngine(self._async_storage_url)
+        owns = storage is None
+        if owns: await engine.connect()
+        episode_id = str(uuid.uuid4()); created = _now()
+        trace_data, scores_data, feedback_data = dict(trace or {}), [dict(x) for x in (trajectory_scores or [])], dict(feedback or {})
+        payload = {"id":episode_id,"goal":goal,"domain":domain,"trace":trace_data,"trajectory_scores":scores_data,"chosen_path_index":chosen_path_index,"feedback":feedback_data,"created_at":created}
+        try:
+            async with engine.transaction() as tx:
+                await tx.execute("INSERT INTO uie_episodes(id,goal,domain,trace_json,trajectory_scores_json,chosen_path_index,feedback_json,created_at) VALUES(?,?,?,?,?,?,?,?)",(episode_id,goal,domain,json.dumps(trace_data,sort_keys=True),json.dumps(scores_data,sort_keys=True),chosen_path_index,json.dumps(feedback_data,sort_keys=True),created))
+                head = await tx.fetchone("SELECT sequence_id,record_hash FROM uie_integrity_ledger ORDER BY sequence_id DESC LIMIT 1")
+                previous = head["record_hash"] if head else GENESIS_HASH
+                sequence = int(head["sequence_id"])+1 if head else 1
+                hash_payload={"sequence_id":sequence,"entity_type":"episode","entity_id":episode_id,"event_type":"INSERT","payload":payload}
+                digest=hashlib.sha256(canonical_json(hash_payload).encode("utf-8")+previous.encode("ascii")).hexdigest()
+                await tx.execute("INSERT INTO uie_integrity_ledger(sequence_id,entity_type,entity_id,event_type,payload_canonical_json,prev_hash,record_hash,hmac_signature) VALUES(?,?,?,?,?,?,?,?)",(sequence,"episode",episode_id,"INSERT",canonical_json(payload),previous,digest,None))
+            return {"id":episode_id,"created_at":created}
+        finally:
+            if owns: await engine.close()
+
+    async def arecall_episodes(self, query: str | None = None, limit: int = 20, storage: StorageEngine | None = None) -> list[dict]:
+        engine=storage or StorageEngine(self._async_storage_url); owns=storage is None
+        if owns: await engine.connect()
+        try:
+            rows=await engine.fetchall("SELECT * FROM uie_episodes WHERE (? IS NULL OR lower(goal) LIKE ?) ORDER BY created_at DESC LIMIT ?",(query,f"%{query.lower()}%" if query else None,max(1,min(int(limit),100))))
+            return [{"id":r["id"],"goal":r["goal"],"domain":r["domain"],"trace":json.loads(r["trace_json"]),"trajectory_scores":json.loads(r["trajectory_scores_json"]),"chosen_path_index":r["chosen_path_index"],"feedback":json.loads(r["feedback_json"]),"created_at":r["created_at"]} for r in rows]
+        finally:
+            if owns: await engine.close()
 
     def synthesize_constraint(self, *, domain: str, subject: str, predicate: str, rule_text: str,
                               provenance_urls: list[str] | None = None, confidence: float = 0.65) -> dict:
