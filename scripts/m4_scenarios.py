@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
@@ -69,4 +69,3 @@ def run_m4_scenarios() -> int:
             return 1
     print("\nMILESTONE 4 SCENARIOS PASSED (synthetic, offline; no actuators or network calls).")
     return 0
-
