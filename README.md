@@ -152,3 +152,30 @@ Configure:
 The governance boundary itself is not self-modifiable. Proposed changes should be sandboxed, benchmarked, security-tested, regression-tested, signed by the human operator, versioned, and auditable before activation.
 
 **Important:** never place the private signing key in the repository, mobile app, or AI runtime.
+
+## Public web knowledge harvesting (initial implementation)
+
+UIE can now persist text from explicitly submitted public URLs on an approved
+domain allowlist, subject to each site's robots.txt. The stored corpus records
+the canonical URL, source domain, retrieval timestamp, HTTP status, content type,
+and SHA-256 content digest. Queries search this local corpus before the existing
+Wikipedia and Europe PMC retrieval paths.
+
+Configuration:
+- UIE_WEB_KNOWLEDGE_PATH — SQLite corpus path (default .data/web_knowledge.sqlite3).
+- UIE_API_KEY — required for API endpoints, including harvesting and stats.
+
+Authorized endpoints:
+- POST /v1/knowledge/harvest with {"urls":["https://docs.python.org/3/library/sqlite3.html"]} (maximum 10 URLs per request).
+- GET /v1/knowledge/stats.
+
+This is deliberately a bounded first milestone, not an unrestricted crawler or
+a claim to know the whole internet. It does not bypass logins/paywalls, ignores
+non-HTML resources, respects robots rules (fails closed if robots cannot be read),
+uses a domain allowlist, and limits each response to 1.5 MB and extracted text to
+80,000 characters. Retrieval is lexical, not semantic/vector search. Harvesting
+is on-demand, not yet scheduled; no model weights are trained. SQLite at Render's
+default ephemeral filesystem is not production-durable. Before production use,
+configure a persistent disk or move this corpus to a dedicated PostgreSQL/vector
+store and implement a scheduled, rate-limited discovery pipeline with monitoring,
+retention, source licensing, and content-quality controls.

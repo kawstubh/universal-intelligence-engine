@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from .web_knowledge import PublicWebKnowledgeStore
 
 
 def _utc_now() -> str:
@@ -67,14 +68,19 @@ class FreePublicKnowledgeProvider:
         re.IGNORECASE,
     )
 
-    def __init__(self, max_results: int = 8):
+    def __init__(self, max_results: int = 8, web_knowledge: PublicWebKnowledgeStore | None = None):
         self.max_results = max(1, min(max_results, 12))
+        self.web_knowledge = web_knowledge or PublicWebKnowledgeStore(
+            os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3")
+        )
 
     def search(self, request: IntelligenceRequest) -> list[Evidence]:
         query = request.goal.strip()
         if not query:
             return []
-        evidence: list[Evidence] = []
+        # Previously harvested sources are searched first; online providers remain
+        # available for freshness and coverage. Corpus items retain URL/hash provenance.
+        evidence: list[Evidence] = self.web_knowledge.search(query, limit=self.max_results)
         if self._MEDICAL_TERMS.search(query):
             evidence.extend(self._search_europe_pmc(request, query))
         evidence.extend(self._search_wikipedia(request, query))

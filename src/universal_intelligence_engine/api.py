@@ -14,6 +14,7 @@ from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
 from .persistent_memory import PersistentMemoryEngine
 from .providers import FreePublicKnowledgeProvider, OpenAIResponsesReasoningProvider
+from .web_knowledge import PublicWebKnowledgeStore
 from .service import IntelligenceService
 
 
@@ -28,8 +29,15 @@ class IntelligenceRunBody(BaseModel):
     target_confidence: float = Field(default=0.72, ge=0.0, le=1.0)
 
 
+class KnowledgeHarvestBody(BaseModel):
+    urls: list[str] = Field(min_length=1, max_length=10)
+
+
 def build_service() -> IntelligenceService:
-    knowledge = FreePublicKnowledgeProvider()
+    web_knowledge = PublicWebKnowledgeStore(
+        os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3")
+    )
+    knowledge = FreePublicKnowledgeProvider(web_knowledge=web_knowledge)
     # The engine provides native reasoning when no optional OpenAI key is set.
     reasoning = OpenAIResponsesReasoningProvider() if os.getenv("OPENAI_API_KEY") else None
     memory = LearningMemory(
@@ -117,3 +125,33 @@ def run_intelligence(
         "confidence": result.confidence,
         "metadata": dict(result.metadata),
     }
+
+
+@app.get("/v1/knowledge/stats")
+def knowledge_stats(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(
+        os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3")
+    )
+    return {"status": "ok", "corpus": store.stats(),
+            "mode": "bounded-public-web-harvesting",
+            "limitations": ["approved-domain allowlist", "robots.txt required",
+                            "HTML text extraction", "lexical retrieval; no model-weight training"]}
+
+
+@app.post("/v1/knowledge/harvest")
+def harvest_public_knowledge(
+    body: KnowledgeHarvestBody,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(
+        os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3")
+    )
+    results = []
+    for url in body.urls:
+        try:
+            results.append(store.ingest_url(url))
+        except ValueError as exc:
+            results.append({"url": url, "status": "rejected", "reason": str(exc)})
+    return {"results": results, "corpus": store.stats()}
