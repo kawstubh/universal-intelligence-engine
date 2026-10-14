@@ -9,6 +9,7 @@ from .contradiction import ContradictionEngine
 from .semantic_matcher import SemanticMatcher
 from .graph_store import KnowledgeGraphStore
 from .graph_reflexion import ReflexiveGraphValidator
+from ..db.storage_engine import StorageEngine
 
 
 class ClaimQueryService:
@@ -17,6 +18,13 @@ class ClaimQueryService:
     def __init__(self, memory: ContradictionEngine | None = None, db_path: str | Path | None = None, learner=None):
         self.memory = memory or ContradictionEngine(str(db_path or os.getenv("UIE_CLAIM_MEMORY_PATH", ".data/claim_memory.sqlite3")))
         self.learner = learner
+
+    async def aquery_graph(self, subject: str, *, max_hops: int = 2, storage: StorageEngine | None = None) -> dict[str, Any]:
+        """Async graph query path; entity/relation reads are performed by StorageEngine."""
+        store=KnowledgeGraphStore(self.memory.db_path)
+        graph=await store.aget_entity_subgraph(subject,max_hops=max_hops,storage=storage)
+        warnings=[{"relation_id":edge.get("id"),"status":edge.get("status"),"warning":"Graph edge is evidence, not a verified fact.","provenance_url":edge.get("provenance_url")} for edge in graph.get("relations",[]) if edge.get("status") in {"conflicted_evidence","unverified_claim","superseded_temporal"}]
+        return {"subject_query":subject,"knowledge_graph":graph,"graph_warnings":warnings,"usage_warning":"Extracted claims are evidence candidates, not verified facts. Check provenance and temporal scope before reasoning from them."}
 
     def query(self, subject: str | None = None, limit: int = 20, trigger_learning: bool = False,
               include_graph: bool = True, max_hops: int = 2) -> dict[str, Any]:

@@ -40,7 +40,7 @@ def test_transaction_failure_rolls_back_episode_and_ledger(tmp_path):
             await engine.apply_migrations()
             try:
                 async with engine.transaction() as tx:
-                    await tx.execute('INSERT INTO uie_episodes(id,domain,payload_json,created_at) VALUES(?,?,?,?)',('episode-1','test','{}','now'))
+                    await tx.execute('INSERT INTO uie_episodes(id,goal,domain,trace_json,trajectory_scores_json,chosen_path_index,feedback_json,created_at) VALUES(?,?,?,?,?,?,?,?)',('episode-1','simulated','test','{}','[]',None,'{}','now'))
                     await tx.execute('INSERT INTO uie_integrity_ledger(entity_type,entity_id,event_type,payload_canonical_json,prev_hash,record_hash) VALUES(?,?,?,?,?,?)',('episode','episode-1','INSERT','{}',GENESIS_HASH,'invalid'))
                     raise RuntimeError('simulated crash')
             except RuntimeError as exc:
