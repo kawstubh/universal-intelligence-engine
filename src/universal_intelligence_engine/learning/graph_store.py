@@ -270,6 +270,34 @@ class KnowledgeGraphStore:
         return {"root": dict(start), "nodes": list(nodes.values()), "relations": relations,
                 "contradictions": contradictions, "max_hops": hops, "confidence_decay": self.confidence_decay}
 
+    def resolve_temporal_successor(self, *, subject: str, predicate: str, older_object: str,
+                                   newer_object: str, older_claim_id: str | None = None,
+                                   newer_claim_id: str | None = None) -> dict:
+        """Supersede the older graph edge while retaining its row and provenance."""
+        now = _now()
+        with self._connect() as conn:
+            source = conn.execute("SELECT id FROM uie_entities WHERE normalized_name=?", (_normal(subject),)).fetchone()
+            old_target = conn.execute("SELECT id FROM uie_entities WHERE normalized_name=?", (_normal(older_object),)).fetchone()
+            new_target = conn.execute("SELECT id FROM uie_entities WHERE normalized_name=?", (_normal(newer_object),)).fetchone()
+            if not source or not old_target or not new_target:
+                return {"updated": 0, "reason": "graph_edge_not_found"}
+            sql = "UPDATE uie_relations SET status='superseded_temporal',updated_at=? WHERE source_entity_id=? AND lower(predicate)=lower(?) AND target_entity_id=? AND status!='superseded_temporal'"
+            args = [now, source["id"], predicate, old_target["id"]]
+            if older_claim_id:
+                sql += " AND (claim_id=? OR claim_id IS NULL)"
+                args.append(str(older_claim_id))
+            cur = conn.execute(sql, args)
+            # Remove stale conflict presentation for a pair resolved as a dated revision,
+            # but keep contradiction rows as audit history with an explicit resolution marker.
+            conn.execute("""UPDATE uie_graph_contradictions SET resolution_status='resolved_temporal_revision'
+                WHERE source_entity_id=? AND lower(predicate)=lower(?) AND existing_target_entity_id=? AND incoming_target_entity_id=?""",
+                (source["id"], predicate, old_target["id"], new_target["id"]))
+            conn.execute("""UPDATE uie_graph_contradictions SET resolution_status='resolved_temporal_revision'
+                WHERE source_entity_id=? AND lower(predicate)=lower(?) AND existing_target_entity_id=? AND incoming_target_entity_id=?""",
+                (source["id"], predicate, new_target["id"], old_target["id"]))
+        return {"updated": cur.rowcount, "older_object": older_object, "newer_object": newer_object,
+                "status": "superseded_temporal", "audit_history_preserved": True}
+
     def get_contradictions(self, limit: int = 100) -> list[dict]:
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(

@@ -62,6 +62,27 @@ app = FastAPI(
     description="Shared intelligence API for research, reasoning, applications and agents.",
 )
 service = build_service()
+_background_scheduler = None
+
+
+@app.on_event("startup")
+async def start_background_learning() -> None:
+    """Enable autonomous harvesting only when explicitly opted in by deployment config."""
+    global _background_scheduler
+    if os.getenv("UIE_BACKGROUND_SCHEDULER_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    from .learning.scheduler import CuriosityScheduler
+    _background_scheduler = CuriosityScheduler(
+        state_path=os.getenv("UIE_SCHEDULER_STATE_PATH", ".data/learning_scheduler.sqlite3"),
+        interval_seconds=float(os.getenv("UIE_SCHEDULER_INTERVAL_SECONDS", "300")),
+    )
+    await _background_scheduler.start()
+
+
+@app.on_event("shutdown")
+async def stop_background_learning() -> None:
+    if _background_scheduler is not None:
+        await _background_scheduler.stop()
 
 
 def _authorize(authorization: str | None) -> None:
@@ -136,8 +157,10 @@ def knowledge_stats(authorization: str | None = Header(default=None)) -> dict[st
     )
     from .learning.contradiction import ContradictionEngine
     claims = ContradictionEngine(os.getenv("UIE_CLAIM_MEMORY_PATH", ".data/claim_memory.sqlite3"))
+    scheduler_metrics = (_background_scheduler.health() if _background_scheduler is not None else {"enabled": False, "status": "disabled_by_configuration"})
     return {"status": "ok", "corpus": store.stats(),
             "claims": {"total": len(claims.get_claims()), "contradictions": len(claims.contradictions())},
+            "background_learning": scheduler_metrics,
             "mode": "bounded-public-web-harvesting-and-claim-distillation",
             "limitations": ["approved-domain allowlist", "robots.txt required",
                             "rule-based extraction; claims remain unverified", "no model-weight training"]}
