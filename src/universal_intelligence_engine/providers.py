@@ -9,21 +9,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import socket
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from html import unescape
 from typing import Any, ClassVar
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import httpx
-from tavily import (  # type: ignore[import-untyped]
-    TavilyClient,
-    TavilyKeylessLimitError,
-    UsageLimitExceededError,
-)
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from .reasoning import NativeReasoningProvider
@@ -130,108 +127,164 @@ class DisabledKnowledgeProvider:
         return []
 
 
-class TavilySearchProvider:
-    """Live web search through Tavily's API, including its rate-limited keyless mode."""
+class FreePublicKnowledgeProvider:
+    """Best-effort public-source retrieval with no paid search API or API key.
 
-    def __init__(self, api_key: str | None = None, max_results: int = 8):
-        self.api_key = api_key or os.getenv("TAVILY_API_KEY")
-        self.max_results = max(1, min(max_results, 20))
+    General queries use Wikipedia's public MediaWiki API. Medical and dental
+    queries also use Europe PMC, a public biomedical literature service. These
+    are reference/research sources, not a substitute for broad web search.
+    """
+
+    _MEDICAL_TERMS = re.compile(
+        r"\b(dental|dentist|tooth|teeth|oral|gum|gingiva|periodontal|caries|"
+        r"cavity|endodont|orthodont|prosthodont|medicine|medical|clinical|"
+        r"patient|disease|symptom|diagnosis|treatment|drug|medication|health|"
+        r"anatomy|infection|surgery|therapy|pubmed|research study)\b",
+        re.IGNORECASE,
+    )
+
+    def __init__(self, max_results: int = 8):
+        self.max_results = max(1, min(max_results, 12))
 
     def search(self, request: IntelligenceRequest) -> list[Evidence]:
         query = request.goal.strip()
-        if request.locale:
-            query = f"{query} region:{request.locale}"
-        client = TavilyClient(api_key=self.api_key) if self.api_key else TavilyClient()
+        if not query:
+            return []
+
+        evidence: list[Evidence] = []
+        if self._MEDICAL_TERMS.search(query):
+            evidence.extend(self._search_europe_pmc(request, query))
+        evidence.extend(self._search_wikipedia(request, query))
+        return evidence[: self.max_results]
+
+    def _search_wikipedia(
+        self, request: IntelligenceRequest, query: str
+    ) -> list[Evidence]:
+        language = (request.language or "en").strip().lower()
+        if not re.fullmatch(r"[a-z]{2,3}", language):
+            language = "en"
+        params = urlencode(
+            {
+                "action": "query",
+                "list": "search",
+                "srsearch": query[:400],
+                "srlimit": self.max_results,
+                "format": "json",
+                "utf8": 1,
+            }
+        )
+        url = f"https://{language}.wikipedia.org/w/api.php?{params}"
         try:
-            data = client.search(
-                query=query,
-                search_depth="basic",
-                max_results=self.max_results,
-                include_answer=False,
-                include_raw_content=False,
+            data = _json_request(
+                url,
+                headers={"User-Agent": "UIE/0.5 (public knowledge retrieval)"},
             )
-        except (TavilyKeylessLimitError, UsageLimitExceededError) as exc:
-            raise ProviderRateLimited("Tavily search usage limit reached") from exc
-        except Exception as exc:
-            # Never log exception text: provider exceptions may contain request details.
+        except ProviderError as exc:
             logger.warning(
-                "knowledge provider request failed provider=tavily error_class=%s",
+                "public knowledge source failed source=wikipedia error_class=%s",
                 type(exc).__name__,
             )
-            raise ProviderUnavailable("Tavily search request failed") from exc
-        results = data.get("results", []) if isinstance(data, dict) else []
-        if not isinstance(results, list):
-            raise ProviderBadOutput("Tavily returned an invalid results field")
+            return []
+
+        query_data = data.get("query", {})
+        results = query_data.get("search", []) if isinstance(query_data, dict) else []
         evidence: list[Evidence] = []
+        if not isinstance(results, list):
+            return evidence
         for item in results:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or not item.get("title"):
                 continue
-            url = item.get("url")
-            if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+            page_id = item.get("pageid")
+            if not isinstance(page_id, int):
                 continue
+            snippet = re.sub(
+                r"\s+",
+                " ",
+                unescape(re.sub(r"<[^>]+>", " ", str(item.get("snippet") or ""))),
+            ).strip()
             evidence.append(
                 Evidence(
-                    source="tavily-web",
-                    title=str(item.get("title") or "Untitled result"),
+                    source="wikipedia-public-api",
+                    title=str(item["title"]),
                     retrieved_at=_utc_now(),
-                    content=str(item.get("content") or ""),
-                    url=url,
-                    language=request.language,
+                    content=snippet.strip(),
+                    url=f"https://{language}.wikipedia.org/?curid={page_id}",
+                    language=request.language or language,
                     locale=request.locale,
-                    confidence=(
-                        float(item["score"])
-                        if isinstance(item.get("score"), (int, float))
-                        else 0.6
-                    ),
-                    metadata={"provider": "tavily"},
+                    confidence=0.55,
+                    metadata={"provider": "wikipedia", "page_id": page_id},
                 )
             )
         return evidence
 
-
-class BraveSearchProvider:
-    """Live web search through Brave Search API."""
-
-    def __init__(self, api_key: str | None = None, max_results: int = 8):
-        self.api_key = api_key or os.getenv("BRAVE_SEARCH_API_KEY")
-        self.max_results = max(1, min(max_results, 20))
-
-    def search(self, request: IntelligenceRequest) -> list[Evidence]:
-        if not self.api_key:
-            raise ProviderNotConfiguredError(
-                "knowledge",
-                "Knowledge provider is not configured: BRAVE_SEARCH_API_KEY is missing",
+    def _search_europe_pmc(
+        self, request: IntelligenceRequest, query: str
+    ) -> list[Evidence]:
+        params = urlencode(
+            {
+                "query": query[:400],
+                "format": "json",
+                "pageSize": self.max_results,
+                "resultType": "core",
+            }
+        )
+        url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?{params}"
+        try:
+            data = _json_request(
+                url,
+                headers={"User-Agent": "UIE/0.5 (public biomedical research)"},
             )
-        query = request.goal.strip()
-        if request.locale:
-            query = f"{query} region:{request.locale}"
-        url = (
-            "https://api.search.brave.com/res/v1/web/search"
-            f"?q={quote_plus(query)}&count={self.max_results}"
-        )
-        data = _json_request(
-            url,
-            headers={
-                "X-Subscription-Token": self.api_key,
-                "Accept": "application/json",
-            },
-        )
-        results = data.get("web", {}).get("results", [])
+        except ProviderError as exc:
+            logger.warning(
+                "public knowledge source failed source=europe-pmc error_class=%s",
+                type(exc).__name__,
+            )
+            return []
+
+        result_list = data.get("resultList", {})
+        results = result_list.get("result", []) if isinstance(result_list, dict) else []
         evidence: list[Evidence] = []
+        if not isinstance(results, list):
+            return evidence
         for item in results:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or not item.get("title"):
                 continue
+            pmid = item.get("pmid")
+            pmcid = item.get("pmcid")
+            doi = item.get("doi")
+            if pmid:
+                result_url = f"https://europepmc.org/article/MED/{pmid}"
+            elif pmcid:
+                normalized_pmcid = str(pmcid)
+                if not normalized_pmcid.startswith("PMC"):
+                    normalized_pmcid = f"PMC{normalized_pmcid}"
+                result_url = f"https://europepmc.org/article/{normalized_pmcid}"
+            elif doi:
+                result_url = f"https://doi.org/{doi}"
+            else:
+                result_url = "https://europepmc.org/search?" + urlencode({"query": query})
+            abstract = str(item.get("abstractText") or "").strip()
+            if not abstract:
+                journal = str(item.get("journalTitle") or "")
+                year = str(item.get("pubYear") or "")
+                abstract = " ".join(part for part in (journal, year) if part)
             evidence.append(
                 Evidence(
-                    source="brave-web",
-                    title=str(item.get("title") or "Untitled result"),
+                    source="europe-pmc-public-api",
+                    title=str(item["title"]),
                     retrieved_at=_utc_now(),
-                    content=str(item.get("description") or ""),
-                    url=item.get("url"),
-                    language=request.language,
+                    content=abstract[:4000],
+                    url=result_url,
+                    language=request.language or "en",
                     locale=request.locale,
-                    confidence=0.65,
-                    metadata={"provider": "brave"},
+                    confidence=0.7,
+                    metadata={
+                        "provider": "europe-pmc",
+                        "publication_year": item.get("pubYear"),
+                        "journal": item.get("journalTitle"),
+                        "pmid": pmid,
+                        "doi": doi,
+                    },
                 )
             )
         return evidence

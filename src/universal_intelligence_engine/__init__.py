@@ -13,7 +13,7 @@ from .memory import LearningEvent, LearningMemory
 from .planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
 from .provenance import ProvenanceRecord
 from .providers import (
-    BraveSearchProvider,
+    FreePublicKnowledgeProvider,
     NoKnowledgeProvider,
     OpenAIResponsesReasoningProvider,
 )
@@ -28,10 +28,10 @@ __all__ = [
     "AgentStep",
     "AutonomousAgent",
     "BasicResponseEvaluator",
-    "BraveSearchProvider",
     "ChangeProposal",
     "CompositeKnowledgeProvider",
     "Evidence",
+    "FreePublicKnowledgeProvider",
     "GovernanceError",
     "HumanAuthorizationGate",
     "IntelligenceRequest",
