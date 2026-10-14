@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from .security.provenance_crypto import clinical_override_payload, sign_clinical_override, verify_clinical_override
+from .security.provenance_crypto import clinical_override_payload, sign_clinical_override, verify_clinical_override, append_integrity_event, ensure_integrity_ledger
 
 VALIDATION_STATUSES = {
     "unverified_proposed", "doctor_validated", "rejected", "deprecated"
@@ -54,13 +54,18 @@ class PersistentMemoryEngine:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     reviewer_id TEXT,
-                    hmac_signature TEXT
+                    hmac_signature TEXT,
+                    prev_hash TEXT,
+                    record_hash TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_uie_lessons_domain_status
                     ON uie_lessons(domain, validation_status);
             """)
             columns={row["name"] for row in conn.execute("PRAGMA table_info(uie_lessons)")}
             if "hmac_signature" not in columns: conn.execute("ALTER TABLE uie_lessons ADD COLUMN hmac_signature TEXT")
+            if "prev_hash" not in columns: conn.execute("ALTER TABLE uie_lessons ADD COLUMN prev_hash TEXT")
+            if "record_hash" not in columns: conn.execute("ALTER TABLE uie_lessons ADD COLUMN record_hash TEXT")
+            ensure_integrity_ledger(conn)
             conn.executescript("""
                 CREATE TRIGGER IF NOT EXISTS require_clinical_hmac_insert
                 BEFORE INSERT ON uie_lessons WHEN NEW.validation_status='doctor_validated'
@@ -102,6 +107,10 @@ class PersistentMemoryEngine:
                 VALUES (?, ?, ?, ?, 'unverified_proposed', ?, ?, 0, ?, ?)""",
                 (lesson_id, normalized_domain, json.dumps(triggers), text, score, origin, now, now),
             )
+            row = dict(conn.execute("SELECT * FROM uie_lessons WHERE id=?", (lesson_id,)).fetchone())
+            payload = {k: row[k] for k in ("id","domain","trigger_pattern","lesson_text","validation_status","confidence","source_origin","immutable_guardian_flag","created_at","updated_at","reviewer_id","hmac_signature")}
+            ledger = append_integrity_event(conn, "lesson", lesson_id, "INSERT", payload)
+            conn.execute("UPDATE uie_lessons SET prev_hash=?,record_hash=? WHERE id=?", (ledger["prev_hash"], ledger["record_hash"], lesson_id))
         return lesson_id
 
     def validate_lesson(self, lesson_id: str, reviewer_id: str, review_token: str, signature: str | None = None) -> None:
@@ -131,6 +140,10 @@ class PersistentMemoryEngine:
                    AND immutable_guardian_flag=0""",
                 (reviewer_id.strip(),signature,now,lesson_id))
             if cursor.rowcount != 1: raise ValueError("lesson not found or not eligible for validation")
+            updated = dict(conn.execute("SELECT * FROM uie_lessons WHERE id=?", (lesson_id,)).fetchone())
+            payload = {k: updated[k] for k in ("id","domain","trigger_pattern","lesson_text","validation_status","confidence","source_origin","immutable_guardian_flag","created_at","updated_at","reviewer_id","hmac_signature")}
+            ledger = append_integrity_event(conn, "lesson", lesson_id, "CONFIDENCE_UPDATE", payload, signature, signing_key)
+            conn.execute("UPDATE uie_lessons SET prev_hash=?,record_hash=? WHERE id=?", (ledger["prev_hash"], ledger["record_hash"], lesson_id))
 
     def sign_override(self, lesson_id: str, reviewer_id: str, key: str | None = None) -> str:
         with self._connect() as conn:

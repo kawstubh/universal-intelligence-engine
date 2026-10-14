@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from ..security.provenance_crypto import GENESIS_HASH, calculate_record_hash, verify_memory_chain, append_integrity_event, verify_integrity_ledger, ensure_integrity_ledger
 
 
 def _now() -> str:
@@ -62,7 +63,9 @@ class KnowledgeGraphStore:
                     domain TEXT NOT NULL DEFAULT 'general_reference',
                     claim_id TEXT,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    prev_hash TEXT,
+                    record_hash TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_uie_rel_source ON uie_relations(source_entity_id);
                 CREATE INDEX IF NOT EXISTS idx_uie_rel_target ON uie_relations(target_entity_id);
@@ -80,6 +83,12 @@ class KnowledgeGraphStore:
                     resolution_status TEXT NOT NULL DEFAULT 'unresolved'
                 );
             """)
+            ensure_integrity_ledger(conn)
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS memory_chain (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT, record_type TEXT NOT NULL, record_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL, prev_hash TEXT NOT NULL, record_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+            """)
             # Migrate a prior version of these graph tables if it lacks optional metadata.
             rel_columns = {row["name"] for row in conn.execute("PRAGMA table_info(uie_relations)")}
             for name, sql_type, default in (
@@ -87,6 +96,8 @@ class KnowledgeGraphStore:
                 ("claim_id", "TEXT", "NULL"),
                 ("created_at", "TEXT", "''"),
                 ("updated_at", "TEXT", "''"),
+                ("prev_hash", "TEXT", "NULL"),
+                ("record_hash", "TEXT", "NULL"),
             ):
                 if name not in rel_columns:
                     conn.execute(f"ALTER TABLE uie_relations ADD COLUMN {name} {sql_type} DEFAULT {default}")
@@ -96,6 +107,42 @@ class KnowledgeGraphStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
+
+    def _append_edge_hash(self, conn, relation_id: str) -> None:
+        row = conn.execute("SELECT * FROM uie_relations WHERE id=?", (relation_id,)).fetchone()
+        payload = {k: row[k] for k in ("id", "source_entity_id", "target_entity_id", "predicate", "confidence", "provenance_url", "status", "domain", "claim_id", "created_at", "updated_at")}
+        head = conn.execute("SELECT record_hash FROM memory_chain ORDER BY sequence DESC LIMIT 1").fetchone()
+        previous = head["record_hash"] if head else GENESIS_HASH
+        wrapped = {"record_type": "graph_edge", "record_id": relation_id, "payload": payload}
+        digest = calculate_record_hash(wrapped, previous)
+        now = _now()
+        conn.execute("INSERT INTO memory_chain(record_type,record_id,payload_json,prev_hash,record_hash,created_at) VALUES(?,?,?,?,?,?)", ("graph_edge", relation_id, json.dumps(wrapped,sort_keys=True,separators=(",",":"),ensure_ascii=False), previous,digest,now))
+        conn.execute("UPDATE uie_relations SET prev_hash=?,record_hash=? WHERE id=?", (previous,digest,relation_id))
+        event = "INSERT" if row["created_at"] == row["updated_at"] else ("SUPERSEDED_TEMPORAL" if row["status"] == "superseded_temporal" else "CONFIDENCE_UPDATE" if row["status"] == "unverified_claim" else "REJECT" if row["status"] == "rejected" else "INSERT")
+        append_integrity_event(conn, "relation", relation_id, event, payload)
+
+    def verify_integrity_chain(self, table_name: str) -> tuple[bool, str | None]:
+        if table_name not in {"uie_relations", "uie_lessons", "heuristic_rules", "memory_chain", "uie_integrity_ledger"}:
+            raise ValueError("unsupported integrity table")
+        with self._connect() as conn:
+            ok, error = verify_integrity_ledger(conn)
+            if not ok:
+                return ok, error
+            # The ledger is authoritative. Check that the latest event snapshot agrees with mutable current rows.
+            mapping = {"uie_relations": ("relation", "id"), "heuristic_rules": ("heuristic", "id"), "uie_lessons": ("lesson", "id")}
+            if table_name in mapping:
+                entity_type, id_col = mapping[table_name]
+                latest = {}
+                for row in conn.execute("SELECT entity_id,payload_canonical_json FROM uie_integrity_ledger WHERE entity_type=? ORDER BY sequence_id", (entity_type,)):
+                    latest[row["entity_id"]] = json.loads(row["payload_canonical_json"])
+                for row in conn.execute(f"SELECT * FROM {table_name}"):
+                    payload = latest.get(str(row[id_col]))
+                    if payload is None:
+                        return False, f"{table_name} record {row[id_col]} missing from integrity ledger"
+                    for key, value in payload.items():
+                        if key in row.keys() and row[key] != value:
+                            return False, f"{table_name} record {row[id_col]} differs from latest ledger payload at {key}"
+            return True, None
 
     def _entity(self, conn, name: str, domain: str, entity_type: str | None = None) -> str:
         clean = str(name).strip()
@@ -170,6 +217,8 @@ class KnowledgeGraphStore:
                              (now, old["id"]))
                 conn.execute("UPDATE uie_relations SET status='conflicted_evidence',updated_at=? WHERE id=?",
                              (now, relation_id))
+                self._append_edge_hash(conn, old["id"])
+                self._append_edge_hash(conn, relation_id)
                 conn.execute(
                     """INSERT INTO uie_graph_contradictions(id,source_entity_id,predicate,existing_relation_id,
                        incoming_relation_id,existing_target_entity_id,incoming_target_entity_id,detail_tag,created_at)
@@ -287,6 +336,9 @@ class KnowledgeGraphStore:
                 sql += " AND (claim_id=? OR claim_id IS NULL)"
                 args.append(str(older_claim_id))
             cur = conn.execute(sql, args)
+            changed = conn.execute("SELECT id FROM uie_relations WHERE source_entity_id=? AND lower(predicate)=lower(?) AND target_entity_id=? AND status='superseded_temporal' AND updated_at=?", (source["id"], predicate, old_target["id"], now)).fetchall()
+            for changed_row in changed:
+                self._append_edge_hash(conn, changed_row["id"])
             # Remove stale conflict presentation for a pair resolved as a dated revision,
             # but keep contradiction rows as audit history with an explicit resolution marker.
             conn.execute("""UPDATE uie_graph_contradictions SET resolution_status='resolved_temporal_revision'

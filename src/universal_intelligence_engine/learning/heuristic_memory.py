@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from ..security.provenance_crypto import GENESIS_HASH, calculate_record_hash
+from ..security.provenance_crypto import GENESIS_HASH, calculate_record_hash, append_integrity_event, ensure_integrity_ledger
 
 
 class HeuristicMemory:
@@ -27,6 +27,7 @@ class HeuristicMemory:
             columns={row["name"] for row in conn.execute("PRAGMA table_info(heuristic_rules)")}
             for name in ("prev_hash","record_hash"):
                 if name not in columns: conn.execute(f"ALTER TABLE heuristic_rules ADD COLUMN {name} TEXT")
+            ensure_integrity_ledger(conn)
             conn.execute("""CREATE TABLE IF NOT EXISTS memory_chain (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT, record_type TEXT NOT NULL, record_id TEXT NOT NULL,
                 payload_json TEXT NOT NULL, prev_hash TEXT NOT NULL, record_hash TEXT NOT NULL, created_at TEXT NOT NULL)""")
@@ -73,6 +74,7 @@ class HeuristicMemory:
                 conn.execute("INSERT INTO memory_chain(record_type,record_id,payload_json,prev_hash,record_hash,created_at) VALUES(?,?,?,?,?,?)",
                     ("heuristic",result["id"],json.dumps(wrapped,sort_keys=True,separators=(",",":"),ensure_ascii=False),previous,digest,now))
                 conn.execute("UPDATE heuristic_rules SET prev_hash=?,record_hash=? WHERE id=?",(previous,digest,result["id"]))
+                append_integrity_event(conn, "heuristic", result["id"], "CONFIDENCE_UPDATE" if result.get("action") == "updated" else "INSERT", payload)
         return result
 
 
@@ -111,6 +113,7 @@ class HeuristicMemory:
             conn.execute("INSERT INTO memory_chain(record_type,record_id,payload_json,prev_hash,record_hash,created_at) VALUES(?,?,?,?,?,?)",
                          ("heuristic", rule_id, json.dumps(wrapped, sort_keys=True, separators=(",",":"), ensure_ascii=False), previous, digest, now))
             conn.execute("UPDATE heuristic_rules SET prev_hash=?,record_hash=? WHERE id=?", (previous, digest, rule_id))
+            append_integrity_event(conn, "heuristic", rule_id, "CONFIDENCE_UPDATE" if action == "updated" else "INSERT", payload)
         return {"stored": True, "id": rule_id, "confidence": confidence, "action": action, "rule_type": rule_type}
 
     def get_rules(self, domain: str | None = None) -> list[dict]:
