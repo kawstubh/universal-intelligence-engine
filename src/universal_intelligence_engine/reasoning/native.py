@@ -11,8 +11,8 @@ import re
 from collections import Counter
 from typing import Sequence
 
-from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
-from .temporal import detect_contradictions, temporal_assessment
+from ..contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from ..temporal import detect_contradictions, temporal_assessment
 
 
 class NativeReasoningProvider:

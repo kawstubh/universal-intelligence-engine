@@ -4,7 +4,7 @@ from .algorithm import AdaptiveReasoningCore
 from .contracts import Evaluator, IntelligenceRequest, IntelligenceResponse, KnowledgeProvider, LearningStore, ReasoningProvider
 from .knowledge import rank_evidence
 from .persistent_memory import PersistentMemoryEngine
-from .reasoning import NativeReasoningProvider
+from .reasoning import NativeReasoningProvider, UIEReasoningCoordinator
 from .runtime import SenseActRuntime
 
 
@@ -14,10 +14,12 @@ class UniversalIntelligenceEngine:
     def __init__(self, knowledge: KnowledgeProvider, reasoning: ReasoningProvider | None = None,
                  evaluator: Evaluator | None = None, learning_store: LearningStore | None = None,
                  algorithm: AdaptiveReasoningCore | None = None, runtime: SenseActRuntime | None = None,
-                 lesson_memory: PersistentMemoryEngine | None = None) -> None:
+                 lesson_memory: PersistentMemoryEngine | None = None,
+                 reasoning_coordinator: UIEReasoningCoordinator | None = None) -> None:
         self.knowledge = knowledge
         # Native reasoning is the fail-safe baseline; external providers are optional accelerators.
         self.reasoning = reasoning or NativeReasoningProvider()
+        self.reasoning_coordinator = reasoning_coordinator or UIEReasoningCoordinator()
         self.evaluator = evaluator
         self.learning_store = learning_store
         self.lesson_memory = lesson_memory
@@ -68,7 +70,7 @@ class UniversalIntelligenceEngine:
         fused_evidence = tuple(rank_evidence(raw_evidence))
         decision = self.algorithm.decide(request, fused_evidence)
         evidence = decision.evidence
-        response = self.reasoning.reason(request, evidence)
+        response = self.reasoning_coordinator.reason(request, evidence, self.reasoning)
         evaluation = self.evaluator.evaluate(response) if self.evaluator else None
 
         if self.learning_store is not None:
@@ -82,6 +84,13 @@ class UniversalIntelligenceEngine:
                 "evaluation": evaluation_map, "algorithm": "ARC", "algorithm_version": "0.2.0",
                 "decision": decision.action, "decision_confidence": decision.confidence,
                 "decision_signals": decision.signals,
+                "reasoning_mode": response.metadata.get("reasoning_mode", "direct"),
+                "deliberation": {
+                    "trajectory_count": (response.metadata.get("deliberation") or {}).get("trajectory_count", 0),
+                    "selected_score": (response.metadata.get("deliberation") or {}).get("selected_score"),
+                    "selected_verified": (response.metadata.get("deliberation") or {}).get("selected_verified", False),
+                    "selection_reason": (response.metadata.get("deliberation") or {}).get("selection_reason", "direct_lookup"),
+                },
             })
 
         metadata = dict(response.metadata)
