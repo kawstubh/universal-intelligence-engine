@@ -137,7 +137,7 @@ def health() -> dict[str, Any]:
                 "openai-responses" if os.getenv("OPENAI_API_KEY") else "native"
             ),
             "reasoning_model": (
-                os.getenv("OPENAI_MODEL") or "native"
+                "native"
                 if not os.getenv("OPENAI_API_KEY")
                 else os.getenv("OPENAI_MODEL") or "default"
             ),
