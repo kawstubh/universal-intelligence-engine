@@ -1,0 +1,194 @@
+"""Durable, domain-scoped lesson memory for UIE.
+
+Lessons are proposals by default. Promotion to doctor_validated requires a
+review token configured by the trusted deployment environment. This module
+stores lessons only; callers must still apply authorization and safety policy.
+"""
+from __future__ import annotations
+
+import hmac
+import json
+import os
+import sqlite3
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+from .security.provenance_crypto import clinical_override_payload, sign_clinical_override, verify_clinical_override, append_integrity_event, ensure_integrity_ledger
+
+VALIDATION_STATUSES = {
+    "unverified_proposed", "doctor_validated", "rejected", "deprecated"
+}
+
+
+class PersistentMemoryEngine:
+    """SQLite-backed lesson store with exact-domain and status-filtered recall."""
+
+    def __init__(self, db_path: str | Path = "uie_persistent_memory.db") -> None:
+        self.db_path = str(db_path)
+        if self.db_path != ":memory:":
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+    def _init_db(self) -> None:
+        with self._connect() as conn:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS uie_lessons (
+                    id TEXT PRIMARY KEY,
+                    domain TEXT NOT NULL CHECK(length(trim(domain)) > 0),
+                    trigger_pattern TEXT NOT NULL,
+                    lesson_text TEXT NOT NULL CHECK(length(trim(lesson_text)) > 0),
+                    validation_status TEXT NOT NULL DEFAULT 'unverified_proposed'
+                        CHECK(validation_status IN
+                        ('unverified_proposed','doctor_validated','rejected','deprecated')),
+                    confidence REAL NOT NULL CHECK(confidence >= 0.0 AND confidence <= 1.0),
+                    source_origin TEXT NOT NULL,
+                    immutable_guardian_flag INTEGER NOT NULL DEFAULT 0
+                        CHECK(immutable_guardian_flag IN (0,1)),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    reviewer_id TEXT,
+                    hmac_signature TEXT,
+                    prev_hash TEXT,
+                    record_hash TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_uie_lessons_domain_status
+                    ON uie_lessons(domain, validation_status);
+            """)
+            columns={row["name"] for row in conn.execute("PRAGMA table_info(uie_lessons)")}
+            if "hmac_signature" not in columns: conn.execute("ALTER TABLE uie_lessons ADD COLUMN hmac_signature TEXT")
+            if "prev_hash" not in columns: conn.execute("ALTER TABLE uie_lessons ADD COLUMN prev_hash TEXT")
+            if "record_hash" not in columns: conn.execute("ALTER TABLE uie_lessons ADD COLUMN record_hash TEXT")
+            ensure_integrity_ledger(conn)
+            conn.executescript("""
+                CREATE TRIGGER IF NOT EXISTS require_clinical_hmac_insert
+                BEFORE INSERT ON uie_lessons WHEN NEW.validation_status='doctor_validated'
+                    AND (NEW.hmac_signature IS NULL OR length(NEW.hmac_signature)=0)
+                BEGIN SELECT RAISE(ABORT, 'doctor_validated requires HMAC signature'); END;
+                CREATE TRIGGER IF NOT EXISTS require_clinical_hmac_update
+                BEFORE UPDATE OF validation_status ON uie_lessons WHEN NEW.validation_status='doctor_validated'
+                    AND (NEW.hmac_signature IS NULL OR length(NEW.hmac_signature)=0)
+                BEGIN SELECT RAISE(ABORT, 'doctor_validated requires HMAC signature'); END;
+            """)
+
+    def store_lesson(
+        self,
+        domain: str,
+        trigger_pattern: Iterable[str],
+        lesson_text: str,
+        source_origin: str,
+        confidence: float = 0.40,
+    ) -> str:
+        """Store a proposed lesson. This method cannot self-approve a lesson."""
+        normalized_domain = domain.strip().lower()
+        triggers = [str(item).strip().lower() for item in trigger_pattern if str(item).strip()]
+        text = lesson_text.strip()
+        origin = source_origin.strip()
+        score = float(confidence)
+        if not normalized_domain or not text or not origin:
+            raise ValueError("domain, lesson_text and source_origin are required")
+        if not triggers:
+            raise ValueError("at least one non-empty trigger is required")
+        if not 0.0 <= score <= 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+        now = datetime.now(timezone.utc).isoformat()
+        lesson_id = str(uuid.uuid4())
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO uie_lessons
+                (id, domain, trigger_pattern, lesson_text, validation_status,
+                 confidence, source_origin, immutable_guardian_flag, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'unverified_proposed', ?, ?, 0, ?, ?)""",
+                (lesson_id, normalized_domain, json.dumps(triggers), text, score, origin, now, now),
+            )
+            row = dict(conn.execute("SELECT * FROM uie_lessons WHERE id=?", (lesson_id,)).fetchone())
+            payload = {k: row[k] for k in ("id","domain","trigger_pattern","lesson_text","validation_status","confidence","source_origin","immutable_guardian_flag","created_at","updated_at","reviewer_id","hmac_signature")}
+            ledger = append_integrity_event(conn, "lesson", lesson_id, "INSERT", payload)
+            conn.execute("UPDATE uie_lessons SET prev_hash=?,record_hash=? WHERE id=?", (ledger["prev_hash"], ledger["record_hash"], lesson_id))
+        return lesson_id
+
+    def validate_lesson(self, lesson_id: str, reviewer_id: str, review_token: str, signature: str | None = None) -> None:
+        """Promote only after reviewer authorization and HMAC signing of the exact lesson payload."""
+        expected = os.getenv("UIE_LESSON_REVIEW_TOKEN")
+        if not expected or not review_token or not hmac.compare_digest(expected, review_token):
+            raise PermissionError("authorized lesson review is not configured or token is invalid")
+        if not reviewer_id.strip():
+            raise ValueError("reviewer_id is required")
+        with self._connect() as conn:
+            row=conn.execute("SELECT * FROM uie_lessons WHERE id=? AND validation_status='unverified_proposed' AND immutable_guardian_flag=0",(lesson_id,)).fetchone()
+            if row is None: raise ValueError("lesson not found or not eligible for validation")
+            payload=clinical_override_payload(lesson_id,row["domain"],row["lesson_text"],reviewer_id)
+            # Legacy trusted review-token flow signs server-side; callers may instead provide
+            # an explicit signature made with UIE_DOCTOR_SIGNING_KEY.
+            signing_key=os.getenv("UIE_DOCTOR_SIGNING_KEY") or expected
+            if signature is None:
+                signature=sign_clinical_override(payload,signing_key)
+            elif not verify_clinical_override(payload,signature,signing_key):
+                raise PermissionError("clinical override HMAC signature is invalid")
+            if not verify_clinical_override(payload,signature,signing_key):
+                raise PermissionError("clinical override HMAC signature is invalid")
+            now = datetime.now(timezone.utc).isoformat()
+            cursor=conn.execute(
+                """UPDATE uie_lessons SET validation_status='doctor_validated', reviewer_id=?,
+                   hmac_signature=?, updated_at=? WHERE id=? AND validation_status='unverified_proposed'
+                   AND immutable_guardian_flag=0""",
+                (reviewer_id.strip(),signature,now,lesson_id))
+            if cursor.rowcount != 1: raise ValueError("lesson not found or not eligible for validation")
+            updated = dict(conn.execute("SELECT * FROM uie_lessons WHERE id=?", (lesson_id,)).fetchone())
+            payload = {k: updated[k] for k in ("id","domain","trigger_pattern","lesson_text","validation_status","confidence","source_origin","immutable_guardian_flag","created_at","updated_at","reviewer_id","hmac_signature")}
+            ledger = append_integrity_event(conn, "lesson", lesson_id, "CONFIDENCE_UPDATE", payload, signature, signing_key)
+            conn.execute("UPDATE uie_lessons SET prev_hash=?,record_hash=? WHERE id=?", (ledger["prev_hash"], ledger["record_hash"], lesson_id))
+
+    def sign_override(self, lesson_id: str, reviewer_id: str, key: str | None = None) -> str:
+        with self._connect() as conn:
+            row=conn.execute("SELECT * FROM uie_lessons WHERE id=? AND validation_status='unverified_proposed'",(lesson_id,)).fetchone()
+        if row is None: raise ValueError("lesson not found or not eligible for validation")
+        payload=clinical_override_payload(lesson_id,row["domain"],row["lesson_text"],reviewer_id)
+        return sign_clinical_override(payload,key)
+
+    def verify_override(self, lesson_id: str) -> bool:
+        with self._connect() as conn:
+            row=conn.execute("SELECT * FROM uie_lessons WHERE id=?",(lesson_id,)).fetchone()
+        if row is None or row["validation_status"] != "doctor_validated" or not row["hmac_signature"]:
+            return False
+        payload=clinical_override_payload(lesson_id,row["domain"],row["lesson_text"],row["reviewer_id"] or "")
+        return verify_clinical_override(payload,row["hmac_signature"],os.getenv("UIE_DOCTOR_SIGNING_KEY") or os.getenv("UIE_LESSON_REVIEW_TOKEN"))
+
+    def recall_lessons(
+        self, domain: str, query: str, require_validated_only: bool = True, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Keyword recall scoped to an exact domain; no embeddings are implied."""
+        normalized_domain = domain.strip().lower()
+        terms = [term for term in query.lower().split() if len(term) > 2]
+        if not normalized_domain or not terms:
+            return []
+        limit = max(1, min(int(limit), 50))
+        status_clause = "AND validation_status='doctor_validated'" if require_validated_only else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM uie_lessons WHERE domain=? {status_clause} ORDER BY updated_at DESC LIMIT ?",
+                (normalized_domain, limit * 10),
+            ).fetchall()
+        ranked: list[tuple[int, dict[str, Any]]] = []
+        for row in rows:
+            item = dict(row)
+            if item["validation_status"] == "doctor_validated":
+                payload=clinical_override_payload(item["id"],item["domain"],item["lesson_text"],item.get("reviewer_id") or "")
+                signing_key=os.getenv("UIE_DOCTOR_SIGNING_KEY") or os.getenv("UIE_LESSON_REVIEW_TOKEN")
+                if not verify_clinical_override(payload,item.get("hmac_signature") or "",signing_key):
+                    continue
+            triggers = json.loads(item["trigger_pattern"])
+            searchable = " ".join([item["lesson_text"].lower(), *triggers])
+            score = sum(1 for term in set(terms) if term in searchable)
+            if score:
+                item["trigger_pattern"] = triggers
+                item["match_terms"] = score
+                ranked.append((score, item))
+        ranked.sort(key=lambda pair: (pair[0], pair[1]["updated_at"]), reverse=True)
+        return [item for _, item in ranked[:limit]]

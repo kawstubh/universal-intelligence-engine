@@ -1,0 +1,9 @@
+﻿{
+  "health_life_sciences": ["https://www.who.int/sitemap.xml", "https://www.cdc.gov/sitemap.xml", "https://europepmc.org/"],
+  "defence_geopolitics": ["https://www.sipri.org/sitemap.xml", "https://www.nato.int/cps/en/natohq/sitemap.xml"],
+  "politics_government_countries": ["https://www.un.org/sitemap.xml", "https://www.worldbank.org/sitemap.xml", "https://www.india.gov.in/sitemap.xml"],
+  "technology_science": ["https://arxiv.org/sitemap.xml", "https://www.w3.org/sitemap.xml", "https://docs.python.org/3/sitemap.xml"],
+  "markets_finance_industry": ["https://www.sec.gov/sitemap.xml", "https://www.rbi.org.in/sitemap.xml", "https://www.nseindia.com/sitemap.xml"],
+  "daily_needs_agriculture_environment": ["https://www.fao.org/sitemap.xml", "https://www.unep.org/sitemap.xml", "https://www.noaa.gov/sitemap.xml"],
+  "news_current_affairs": ["https://www.bbc.com/sitemaps/https-index-com-news.xml", "https://www.theguardian.com/sitemaps/news.xml", "https://www.thehindu.com/sitemap.xml"]
+}

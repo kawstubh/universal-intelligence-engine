@@ -17,6 +17,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
+from .web_knowledge import PublicWebKnowledgeStore
+from .reasoning.tool_reflexion import ToolReflexionEngine
 
 
 def _utc_now() -> str:
@@ -67,20 +69,28 @@ class FreePublicKnowledgeProvider:
         re.IGNORECASE,
     )
 
-    def __init__(self, max_results: int = 8):
+    def __init__(self, max_results: int = 8, web_knowledge: PublicWebKnowledgeStore | None = None, reflexion: ToolReflexionEngine | None = None):
         self.max_results = max(1, min(max_results, 12))
+        self.reflexion = reflexion or ToolReflexionEngine()
+        self.web_knowledge = web_knowledge or PublicWebKnowledgeStore(
+            os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3"), reflexion=self.reflexion
+        )
 
     def search(self, request: IntelligenceRequest) -> list[Evidence]:
         query = request.goal.strip()
         if not query:
             return []
-        evidence: list[Evidence] = []
+        # Previously harvested sources are searched first; online providers remain
+        # available for freshness and coverage. Corpus items retain URL/hash provenance.
+        query = self.reflexion.prepare_query("wikipedia", query)
+        evidence: list[Evidence] = self.web_knowledge.search(query, limit=self.max_results)
         if self._MEDICAL_TERMS.search(query):
             evidence.extend(self._search_europe_pmc(request, query))
         evidence.extend(self._search_wikipedia(request, query))
         return evidence[: self.max_results]
 
     def _search_wikipedia(self, request: IntelligenceRequest, query: str) -> list[Evidence]:
+        query = self.reflexion.prepare_query("wikipedia", query)
         language = (request.language or "en").strip().lower()
         if not re.fullmatch(r"[a-z]{2,3}", language):
             language = "en"
@@ -90,8 +100,9 @@ class FreePublicKnowledgeProvider:
         })
         url = f"https://{language}.wikipedia.org/w/api.php?{params}"
         try:
-            data = _json_request(url, headers={"User-Agent": "UIE/0.5 (public knowledge retrieval)"})
-        except RuntimeError:
+            data = self.reflexion.execute("wikipedia", query, lambda: _json_request(url, headers={"User-Agent": "UIE/0.5 (public knowledge retrieval)"}),
+                                          is_empty=lambda payload: not bool((payload.get("query", {}).get("search", []) if isinstance(payload.get("query"), dict) else [])))
+        except (RuntimeError, TypeError, ValueError):
             return []
         query_data = data.get("query", {})
         results = query_data.get("search", []) if isinstance(query_data, dict) else []
@@ -116,14 +127,16 @@ class FreePublicKnowledgeProvider:
         return evidence
 
     def _search_europe_pmc(self, request: IntelligenceRequest, query: str) -> list[Evidence]:
+        query = self.reflexion.prepare_query("europe-pmc", query)
         params = urlencode({
             "query": query[:400], "format": "json", "pageSize": self.max_results,
             "resultType": "core",
         })
         url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?{params}"
         try:
-            data = _json_request(url, headers={"User-Agent": "UIE/0.5 (public biomedical research)"})
-        except RuntimeError:
+            data = self.reflexion.execute("europe-pmc", query, lambda: _json_request(url, headers={"User-Agent": "UIE/0.5 (public biomedical research)"}),
+                                          is_empty=lambda payload: not bool((payload.get("resultList", {}).get("result", []) if isinstance(payload.get("resultList"), dict) else [])))
+        except (RuntimeError, TypeError, ValueError):
             return []
         result_list = data.get("resultList", {})
         results = result_list.get("result", []) if isinstance(result_list, dict) else []

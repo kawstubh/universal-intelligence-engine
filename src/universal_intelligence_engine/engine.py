@@ -3,7 +3,8 @@
 from .algorithm import AdaptiveReasoningCore
 from .contracts import Evaluator, IntelligenceRequest, IntelligenceResponse, KnowledgeProvider, LearningStore, ReasoningProvider
 from .knowledge import rank_evidence
-from .reasoning import NativeReasoningProvider
+from .persistent_memory import PersistentMemoryEngine
+from .reasoning import NativeReasoningProvider, UIEReasoningCoordinator
 from .runtime import SenseActRuntime
 
 
@@ -12,12 +13,16 @@ class UniversalIntelligenceEngine:
 
     def __init__(self, knowledge: KnowledgeProvider, reasoning: ReasoningProvider | None = None,
                  evaluator: Evaluator | None = None, learning_store: LearningStore | None = None,
-                 algorithm: AdaptiveReasoningCore | None = None, runtime: SenseActRuntime | None = None) -> None:
+                 algorithm: AdaptiveReasoningCore | None = None, runtime: SenseActRuntime | None = None,
+                 lesson_memory: PersistentMemoryEngine | None = None,
+                 reasoning_coordinator: UIEReasoningCoordinator | None = None) -> None:
         self.knowledge = knowledge
         # Native reasoning is the fail-safe baseline; external providers are optional accelerators.
         self.reasoning = reasoning or NativeReasoningProvider()
+        self.reasoning_coordinator = reasoning_coordinator or UIEReasoningCoordinator()
         self.evaluator = evaluator
         self.learning_store = learning_store
+        self.lesson_memory = lesson_memory
         self.algorithm = algorithm or AdaptiveReasoningCore()
         self.runtime = runtime or SenseActRuntime()
 
@@ -30,11 +35,42 @@ class UniversalIntelligenceEngine:
         return self.runtime.execute_http(**kwargs)
 
     def run(self, request: IntelligenceRequest) -> IntelligenceResponse:
+        # Only an explicitly selected domain can recall lessons; never infer a
+        # clinical/domain scope from untrusted free text. Only reviewed lessons
+        # are injected into the separate, provenance-labelled context field.
+        recalled_lessons = []
+        # Reserve this namespace for engine-generated data; clients cannot forge
+        # trusted review metadata by sending the same context key themselves.
+        safe_context = dict(request.context)
+        safe_context.pop("uie_reviewed_lessons", None)
+        domain = safe_context.get("domain")
+        if self.lesson_memory is not None and isinstance(domain, str) and domain.strip():
+            recalled_lessons = self.lesson_memory.recall_lessons(
+                domain=domain, query=request.goal, require_validated_only=True, limit=5
+            )
+        if recalled_lessons:
+            safe_context["uie_reviewed_lessons"] = [
+                {
+                    "id": item["id"],
+                    "lesson_text": item["lesson_text"],
+                    "domain": item["domain"],
+                    "validation_status": item["validation_status"],
+                    "source_origin": item["source_origin"],
+                    "reviewer_id": item.get("reviewer_id"),
+                    "confidence": item["confidence"],
+                }
+                for item in recalled_lessons
+            ]
+        if safe_context != dict(request.context):
+            request = IntelligenceRequest(
+                goal=request.goal, context=safe_context, locale=request.locale,
+                language=request.language, constraints=request.constraints,
+            )
         raw_evidence = tuple(self.knowledge.search(request))
         fused_evidence = tuple(rank_evidence(raw_evidence))
         decision = self.algorithm.decide(request, fused_evidence)
         evidence = decision.evidence
-        response = self.reasoning.reason(request, evidence)
+        response = self.reasoning_coordinator.reason(request, evidence, self.reasoning)
         evaluation = self.evaluator.evaluate(response) if self.evaluator else None
 
         if self.learning_store is not None:
@@ -48,6 +84,13 @@ class UniversalIntelligenceEngine:
                 "evaluation": evaluation_map, "algorithm": "ARC", "algorithm_version": "0.2.0",
                 "decision": decision.action, "decision_confidence": decision.confidence,
                 "decision_signals": decision.signals,
+                "reasoning_mode": response.metadata.get("reasoning_mode", "direct"),
+                "deliberation": {
+                    "trajectory_count": (response.metadata.get("deliberation") or {}).get("trajectory_count", 0),
+                    "selected_score": (response.metadata.get("deliberation") or {}).get("selected_score"),
+                    "selected_verified": (response.metadata.get("deliberation") or {}).get("selected_verified", False),
+                    "selection_reason": (response.metadata.get("deliberation") or {}).get("selection_reason", "direct_lookup"),
+                },
             })
 
         metadata = dict(response.metadata)
@@ -60,6 +103,8 @@ class UniversalIntelligenceEngine:
             "decision_confidence": decision.confidence,
             "decision_signals": decision.signals,
             "decision_trace": list(decision.trace),
+            "reviewed_lessons_recalled": len(recalled_lessons),
+            "applied_lesson_ids": [item["id"] for item in recalled_lessons],
         })
         if evaluation is not None:
             metadata["evaluation"] = evaluation

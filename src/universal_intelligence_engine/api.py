@@ -12,7 +12,10 @@ from .contracts import IntelligenceRequest
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
+from .persistent_memory import PersistentMemoryEngine
 from .providers import FreePublicKnowledgeProvider, OpenAIResponsesReasoningProvider
+from .web_knowledge import PublicWebKnowledgeStore
+from .ingestion.pipeline import CrossDomainIngestionPipeline
 from .service import IntelligenceService
 
 
@@ -27,8 +30,15 @@ class IntelligenceRunBody(BaseModel):
     target_confidence: float = Field(default=0.72, ge=0.0, le=1.0)
 
 
+class KnowledgeHarvestBody(BaseModel):
+    urls: list[str] = Field(min_length=1, max_length=10)
+
+
 def build_service() -> IntelligenceService:
-    knowledge = FreePublicKnowledgeProvider()
+    web_knowledge = PublicWebKnowledgeStore(
+        os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3")
+    )
+    knowledge = FreePublicKnowledgeProvider(web_knowledge=web_knowledge)
     # The engine provides native reasoning when no optional OpenAI key is set.
     reasoning = OpenAIResponsesReasoningProvider() if os.getenv("OPENAI_API_KEY") else None
     memory = LearningMemory(
@@ -39,6 +49,9 @@ def build_service() -> IntelligenceService:
         reasoning=reasoning,
         evaluator=BasicResponseEvaluator(),
         learning_store=memory,
+        lesson_memory=PersistentMemoryEngine(
+            os.getenv("UIE_PERSISTENT_MEMORY_PATH", ".data/persistent_memory.sqlite3")
+        ),
     )
     return IntelligenceService(engine)
 
@@ -49,6 +62,27 @@ app = FastAPI(
     description="Shared intelligence API for research, reasoning, applications and agents.",
 )
 service = build_service()
+_background_scheduler = None
+
+
+@app.on_event("startup")
+async def start_background_learning() -> None:
+    """Enable autonomous harvesting only when explicitly opted in by deployment config."""
+    global _background_scheduler
+    if os.getenv("UIE_BACKGROUND_SCHEDULER_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    from .learning.scheduler import CuriosityScheduler
+    _background_scheduler = CuriosityScheduler(
+        state_path=os.getenv("UIE_SCHEDULER_STATE_PATH", ".data/learning_scheduler.sqlite3"),
+        interval_seconds=float(os.getenv("UIE_SCHEDULER_INTERVAL_SECONDS", "300")),
+    )
+    await _background_scheduler.start()
+
+
+@app.on_event("shutdown")
+async def stop_background_learning() -> None:
+    if _background_scheduler is not None:
+        await _background_scheduler.stop()
 
 
 def _authorize(authorization: str | None) -> None:
@@ -113,3 +147,69 @@ def run_intelligence(
         "confidence": result.confidence,
         "metadata": dict(result.metadata),
     }
+
+
+@app.get("/v1/knowledge/stats")
+def knowledge_stats(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(
+        os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3")
+    )
+    from .learning.contradiction import ContradictionEngine
+    claims = ContradictionEngine(os.getenv("UIE_CLAIM_MEMORY_PATH", ".data/claim_memory.sqlite3"))
+    scheduler_metrics = (_background_scheduler.health() if _background_scheduler is not None else {"enabled": False, "status": "disabled_by_configuration"})
+    return {"status": "ok", "corpus": store.stats(),
+            "claims": {"total": len(claims.get_claims()), "contradictions": len(claims.contradictions())},
+            "background_learning": scheduler_metrics,
+            "mode": "bounded-public-web-harvesting-and-claim-distillation",
+            "limitations": ["approved-domain allowlist", "robots.txt required",
+                            "rule-based extraction; claims remain unverified", "no model-weight training"]}
+
+
+@app.post("/v1/knowledge/queue/seed")
+def seed_knowledge_queue(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3"))
+    pipeline = CrossDomainIngestionPipeline(store, os.getenv("UIE_INGESTION_QUEUE_PATH", ".data/ingestion_queue.sqlite3"))
+    return {"status": "ok", **pipeline.seed(), "queue": pipeline.stats()}
+
+
+@app.post("/v1/knowledge/queue/discover")
+def discover_knowledge_queue(
+    max_sources: int = 3,
+    max_urls_per_source: int = 20,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3"))
+    pipeline = CrossDomainIngestionPipeline(store, os.getenv("UIE_INGESTION_QUEUE_PATH", ".data/ingestion_queue.sqlite3"))
+    return {"status": "ok", **pipeline.discover(max_sources, max_urls_per_source)}
+
+
+@app.post("/v1/knowledge/queue/run")
+def run_knowledge_queue(
+    limit: int = 5,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3"))
+    pipeline = CrossDomainIngestionPipeline(store, os.getenv("UIE_INGESTION_QUEUE_PATH", ".data/ingestion_queue.sqlite3"))
+    return {"status": "ok", **pipeline.run_batch(limit)}
+
+
+@app.post("/v1/knowledge/harvest")
+def harvest_public_knowledge(
+    body: KnowledgeHarvestBody,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _authorize(authorization)
+    store = PublicWebKnowledgeStore(
+        os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3")
+    )
+    results = []
+    for url in body.urls:
+        try:
+            results.append(store.ingest_url(url))
+        except ValueError as exc:
+            results.append({"url": url, "status": "rejected", "reason": str(exc)})
+    return {"results": results, "corpus": store.stats()}
