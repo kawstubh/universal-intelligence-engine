@@ -1,4 +1,4 @@
-﻿"""Bounded, provenance-preserving public-web knowledge harvesting for UIE.
+"""Bounded, provenance-preserving public-web knowledge harvesting for UIE.
 
 This is a seed implementation, not a claim to crawl the entire web. It only
 fetches explicitly submitted URLs on approved public domains, respects robots.txt,
@@ -21,11 +21,40 @@ from urllib.request import Request, urlopen
 
 from .contracts import Evidence
 
+# A broad, curated public-source seed allowlist spanning many disciplines.
+# Extend through reviewed configuration; do not treat domains as equally authoritative.
 DEFAULT_ALLOWED_DOMAINS = {
-    "wikipedia.org", "arxiv.org", "pubmed.ncbi.nlm.nih.gov",
-    "europepmc.org", "ncbi.nlm.nih.gov", "docs.python.org",
-    "developer.mozilla.org", "who.int", "www.who.int",
-    "nist.gov", "www.nist.gov", "w3.org", "www.w3.org",
+    # General reference, science and research
+    "wikipedia.org", "arxiv.org", "crossref.org", "doaj.org", "zenodo.org",
+    "scholar.google.com", "plos.org", "nature.com", "science.org",
+    "pubmed.ncbi.nlm.nih.gov", "europepmc.org", "ncbi.nlm.nih.gov",
+    "docs.python.org", "developer.mozilla.org", "w3.org",
+    # Health and international public health
+    "who.int", "www.who.int", "cdc.gov", "www.cdc.gov", "nih.gov",
+    "fda.gov", "ema.europa.eu", "nhs.uk", "medlineplus.gov",
+    # Countries, law, government, geopolitics and public data
+    "un.org", "www.un.org", "worldbank.org", "imf.org", "oecd.org",
+    "europa.eu", "india.gov.in", "gov.uk", "usa.gov", "data.gov",
+    "law.cornell.edu", "legislation.gov.uk", "supremecourtofindia.nic.in",
+    # Defence, aerospace, space and security research (public information only)
+    "nasa.gov", "esa.int", "defense.gov", "nato.int", "sipri.org",
+    "csis.org", "rand.org", "nist.gov", "www.nist.gov", "cisa.gov",
+    # Technology, engineering and standards
+    "acm.org", "ieee.org", "ietf.org", "iso.org", "opensource.org",
+    "github.com", "gitlab.com", "kubernetes.io", "linuxfoundation.org",
+    # Economics, markets and financial regulators/data
+    "sec.gov", "federalreserve.gov", "fred.stlouisfed.org", "bls.gov",
+    "bea.gov", "finra.org", "rbi.org.in", "sebi.gov.in", "nseindia.com",
+    "bseindia.com", "moneycontrol.com", "investor.gov",
+    # Energy, agriculture, environment, climate and food
+    "iea.org", "energy.gov", "noaa.gov", "ipcc.ch", "fao.org",
+    "usda.gov", "unep.org", "unfccc.int", "ourworldindata.org",
+    # News and current affairs; still verify claims against primary sources
+    "bbc.com", "bbc.co.uk", "reuters.com", "apnews.com", "theguardian.com",
+    "dw.com", "aljazeera.com", "thehindu.com", "indianexpress.com",
+    # Education, daily life, travel and public services
+    "unesco.org", "unicef.org", "consumer.ftc.gov", "consumerfinance.gov",
+    "incredibleindia.gov.in", "india.gov.in", "weather.gov",
 }
 MAX_BYTES = 1_500_000
 MAX_TEXT = 80_000

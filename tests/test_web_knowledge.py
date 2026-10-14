@@ -33,3 +33,12 @@ def test_web_corpus_requires_https(tmp_path):
     store = PublicWebKnowledgeStore(str(tmp_path / "web.sqlite3"), min_fetch_interval=0)
     with pytest.raises(ValueError, match="HTTPS"):
         store._validate_url("http://docs.python.org/3/")
+from universal_intelligence_engine.web_knowledge import DEFAULT_ALLOWED_DOMAINS
+
+
+def test_source_allowlist_covers_multiple_major_knowledge_domains():
+    required = {
+        "who.int", "defense.gov", "un.org", "reuters.com", "nasa.gov",
+        "sec.gov", "rbi.org.in", "fao.org", "developer.mozilla.org",
+    }
+    assert required.issubset(DEFAULT_ALLOWED_DOMAINS)
