@@ -1,4 +1,4 @@
-﻿"""Bounded test-time deliberation over evidence-grounded reasoning trajectories.
+"""Bounded test-time deliberation over evidence-grounded reasoning trajectories.
 
 Trajectories are structured evidence-selection paths, not private free-form chain-of-thought.
 The process reward model scores relevance, evidence support, confidence, diversity,
@@ -13,6 +13,7 @@ from typing import Sequence
 
 from ..contracts import Evidence, IntelligenceRequest, IntelligenceResponse, ReasoningProvider
 from ..temporal import detect_contradictions, temporal_assessment
+from .tool_reflexion import ToolReflexionEngine
 
 
 @dataclass(frozen=True)
@@ -119,10 +120,18 @@ class DeliberationController:
 class UIEReasoningCoordinator:
     """Coordinate bounded deliberation and final synthesis through a pluggable provider."""
 
-    def __init__(self, controller: DeliberationController | None = None):
+    def __init__(self, controller: DeliberationController | None = None, reflexion: ToolReflexionEngine | None = None):
         self.controller = controller or DeliberationController()
+        self.reflexion = reflexion or ToolReflexionEngine()
 
     def reason(self, request: IntelligenceRequest, evidence: Sequence[Evidence], provider: ReasoningProvider) -> IntelligenceResponse:
+        safe_context = dict(request.context)
+        selected_domain = safe_context.get("domain")
+        procedural_rules = self.reflexion.applicable_rules(selected_domain if isinstance(selected_domain, str) else None)
+        if procedural_rules:
+            safe_context["uie_procedural_heuristics"] = procedural_rules
+            request = IntelligenceRequest(goal=request.goal, context=safe_context, locale=request.locale,
+                                         language=request.language, constraints=request.constraints)
         search = self.controller.search(request, evidence)
         selected = search["selected_evidence"]
         response = provider.reason(request, selected)
@@ -131,5 +140,6 @@ class UIEReasoningCoordinator:
         metadata["deliberation"]["input_evidence_count"] = len(evidence)
         metadata["deliberation"]["selected_evidence_count"] = len(selected)
         metadata["reasoning_mode"] = "test_time_deliberation" if search["enabled"] else "direct"
+        metadata["procedural_heuristics_applied"] = len(procedural_rules)
         return IntelligenceResponse(answer=response.answer, evidence=response.evidence or selected, actions=response.actions,
                                     confidence=response.confidence, metadata=metadata)

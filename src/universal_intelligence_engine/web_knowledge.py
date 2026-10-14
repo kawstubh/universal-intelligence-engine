@@ -105,8 +105,13 @@ class PublicWebKnowledgeStore:
     """SQLite-backed public-source corpus with URL provenance and lexical retrieval."""
 
     def __init__(self, db_path: str = ".data/web_knowledge.sqlite3",
-                 allowed_domains: set[str] | None = None, min_fetch_interval: float = 1.0):
+                 allowed_domains: set[str] | None = None, min_fetch_interval: float = 1.0,
+                 reflexion: ToolReflexionEngine | None = None):
         self.db_path = db_path
+        if reflexion is None:
+            from .reasoning.tool_reflexion import ToolReflexionEngine
+            reflexion = ToolReflexionEngine()
+        self.reflexion = reflexion
         self.allowed_domains = set(allowed_domains or DEFAULT_ALLOWED_DOMAINS)
         self.min_fetch_interval = max(0.0, min_fetch_interval)
         self._last_fetch = 0.0
@@ -160,6 +165,14 @@ class PublicWebKnowledgeStore:
             return False
 
     def ingest_url(self, url: str) -> dict:
+        def operation():
+            return self._ingest_url(url)
+        return self.reflexion.execute(
+            "crawler", url, operation,
+            is_empty=lambda result: isinstance(result, dict) and result.get("status") not in {"stored", "already_stored"},
+        )
+
+    def _ingest_url(self, url: str) -> dict:
         host, original_url = self._validate_url(url)
         if not self._robots_allows(original_url):
             return {"url": original_url, "status": "skipped_robots_or_unavailable"}

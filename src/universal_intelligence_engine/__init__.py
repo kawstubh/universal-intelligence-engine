@@ -14,7 +14,7 @@ from .memory import LearningEvent, LearningMemory
 from .planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
 from .provenance import ProvenanceRecord
 from .providers import FreePublicKnowledgeProvider, OpenAIResponsesReasoningProvider
-from .reasoning import DeliberationBudget, DeliberationController, ProcessRewardEvaluator, UIEReasoningCoordinator, NativeReasoningProvider
+from .reasoning import DeliberationBudget, DeliberationController, ProcessRewardEvaluator, UIEReasoningCoordinator, ToolReflexionEngine, NativeReasoningProvider
 from .runtime import RuntimeEvent, SenseActRuntime
 from .service import IntelligenceService
 
@@ -35,6 +35,7 @@ __all__ = [
     "DeliberationController",
     "ProcessRewardEvaluator",
     "UIEReasoningCoordinator",
+    "ToolReflexionEngine",
     "FreePublicKnowledgeProvider",
     "GovernanceError",
     "HttpHand",
