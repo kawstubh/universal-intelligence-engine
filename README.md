@@ -30,8 +30,9 @@ The same engine can serve CueScene, Dr. Pranali Dental, and future domain applic
 
 The first production adapters are intentionally replaceable:
 
-- **BraveSearchProvider**: live web research using `BRAVE_SEARCH_API_KEY`
-- **OpenAIResponsesReasoningProvider**: reasoning using `OPENAI_API_KEY` and `OPENAI_MODEL`
+- **FreePublicKnowledgeProvider**: keyless, best-effort retrieval from Wikipedia's public API; medical and dental queries also search Europe PMC's public biomedical literature API.
+- These public sources do not require a paid search subscription or API key. They are not broad web search; availability and evidence quality vary by query, and the engine must not invent evidence when results are empty.
+- **OpenAIResponsesReasoningProvider**: optional reasoning using `OPENAI_API_KEY` and `OPENAI_MODEL`; native reasoning is used when no OpenAI key is configured.
 
 No credentials are stored in source control.
 
@@ -85,9 +86,8 @@ The response contains the answer, ranked evidence, confidence, actions, provider
 
 Copy `.env.example` and configure:
 
-- `OPENAI_API_KEY`
-- `BRAVE_SEARCH_API_KEY`
-- `UIE_API_KEY`
+- `UIE_API_KEY` (required to authorize API requests)
+- `OPENAI_API_KEY` (optional; native reasoning works without it)
 - `OPENAI_MODEL` (defaults to `gpt-6-luna`)
 - `UIE_MEMORY_PATH`
 
@@ -111,7 +111,7 @@ The baseline evaluator checks response completeness and evidence grounding. This
 
 ## Deployment
 
-A Render blueprint is included in `render.yaml`. Configure the three secret environment variables in Render; do not commit them.
+A Render blueprint is included in `render.yaml`. Configure `UIE_API_KEY` in Render; `OPENAI_API_KEY` is optional. Do not commit secrets.
 
 ## Eyes and hands
 

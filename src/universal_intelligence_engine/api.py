@@ -12,7 +12,7 @@ from .contracts import IntelligenceRequest
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
-from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
+from .providers import FreePublicKnowledgeProvider, OpenAIResponsesReasoningProvider
 from .service import IntelligenceService
 
 
@@ -28,8 +28,9 @@ class IntelligenceRunBody(BaseModel):
 
 
 def build_service() -> IntelligenceService:
-    knowledge = BraveSearchProvider()
-    reasoning = OpenAIResponsesReasoningProvider()
+    knowledge = FreePublicKnowledgeProvider()
+    # The engine provides native reasoning when no optional OpenAI key is set.
+    reasoning = OpenAIResponsesReasoningProvider() if os.getenv("OPENAI_API_KEY") else None
     memory = LearningMemory(
         os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl")
     )
@@ -44,7 +45,7 @@ def build_service() -> IntelligenceService:
 
 app = FastAPI(
     title="Universal Intelligence Engine",
-    version="0.4.1",
+    version="0.5.0",
     description="Shared intelligence API for research, reasoning, applications and agents.",
 )
 service = build_service()
@@ -66,10 +67,15 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
-        "version": "0.4.1",
+        "version": "0.5.0",
         "providers": {
-            "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
-            "reasoning": bool(os.getenv("OPENAI_API_KEY")),
+            "knowledge": True,
+            "knowledge_provider": "wikipedia+europe-pmc-public-api",
+            "knowledge_mode": "best-effort-public-sources",
+            "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
+            "reasoning": True,
+            "reasoning_provider": "openai-responses" if os.getenv("OPENAI_API_KEY") else "native",
+            "reasoning_model": os.getenv("OPENAI_MODEL", "native") if os.getenv("OPENAI_API_KEY") else "native",
         },
     }
 

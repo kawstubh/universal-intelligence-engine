@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus
-from urllib.request import Request, urlopen
+import re
+from datetime import UTC, datetime
+from html import unescape
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _json_request(
@@ -45,52 +47,118 @@ def _json_request(
     except json.JSONDecodeError as exc:
         raise RuntimeError("Provider returned invalid JSON") from exc
     if not isinstance(value, dict):
-        raise RuntimeError("Provider returned a non-object JSON response")
+        raise TypeError("Provider returned a non-object JSON response")
     return value
 
 
-class BraveSearchProvider:
-    """Live web search through Brave Search API."""
+class FreePublicKnowledgeProvider:
+    """Best-effort knowledge retrieval from free public reference APIs.
 
-    def __init__(self, api_key: str | None = None, max_results: int = 8):
-        self.api_key = api_key or os.getenv("BRAVE_SEARCH_API_KEY")
-        self.max_results = max(1, min(max_results, 20))
+    General questions use Wikipedia's public API; medical and dental questions
+    also query Europe PMC's public biomedical literature API. These sources do
+    not require a search API key and are not a replacement for broad web search.
+    """
+
+    _MEDICAL_TERMS = re.compile(
+        r"\b(dental|dentist|tooth|teeth|oral|gum|gingiva|periodontal|caries|"
+        r"cavity|endodont|orthodont|prosthodont|medicine|medical|clinical|"
+        r"patient|disease|symptom|diagnosis|treatment|drug|medication|health|"
+        r"anatomy|infection|surgery|therapy|pubmed|research study)\b",
+        re.IGNORECASE,
+    )
+
+    def __init__(self, max_results: int = 8):
+        self.max_results = max(1, min(max_results, 12))
 
     def search(self, request: IntelligenceRequest) -> list[Evidence]:
-        if not self.api_key:
-            raise RuntimeError("BRAVE_SEARCH_API_KEY is not configured")
         query = request.goal.strip()
-        if request.locale:
-            query = f"{query} region:{request.locale}"
-        url = (
-            "https://api.search.brave.com/res/v1/web/search"
-            f"?q={quote_plus(query)}&count={self.max_results}"
-        )
-        data = _json_request(
-            url,
-            headers={
-                "X-Subscription-Token": self.api_key,
-                "Accept": "application/json",
-            },
-        )
-        results = data.get("web", {}).get("results", [])
+        if not query:
+            return []
         evidence: list[Evidence] = []
+        if self._MEDICAL_TERMS.search(query):
+            evidence.extend(self._search_europe_pmc(request, query))
+        evidence.extend(self._search_wikipedia(request, query))
+        return evidence[: self.max_results]
+
+    def _search_wikipedia(self, request: IntelligenceRequest, query: str) -> list[Evidence]:
+        language = (request.language or "en").strip().lower()
+        if not re.fullmatch(r"[a-z]{2,3}", language):
+            language = "en"
+        params = urlencode({
+            "action": "query", "list": "search", "srsearch": query[:400],
+            "srlimit": self.max_results, "format": "json", "utf8": 1,
+        })
+        url = f"https://{language}.wikipedia.org/w/api.php?{params}"
+        try:
+            data = _json_request(url, headers={"User-Agent": "UIE/0.5 (public knowledge retrieval)"})
+        except RuntimeError:
+            return []
+        query_data = data.get("query", {})
+        results = query_data.get("search", []) if isinstance(query_data, dict) else []
+        evidence: list[Evidence] = []
+        if not isinstance(results, list):
+            return evidence
         for item in results:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or not item.get("title") or not isinstance(item.get("pageid"), int):
                 continue
-            evidence.append(
-                Evidence(
-                    source="brave-web",
-                    title=str(item.get("title") or "Untitled result"),
-                    retrieved_at=_utc_now(),
-                    content=str(item.get("description") or ""),
-                    url=item.get("url"),
-                    language=request.language,
-                    locale=request.locale,
-                    confidence=0.65,
-                    metadata={"provider": "brave"},
-                )
-            )
+            snippet = re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", str(item.get("snippet") or "")))).strip()
+            evidence.append(Evidence(
+                source="wikipedia-public-api",
+                title=str(item["title"]),
+                retrieved_at=_utc_now(),
+                content=snippet,
+                url=f"https://{language}.wikipedia.org/?curid={item['pageid']}",
+                language=request.language or language,
+                locale=request.locale,
+                confidence=0.55,
+                metadata={"provider": "wikipedia", "page_id": item["pageid"]},
+            ))
+        return evidence
+
+    def _search_europe_pmc(self, request: IntelligenceRequest, query: str) -> list[Evidence]:
+        params = urlencode({
+            "query": query[:400], "format": "json", "pageSize": self.max_results,
+            "resultType": "core",
+        })
+        url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?{params}"
+        try:
+            data = _json_request(url, headers={"User-Agent": "UIE/0.5 (public biomedical research)"})
+        except RuntimeError:
+            return []
+        result_list = data.get("resultList", {})
+        results = result_list.get("result", []) if isinstance(result_list, dict) else []
+        evidence: list[Evidence] = []
+        if not isinstance(results, list):
+            return evidence
+        for item in results:
+            if not isinstance(item, dict) or not item.get("title"):
+                continue
+            pmid, pmcid, doi = item.get("pmid"), item.get("pmcid"), item.get("doi")
+            if pmid:
+                result_url = f"https://europepmc.org/article/MED/{pmid}"
+            elif pmcid:
+                normalized_pmcid = str(pmcid)
+                if not normalized_pmcid.startswith("PMC"):
+                    normalized_pmcid = f"PMC{normalized_pmcid}"
+                result_url = f"https://europepmc.org/article/{normalized_pmcid}"
+            elif doi:
+                result_url = f"https://doi.org/{doi}"
+            else:
+                result_url = "https://europepmc.org/search?" + urlencode({"query": query})
+            abstract = str(item.get("abstractText") or "").strip()
+            if not abstract:
+                abstract = " ".join(str(part) for part in (item.get("journalTitle"), item.get("pubYear")) if part)
+            evidence.append(Evidence(
+                source="europe-pmc-public-api",
+                title=str(item["title"]),
+                retrieved_at=_utc_now(),
+                content=abstract[:4000],
+                url=result_url,
+                language=request.language or "en",
+                locale=request.locale,
+                confidence=0.7,
+                metadata={"provider": "europe-pmc", "publication_year": item.get("pubYear"), "journal": item.get("journalTitle"), "pmid": pmid, "doi": doi},
+            ))
         return evidence
 
 
