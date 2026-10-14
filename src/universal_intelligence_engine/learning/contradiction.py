@@ -1,4 +1,4 @@
-﻿"""Persistent structured claim memory with conservative contradiction detection."""
+"""Persistent structured claim memory with conservative contradiction detection."""
 from __future__ import annotations
 
 import json
@@ -28,9 +28,9 @@ def _is_negated(text: str) -> bool:
     return bool(re.search(r"\b(not|no|never|neither|without|cannot|can't|doesn't|isn't|aren't|wasn't|weren't|didn't|failed to|unable to)\b", text.lower()))
 
 
-_NUMERIC_RE = re.compile(r"(?P<currency>\$|â‚¬|Â£|â‚¹)?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?)\s*(?P<scale>thousand|million|billion|k|m|bn|b)?\s*(?P<unit>%|percent|mg|mcg|Âµg|Î¼g|g|kg|ml|mL|l|L|mmol|mol|km|miles?|kmÂ²|m2|employees?|offices?|users?|people|units?)?", re.IGNORECASE)
+_NUMERIC_RE = re.compile(r"(?P<currency>\$|\u20ac|\u00a3|\u20b9)?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?)\s*(?P<scale>thousand|million|billion|k|m|bn|b)?\s*(?P<unit>%|percent|mg|mcg|\u00b5g|\u03bcg|g|kg|ml|mL|l|L|mmol|mol|km|miles?|km\u00b2|m2|employees?|offices?|users?|people|units?)?", re.IGNORECASE)
 _SCALE = {"k": 1e3, "thousand": 1e3, "m": 1e6, "million": 1e6, "b": 1e9, "bn": 1e9, "billion": 1e9}
-_UNIT = {"ml": "ml", "mg": "mg", "mcg": "mcg", "Âµg": "mcg", "Î¼g": "mcg", "l": "l", "g": "g", "kg": "kg", "percent": "%", "%": "%", "employees": "employee", "employee": "employee", "offices": "office", "office": "office", "users": "user", "user": "user", "people": "person", "units": "unit", "unit": "unit"}
+_UNIT = {"ml": "ml", "mg": "mg", "mcg": "mcg", "\u00b5g": "mcg", "\u03bcg": "mcg", "l": "l", "g": "g", "kg": "kg", "percent": "%", "%": "%", "employees": "employee", "employee": "employee", "offices": "office", "office": "office", "users": "user", "user": "user", "people": "person", "units": "unit", "unit": "unit"}
 
 
 def _numeric_value(text: str) -> tuple[float, str] | None:
@@ -44,7 +44,7 @@ def _numeric_value(text: str) -> tuple[float, str] | None:
         value = float(m.group("number").replace(",", "")) * _SCALE.get((m.group("scale") or "").lower(), 1)
     except ValueError:
         return None
-    currency = {"$": "USD", "â‚¬": "EUR", "Â£": "GBP", "â‚¹": "INR"}.get(m.group("currency") or "", "")
+    currency = {"$": "USD", "\u20ac": "EUR", "\u00a3": "GBP", "\u20b9": "INR"}.get(m.group("currency") or "", "")
     unit = _UNIT.get((m.group("unit") or "").lower(), (m.group("unit") or "").lower())
     return value, currency or unit
 
