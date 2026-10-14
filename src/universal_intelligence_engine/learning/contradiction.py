@@ -1,4 +1,4 @@
-"""Persistent structured claim memory with conservative contradiction detection."""
+﻿"""Persistent structured claim memory with conservative contradiction detection."""
 from __future__ import annotations
 
 import json
@@ -28,9 +28,9 @@ def _is_negated(text: str) -> bool:
     return bool(re.search(r"\b(not|no|never|neither|without|cannot|can't|doesn't|isn't|aren't|wasn't|weren't|didn't|failed to|unable to)\b", text.lower()))
 
 
-_NUMERIC_RE = re.compile(r"(?P<currency>\$|€|£|₹)?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?)\s*(?P<scale>thousand|million|billion|k|m|bn|b)?\s*(?P<unit>%|percent|mg|mcg|µg|μg|g|kg|ml|mL|l|L|mmol|mol|km|miles?|km²|m2|employees?|offices?|users?|people|units?)?", re.IGNORECASE)
+_NUMERIC_RE = re.compile(r"(?P<currency>\$|â‚¬|Â£|â‚¹)?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?)\s*(?P<scale>thousand|million|billion|k|m|bn|b)?\s*(?P<unit>%|percent|mg|mcg|Âµg|Î¼g|g|kg|ml|mL|l|L|mmol|mol|km|miles?|kmÂ²|m2|employees?|offices?|users?|people|units?)?", re.IGNORECASE)
 _SCALE = {"k": 1e3, "thousand": 1e3, "m": 1e6, "million": 1e6, "b": 1e9, "bn": 1e9, "billion": 1e9}
-_UNIT = {"ml": "ml", "mg": "mg", "mcg": "mcg", "µg": "mcg", "μg": "mcg", "l": "l", "g": "g", "kg": "kg", "percent": "%", "%": "%", "employees": "employee", "employee": "employee", "offices": "office", "office": "office", "users": "user", "user": "user", "people": "person", "units": "unit", "unit": "unit"}
+_UNIT = {"ml": "ml", "mg": "mg", "mcg": "mcg", "Âµg": "mcg", "Î¼g": "mcg", "l": "l", "g": "g", "kg": "kg", "percent": "%", "%": "%", "employees": "employee", "employee": "employee", "offices": "office", "office": "office", "users": "user", "user": "user", "people": "person", "units": "unit", "unit": "unit"}
 
 
 def _numeric_value(text: str) -> tuple[float, str] | None:
@@ -44,9 +44,8 @@ def _numeric_value(text: str) -> tuple[float, str] | None:
         value = float(m.group("number").replace(",", "")) * _SCALE.get((m.group("scale") or "").lower(), 1)
     except ValueError:
         return None
-    currency = {"$": "USD", "€": "EUR", "£": "GBP", "₹": "INR"}.get(m.group("currency") or "", "")
+    currency = {"$": "USD", "â‚¬": "EUR", "Â£": "GBP", "â‚¹": "INR"}.get(m.group("currency") or "", "")
     unit = _UNIT.get((m.group("unit") or "").lower(), (m.group("unit") or "").lower())
-    # A currency amount with scale but no currency symbol still needs a distinct unit class.
     return value, currency or unit
 
 
@@ -133,7 +132,8 @@ class ContradictionEngine:
                     urls = list(dict.fromkeys(prior["provenance_urls"] + [claim.provenance_url]))
                     independent = any(_independent_source(url, claim.provenance_url) for url in prior["provenance_urls"])
                     reinforced = independent and claim.provenance_url not in prior["provenance_urls"]
-                    confidence = min(0.95, prior["confidence"] + (0.05 if reinforced else 0.0))
+                    # Confidence from unreviewed public sources is never promoted above 0.75.
+                    confidence = (min(0.75, prior["confidence"] + 0.05) if reinforced and prior["confidence"] < 0.75 else prior["confidence"])
                     conn.execute("UPDATE claims SET confidence=?,provenance_urls=?,updated_at=? WHERE id=?", (confidence, json.dumps(urls), now, prior["id"]))
                     return {"id": prior["id"], "status": prior["status"], "action": "corroborated" if reinforced else "duplicate_source", "confidence": confidence, "provenance_urls": urls}
 
@@ -142,7 +142,6 @@ class ContradictionEngine:
                     continue
                 old_rank, new_rank = _temporal_rank(prior.get("temporal_anchor")), _temporal_rank(claim.temporal_anchor)
                 if old_rank and new_rank and new_rank > old_rank:
-                    # A newer dated observation revises the older record; preserve both and do not label it a simultaneous contradiction.
                     conn.execute("UPDATE claims SET status='superseded_temporal',updated_at=? WHERE id=?", (now, prior["id"]))
                     conn.execute("INSERT INTO claims VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (incoming_id, claim.subject, claim.predicate, claim.object_claim, claim.temporal_anchor, claim.confidence, claim.provenance_url, claim.domain, "unverified_claim", json.dumps([claim.provenance_url]), now, now))
                     return {"id": incoming_id, "status": "unverified_claim", "action": "temporal_revision", "supersedes": prior["id"], "detail_tag": "superseded_temporal"}

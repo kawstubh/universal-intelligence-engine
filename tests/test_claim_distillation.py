@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from universal_intelligence_engine.learning.distiller import ClaimDistiller, distill_claims
 from universal_intelligence_engine.learning.contradiction import ContradictionEngine
 
@@ -32,12 +34,12 @@ def test_contradiction_preserves_both_claims_and_logs_conflict(tmp_path):
 
 def test_independent_source_corroboration_reinforces_confidence(tmp_path):
     engine = ContradictionEngine(str(tmp_path / "claims.sqlite3"))
-    first = ClaimDistiller().distill("The Orion Corporation is headquartered in Mumbai.", "https://www.sec.gov/a", "markets_finance_industry")[0]
-    second = ClaimDistiller().distill("The Orion Corporation is headquartered in Mumbai.", "https://www.reuters.com/b", "news_current_affairs")[0]
+    first = replace(ClaimDistiller().distill("The Orion Corporation is headquartered in Mumbai.", "https://www.sec.gov/a", "markets_finance_industry")[0], confidence=0.65)
+    second = replace(ClaimDistiller().distill("The Orion Corporation is headquartered in Mumbai.", "https://www.reuters.com/b", "news_current_affairs")[0], confidence=0.65)
     stored = engine.process_claim(first)
     reinforced = engine.process_claim(second)
     assert reinforced["action"] == "corroborated"
-    assert reinforced["confidence"] > stored["confidence"]
+    assert stored["confidence"] < reinforced["confidence"] <= 0.75
     record = engine.get_claims("The Orion Corporation")[0]
     assert len(record["provenance_urls"]) == 2
 

@@ -220,3 +220,12 @@ python -m pytest -q tests/test_live_ingestion_smoke.py -m integration
 ```
 
 It is skipped during ordinary offline test runs. The test checks that the source is fetched, stored in the corpus, distilled into claim memory, and that provenance and `unverified_claim` status are preserved. External site availability and robots policy can change; a skipped or failing live test must not be reported as a successful harvest.
+
+
+### Curiosity-driven bounded learning cycle
+
+The learning package now includes `CuriosityAgent`, `AutonomousLearner`, and `HeuristicMemory`. The curiosity agent maps missing or flagged query topics to the reviewed seed catalog, returning structured targets with topic, category/domain, target entity, temporal focus, and seed URL. Each cycle is bounded to at most three target categories, five discovered candidates per target, and a configurable execution deadline capped at 60 seconds. It reuses the existing ingestion pipeline rather than introducing a separate fetcher, so allowlist, robots, redirect validation, timeout, and payload limits remain in force.
+
+`ClaimQueryService.query(..., trigger_learning=True)` opts into a non-blocking background cycle when the requested subject has no claims or carries claim warnings. At most one cycle per learner instance runs at a time. This is query-triggered autonomous work, not a permanent always-on scheduler; durable queue/storage and an external process supervisor are still needed for reliable continuous operation across restarts.
+
+`HeuristicMemory` persists auditable provisional rules. Rules derived from unreviewed public sources are capped at confidence 0.75 and require at least two distinct source hosts, except temporal-revision rules which record a revision-handling heuristic without asserting factual truth. The claim memory's public-web corroboration confidence is likewise capped at 0.75. Heuristics are advisory only and do not alter executable code or security policy.
