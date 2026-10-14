@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .contradiction import ContradictionEngine
+from .semantic_matcher import SemanticMatcher
 
 
 class ClaimQueryService:
@@ -18,7 +19,15 @@ class ClaimQueryService:
     def query(self, subject: str | None = None, limit: int = 20, trigger_learning: bool = False) -> dict[str, Any]:
         """Return claim records; optionally schedule one bounded background cycle for unresolved queries."""
         limit = max(1, min(int(limit), 100))
-        claims = self.memory.get_claims(subject=subject)
+        all_claims = self.memory.get_claims()
+        if subject:
+            exact = [c for c in all_claims if subject.lower() in c.get("subject","").lower()]
+            if exact:
+                claims = exact
+            else:
+                claims = SemanticMatcher(threshold=0.18).match(subject, all_claims, threshold=0.18, limit=limit)
+        else:
+            claims = all_claims
         claims = claims[-limit:]
         warnings = [
             {"claim_id": claim["id"], "status": claim["status"], "warning": claim["warning"]}

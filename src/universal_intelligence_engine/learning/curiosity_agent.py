@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import json
 
 from .query_claims import ClaimQueryService
+from .semantic_matcher import SemanticMatcher
 
 DEFAULT_SEEDS = Path(__file__).resolve().parents[1] / "config" / "seeds.json"
 
@@ -27,7 +28,7 @@ class CuriosityAgent:
         max_targets = max(1, min(int(max_targets), 3))
         words = _tokens(query)
         claims = self.claim_query.query(limit=100)["claims"]
-        relevant = [c for c in claims if any(w.lower() in (c["subject"] + " " + c["object_claim"]).lower() for w in words)]
+        relevant = SemanticMatcher(threshold=0.18).match(query, claims, threshold=0.18, limit=100)
         if relevant and all(c["status"] not in {"conflicted_evidence", "unverified_claim", "superseded_temporal"} for c in relevant):
             return []
         seeds = json.loads(self.seed_path.read_text(encoding="utf-8-sig"))

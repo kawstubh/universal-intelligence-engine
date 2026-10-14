@@ -6,6 +6,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from ..security.provenance_crypto import GENESIS_HASH, calculate_record_hash
 
 
 class HeuristicMemory:
@@ -20,16 +21,22 @@ class HeuristicMemory:
                 id TEXT PRIMARY KEY, domain TEXT NOT NULL, subject TEXT NOT NULL,
                 predicate TEXT NOT NULL, rule_text TEXT NOT NULL, confidence REAL NOT NULL,
                 provenance_urls TEXT NOT NULL, rule_type TEXT NOT NULL,
-                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, prev_hash TEXT, record_hash TEXT,
                 UNIQUE(domain, subject, predicate, rule_type)
             )""")
+            columns={row["name"] for row in conn.execute("PRAGMA table_info(heuristic_rules)")}
+            for name in ("prev_hash","record_hash"):
+                if name not in columns: conn.execute(f"ALTER TABLE heuristic_rules ADD COLUMN {name} TEXT")
+            conn.execute("""CREATE TABLE IF NOT EXISTS memory_chain (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT, record_type TEXT NOT NULL, record_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL, prev_hash TEXT NOT NULL, record_hash TEXT NOT NULL, created_at TEXT NOT NULL)""")
 
     def _connect(self):
         conn = sqlite3.connect(self.db_path, timeout=15)
         conn.row_factory = sqlite3.Row
         return conn
 
-    def consolidate(self, claim: dict, independent_sources: int | None = None, rule_type: str = "corroborated_claim") -> dict:
+    def _consolidate_untracked(self, claim: dict, independent_sources: int | None = None, rule_type: str = "corroborated_claim") -> dict:
         urls = list(dict.fromkeys(claim.get("provenance_urls") or [claim.get("provenance_url", "")]))
         urls = [u for u in urls if u]
         sources = independent_sources if independent_sources is not None else len(urls)
@@ -49,8 +56,24 @@ class HeuristicMemory:
                 conn.execute("UPDATE heuristic_rules SET rule_text=?,confidence=?,provenance_urls=?,updated_at=? WHERE id=?", (rule, confidence, json.dumps(merged), now, existing["id"]))
                 return {"stored": True, "id": existing["id"], "confidence": confidence, "action": "updated"}
             rule_id = str(uuid.uuid4())
-            conn.execute("INSERT INTO heuristic_rules VALUES (?,?,?,?,?,?,?,?,?,?)", (rule_id, claim.get("domain", "general_reference"), claim["subject"], claim["predicate"], rule, confidence, json.dumps(urls), rule_type, now, now))
+            conn.execute("INSERT INTO heuristic_rules(id,domain,subject,predicate,rule_text,confidence,provenance_urls,rule_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)", (rule_id, claim.get("domain", "general_reference"), claim["subject"], claim["predicate"], rule, confidence, json.dumps(urls), rule_type, now, now))
         return {"stored": True, "id": rule_id, "confidence": confidence, "action": "inserted"}
+
+    def consolidate(self, claim: dict, independent_sources: int | None = None, rule_type: str = "corroborated_claim") -> dict:
+        result=self._consolidate_untracked(claim,independent_sources,rule_type)
+        if result.get("stored") and result.get("id"):
+            with self._connect() as conn:
+                row=conn.execute("SELECT * FROM heuristic_rules WHERE id=?",(result["id"],)).fetchone()
+                item=dict(row)
+                payload={k:item.get(k) for k in ("id","domain","subject","predicate","rule_text","confidence","provenance_urls","rule_type","created_at","updated_at")}
+                head=conn.execute("SELECT record_hash FROM memory_chain ORDER BY sequence DESC LIMIT 1").fetchone()
+                previous=head["record_hash"] if head else GENESIS_HASH
+                wrapped={"record_type":"heuristic","record_id":result["id"],"payload":payload}
+                digest=calculate_record_hash(wrapped,previous); now=datetime.now(timezone.utc).isoformat()
+                conn.execute("INSERT INTO memory_chain(record_type,record_id,payload_json,prev_hash,record_hash,created_at) VALUES(?,?,?,?,?,?)",
+                    ("heuristic",result["id"],json.dumps(wrapped,sort_keys=True,separators=(",",":"),ensure_ascii=False),previous,digest,now))
+                conn.execute("UPDATE heuristic_rules SET prev_hash=?,record_hash=? WHERE id=?",(previous,digest,result["id"]))
+        return result
 
     def get_rules(self, domain: str | None = None) -> list[dict]:
         with self._connect() as conn:

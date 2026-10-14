@@ -12,6 +12,8 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 from .distiller import DistilledClaim
+from ..security.provenance_crypto import GENESIS_HASH, calculate_record_hash, verify_memory_chain
+from .semantic_matcher import SemanticMatcher
 
 
 def _norm(value: str) -> str:
@@ -99,7 +101,8 @@ class ContradictionEngine:
                     id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL,
                     object_claim TEXT NOT NULL, temporal_anchor TEXT, confidence REAL NOT NULL,
                     provenance_url TEXT NOT NULL, domain TEXT NOT NULL, status TEXT NOT NULL,
-                    provenance_urls TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                    provenance_urls TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    prev_hash TEXT, record_hash TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_claim_subject_predicate ON claims(subject,predicate);
                 CREATE TABLE IF NOT EXISTS contradiction_log (
@@ -109,6 +112,12 @@ class ContradictionEngine:
                     detail_tag TEXT NOT NULL DEFAULT 'polarity_conflict'
                 );
             """)
+            claim_columns = {row["name"] for row in conn.execute("PRAGMA table_info(claims)")}
+            for name in ("prev_hash", "record_hash"):
+                if name not in claim_columns: conn.execute(f"ALTER TABLE claims ADD COLUMN {name} TEXT")
+            conn.execute("""CREATE TABLE IF NOT EXISTS memory_chain (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT, record_type TEXT NOT NULL, record_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL, prev_hash TEXT NOT NULL, record_hash TEXT NOT NULL, created_at TEXT NOT NULL)""")
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(contradiction_log)")}
             if "detail_tag" not in columns:
                 conn.execute("ALTER TABLE contradiction_log ADD COLUMN detail_tag TEXT NOT NULL DEFAULT 'polarity_conflict'")
@@ -118,7 +127,7 @@ class ContradictionEngine:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def process_claim(self, claim: DistilledClaim) -> dict:
+    def _process_claim_untracked(self, claim: DistilledClaim) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         incoming_id = str(uuid.uuid4())
         payload = claim.to_dict()
@@ -143,19 +152,68 @@ class ContradictionEngine:
                 old_rank, new_rank = _temporal_rank(prior.get("temporal_anchor")), _temporal_rank(claim.temporal_anchor)
                 if old_rank and new_rank and new_rank > old_rank:
                     conn.execute("UPDATE claims SET status='superseded_temporal',updated_at=? WHERE id=?", (now, prior["id"]))
-                    conn.execute("INSERT INTO claims VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (incoming_id, claim.subject, claim.predicate, claim.object_claim, claim.temporal_anchor, claim.confidence, claim.provenance_url, claim.domain, "unverified_claim", json.dumps([claim.provenance_url]), now, now))
+                    conn.execute("INSERT INTO claims(id,subject,predicate,object_claim,temporal_anchor,confidence,provenance_url,domain,status,provenance_urls,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (incoming_id, claim.subject, claim.predicate, claim.object_claim, claim.temporal_anchor, claim.confidence, claim.provenance_url, claim.domain, "unverified_claim", json.dumps([claim.provenance_url]), now, now))
                     return {"id": incoming_id, "status": "unverified_claim", "action": "temporal_revision", "supersedes": prior["id"], "detail_tag": "superseded_temporal"}
                 if old_rank and new_rank and new_rank < old_rank:
-                    conn.execute("INSERT INTO claims VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (incoming_id, claim.subject, claim.predicate, claim.object_claim, claim.temporal_anchor, claim.confidence, claim.provenance_url, claim.domain, "superseded_temporal", json.dumps([claim.provenance_url]), now, now))
+                    conn.execute("INSERT INTO claims(id,subject,predicate,object_claim,temporal_anchor,confidence,provenance_url,domain,status,provenance_urls,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (incoming_id, claim.subject, claim.predicate, claim.object_claim, claim.temporal_anchor, claim.confidence, claim.provenance_url, claim.domain, "superseded_temporal", json.dumps([claim.provenance_url]), now, now))
                     return {"id": incoming_id, "status": "superseded_temporal", "action": "older_temporal_evidence", "superseded_by": prior["id"], "detail_tag": "superseded_temporal"}
                 if prior["confidence"] >= self.established_confidence:
-                    conn.execute("INSERT INTO claims VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (incoming_id, claim.subject, claim.predicate, claim.object_claim, claim.temporal_anchor, claim.confidence, claim.provenance_url, claim.domain, "conflicted_evidence", json.dumps([claim.provenance_url]), now, now))
+                    conn.execute("INSERT INTO claims(id,subject,predicate,object_claim,temporal_anchor,confidence,provenance_url,domain,status,provenance_urls,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (incoming_id, claim.subject, claim.predicate, claim.object_claim, claim.temporal_anchor, claim.confidence, claim.provenance_url, claim.domain, "conflicted_evidence", json.dumps([claim.provenance_url]), now, now))
                     incoming_json = {**payload, "id": incoming_id, "status": "conflicted_evidence", "detail_tag": detail}
                     conn.execute("INSERT INTO contradiction_log(id,existing_claim_id,incoming_claim_id,existing_claim_json,incoming_claim_json,created_at,detail_tag) VALUES (?,?,?,?,?,?,?)", (str(uuid.uuid4()), prior["id"], incoming_id, json.dumps(prior), json.dumps(incoming_json), now, detail))
                     conn.execute("UPDATE claims SET status='conflicted_evidence',updated_at=? WHERE id=?", (now, prior["id"]))
                     return {"id": incoming_id, "status": "conflicted_evidence", "action": "contradiction_logged", "conflicts_with": prior["id"], "detail_tag": detail}
-            conn.execute("INSERT INTO claims VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (incoming_id, claim.subject, claim.predicate, claim.object_claim, claim.temporal_anchor, claim.confidence, claim.provenance_url, claim.domain, "unverified_claim", json.dumps([claim.provenance_url]), now, now))
+            conn.execute("INSERT INTO claims(id,subject,predicate,object_claim,temporal_anchor,confidence,provenance_url,domain,status,provenance_urls,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (incoming_id, claim.subject, claim.predicate, claim.object_claim, claim.temporal_anchor, claim.confidence, claim.provenance_url, claim.domain, "unverified_claim", json.dumps([claim.provenance_url]), now, now))
         return {"id": incoming_id, "status": "unverified_claim", "action": "inserted", "confidence": claim.confidence}
+
+    def process_claim(self, claim: DistilledClaim) -> dict:
+        result = self._process_claim_untracked(claim)
+        with self._connect() as conn:
+            for row in conn.execute("SELECT * FROM claims ORDER BY created_at,id").fetchall():
+                item=dict(row)
+                payload={k:item.get(k) for k in ("id","subject","predicate","object_claim","temporal_anchor","confidence","provenance_url","domain","status","provenance_urls","created_at","updated_at")}
+                head=conn.execute("SELECT record_hash FROM memory_chain ORDER BY sequence DESC LIMIT 1").fetchone()
+                previous=head["record_hash"] if head else GENESIS_HASH
+                wrapped={"record_type":"claim","record_id":item["id"],"payload":payload}
+                digest=calculate_record_hash(wrapped,previous); now=datetime.now(timezone.utc).isoformat()
+                conn.execute("INSERT INTO memory_chain(record_type,record_id,payload_json,prev_hash,record_hash,created_at) VALUES(?,?,?,?,?,?)",
+                    ("claim",item["id"],json.dumps(wrapped,sort_keys=True,separators=(",",":"),ensure_ascii=False),previous,digest,now))
+                conn.execute("UPDATE claims SET prev_hash=?,record_hash=? WHERE id=?",(previous,digest,item["id"]))
+        matcher=SemanticMatcher()
+        for item in self.get_claims():
+            matcher.persist_vector(self.db_path,"claim",item["id"]," ".join(str(item.get(k,"")) for k in ("subject","predicate","object_claim")))
+        return result
+
+    def verify_chain(self) -> tuple[bool, str | None]:
+        with self._connect() as conn:
+            chain=[dict(r) for r in conn.execute("SELECT * FROM memory_chain ORDER BY sequence")]
+            ok,error=verify_memory_chain(chain)
+            if not ok: return ok,error
+            latest={}
+            for row in chain:
+                if row["record_type"]=="claim": latest[row["record_id"]]=json.loads(row["payload_json"])["payload"]
+            current={r["id"]:dict(r) for r in conn.execute("SELECT * FROM claims")}
+            if set(current) != set(latest):
+                return False, "claim table contains records without chain coverage"
+            for claim_id,payload in latest.items():
+                row=current.get(claim_id)
+                if row is None: return False,f"claim {claim_id}: missing from claims table"
+                if {k:row.get(k) for k in payload} != payload: return False,f"claim {claim_id}: stored payload differs from chained record"
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='heuristic_rules'").fetchone():
+                latest_rules={}
+                for row in chain:
+                    if row["record_type"]=="heuristic": latest_rules[row["record_id"]]=json.loads(row["payload_json"])["payload"]
+                current_rules={r["id"]:dict(r) for r in conn.execute("SELECT * FROM heuristic_rules")}
+                if set(current_rules) != set(latest_rules):
+                    return False, "heuristic table contains records without chain coverage"
+                for rule_id,payload in latest_rules.items():
+                    row=current_rules.get(rule_id)
+                    if row is None: return False,f"heuristic {rule_id}: missing from rules table"
+                    if {k:row.get(k) for k in payload} != payload: return False,f"heuristic {rule_id}: stored payload differs from chained record"
+            return True,None
+
+    def semantic_matches(self, query: str, limit: int = 20, threshold: float = 0.18) -> list[dict]:
+        return SemanticMatcher(threshold=threshold).match(query,self.get_claims(),threshold=threshold,limit=limit)
 
     def process_claims(self, claims: Iterable[DistilledClaim]) -> list[dict]:
         return [self.process_claim(claim) for claim in claims]

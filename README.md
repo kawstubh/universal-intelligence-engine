@@ -229,3 +229,12 @@ The learning package now includes `CuriosityAgent`, `AutonomousLearner`, and `He
 `ClaimQueryService.query(..., trigger_learning=True)` opts into a non-blocking background cycle when the requested subject has no claims or carries claim warnings. At most one cycle per learner instance runs at a time. This is query-triggered autonomous work, not a permanent always-on scheduler; durable queue/storage and an external process supervisor are still needed for reliable continuous operation across restarts.
 
 `HeuristicMemory` persists auditable provisional rules. Rules derived from unreviewed public sources are capped at confidence 0.75 and require at least two distinct source hosts, except temporal-revision rules which record a revision-handling heuristic without asserting factual truth. The claim memory's public-web corroboration confidence is likewise capped at 0.75. Heuristics are advisory only and do not alter executable code or security policy.
+
+
+### Cryptographic provenance and lightweight semantic retrieval
+
+Learned claim and heuristic writes are appended to a SHA-256 hash chain in the shared SQLite memory database. The ContradictionEngine.verify_chain() method checks hash linkage, payload digests, and that current claim/rule rows match the latest chained snapshots. Treat a failed verification or legacy rows without chain coverage as an integrity warning; the chain is tamper-evident, not a substitute for access controls or a separately protected external checkpoint.
+
+Clinical lesson promotion requires the configured reviewer token and stores an HMAC-SHA256 signature over the lesson ID, domain, text, reviewer, and doctor_validated status. Configure UIE_DOCTOR_SIGNING_KEY as a high-entropy secret distinct from application credentials; when absent, the existing UIE_LESSON_REVIEW_TOKEN is used for compatibility. Validated lessons with missing/invalid signatures are not recalled.
+
+Semantic retrieval uses cosine scoring over deterministic 384-dimensional token/character-ngram hashing vectors by default, with a small explicit synonym bridge. NumPy is used if installed; otherwise cosine scoring uses the Python standard library. An external embedding callback can supply 384-dimensional vectors, and float32 vectors can be persisted in the SQLite semantic_vectors table. Hashed vectors are a lexical-similarity fallback, not a pretrained semantic embedding model and can miss domain-specific paraphrases.

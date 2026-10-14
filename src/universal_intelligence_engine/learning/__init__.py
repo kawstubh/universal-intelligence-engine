@@ -6,9 +6,10 @@ from .query_claims import ClaimQueryService, query_claims
 from .curiosity_agent import CuriosityAgent
 from .heuristic_memory import HeuristicMemory
 from .autonomous_learner import AutonomousLearner
+from .semantic_matcher import SemanticMatcher
 
 __all__ = [
     "ClaimDistiller", "DistilledClaim", "distill_claims",
     "ContradictionEngine", "ClaimQueryService", "query_claims",
-    "CuriosityAgent", "HeuristicMemory", "AutonomousLearner",
+    "CuriosityAgent", "HeuristicMemory", "AutonomousLearner", "SemanticMatcher",
 ]

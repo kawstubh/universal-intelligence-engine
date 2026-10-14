@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from .security.provenance_crypto import clinical_override_payload, sign_clinical_override, verify_clinical_override
 
 VALIDATION_STATUSES = {
     "unverified_proposed", "doctor_validated", "rejected", "deprecated"
@@ -52,10 +53,23 @@ class PersistentMemoryEngine:
                         CHECK(immutable_guardian_flag IN (0,1)),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    reviewer_id TEXT
+                    reviewer_id TEXT,
+                    hmac_signature TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_uie_lessons_domain_status
                     ON uie_lessons(domain, validation_status);
+            """)
+            columns={row["name"] for row in conn.execute("PRAGMA table_info(uie_lessons)")}
+            if "hmac_signature" not in columns: conn.execute("ALTER TABLE uie_lessons ADD COLUMN hmac_signature TEXT")
+            conn.executescript("""
+                CREATE TRIGGER IF NOT EXISTS require_clinical_hmac_insert
+                BEFORE INSERT ON uie_lessons WHEN NEW.validation_status='doctor_validated'
+                    AND (NEW.hmac_signature IS NULL OR length(NEW.hmac_signature)=0)
+                BEGIN SELECT RAISE(ABORT, 'doctor_validated requires HMAC signature'); END;
+                CREATE TRIGGER IF NOT EXISTS require_clinical_hmac_update
+                BEFORE UPDATE OF validation_status ON uie_lessons WHEN NEW.validation_status='doctor_validated'
+                    AND (NEW.hmac_signature IS NULL OR length(NEW.hmac_signature)=0)
+                BEGIN SELECT RAISE(ABORT, 'doctor_validated requires HMAC signature'); END;
             """)
 
     def store_lesson(
@@ -90,24 +104,48 @@ class PersistentMemoryEngine:
             )
         return lesson_id
 
-    def validate_lesson(self, lesson_id: str, reviewer_id: str, review_token: str) -> None:
-        """Promote a proposal only when a deployment-configured review token matches."""
+    def validate_lesson(self, lesson_id: str, reviewer_id: str, review_token: str, signature: str | None = None) -> None:
+        """Promote only after reviewer authorization and HMAC signing of the exact lesson payload."""
         expected = os.getenv("UIE_LESSON_REVIEW_TOKEN")
         if not expected or not review_token or not hmac.compare_digest(expected, review_token):
             raise PermissionError("authorized lesson review is not configured or token is invalid")
         if not reviewer_id.strip():
             raise ValueError("reviewer_id is required")
-        now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
-            cursor = conn.execute(
-                """UPDATE uie_lessons SET validation_status='doctor_validated',
-                   reviewer_id=?, updated_at=?
-                   WHERE id=? AND validation_status='unverified_proposed'
+            row=conn.execute("SELECT * FROM uie_lessons WHERE id=? AND validation_status='unverified_proposed' AND immutable_guardian_flag=0",(lesson_id,)).fetchone()
+            if row is None: raise ValueError("lesson not found or not eligible for validation")
+            payload=clinical_override_payload(lesson_id,row["domain"],row["lesson_text"],reviewer_id)
+            # Legacy trusted review-token flow signs server-side; callers may instead provide
+            # an explicit signature made with UIE_DOCTOR_SIGNING_KEY.
+            signing_key=os.getenv("UIE_DOCTOR_SIGNING_KEY") or expected
+            if signature is None:
+                signature=sign_clinical_override(payload,signing_key)
+            elif not verify_clinical_override(payload,signature,signing_key):
+                raise PermissionError("clinical override HMAC signature is invalid")
+            if not verify_clinical_override(payload,signature,signing_key):
+                raise PermissionError("clinical override HMAC signature is invalid")
+            now = datetime.now(timezone.utc).isoformat()
+            cursor=conn.execute(
+                """UPDATE uie_lessons SET validation_status='doctor_validated', reviewer_id=?,
+                   hmac_signature=?, updated_at=? WHERE id=? AND validation_status='unverified_proposed'
                    AND immutable_guardian_flag=0""",
-                (reviewer_id.strip(), now, lesson_id),
-            )
-            if cursor.rowcount != 1:
-                raise ValueError("lesson not found or not eligible for validation")
+                (reviewer_id.strip(),signature,now,lesson_id))
+            if cursor.rowcount != 1: raise ValueError("lesson not found or not eligible for validation")
+
+    def sign_override(self, lesson_id: str, reviewer_id: str, key: str | None = None) -> str:
+        with self._connect() as conn:
+            row=conn.execute("SELECT * FROM uie_lessons WHERE id=? AND validation_status='unverified_proposed'",(lesson_id,)).fetchone()
+        if row is None: raise ValueError("lesson not found or not eligible for validation")
+        payload=clinical_override_payload(lesson_id,row["domain"],row["lesson_text"],reviewer_id)
+        return sign_clinical_override(payload,key)
+
+    def verify_override(self, lesson_id: str) -> bool:
+        with self._connect() as conn:
+            row=conn.execute("SELECT * FROM uie_lessons WHERE id=?",(lesson_id,)).fetchone()
+        if row is None or row["validation_status"] != "doctor_validated" or not row["hmac_signature"]:
+            return False
+        payload=clinical_override_payload(lesson_id,row["domain"],row["lesson_text"],row["reviewer_id"] or "")
+        return verify_clinical_override(payload,row["hmac_signature"],os.getenv("UIE_DOCTOR_SIGNING_KEY") or os.getenv("UIE_LESSON_REVIEW_TOKEN"))
 
     def recall_lessons(
         self, domain: str, query: str, require_validated_only: bool = True, limit: int = 10
@@ -127,6 +165,11 @@ class PersistentMemoryEngine:
         ranked: list[tuple[int, dict[str, Any]]] = []
         for row in rows:
             item = dict(row)
+            if item["validation_status"] == "doctor_validated":
+                payload=clinical_override_payload(item["id"],item["domain"],item["lesson_text"],item.get("reviewer_id") or "")
+                signing_key=os.getenv("UIE_DOCTOR_SIGNING_KEY") or os.getenv("UIE_LESSON_REVIEW_TOKEN")
+                if not verify_clinical_override(payload,item.get("hmac_signature") or "",signing_key):
+                    continue
             triggers = json.loads(item["trigger_pattern"])
             searchable = " ".join([item["lesson_text"].lower(), *triggers])
             score = sum(1 for term in set(terms) if term in searchable)
