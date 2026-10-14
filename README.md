@@ -75,7 +75,8 @@ Production secrets stay server-side. Never put `SUPABASE_SERVICE_ROLE_KEY`, `UIE
 
 ## Live providers
 
-- **BraveSearchProvider**: live web research using `BRAVE_SEARCH_API_KEY`
+- **TavilySearchProvider**: live web research using `TAVILY_API_KEY` (preferred; supports a free tier)
+- **BraveSearchProvider**: optional live web research using `BRAVE_SEARCH_API_KEY`
 - **OpenAIResponsesReasoningProvider**: reasoning using `OPENAI_API_KEY` and `OPENAI_MODEL`
 
 No credentials are stored in source control.
@@ -120,7 +121,7 @@ Required production backend values include:
 - `UIE_API_URL`
 - `UIE_API_KEY` — server only
 - `OPENAI_API_KEY` — server only
-- `BRAVE_SEARCH_API_KEY` — server only
+- `TAVILY_API_KEY` — preferred free-tier web search credential, server only (or optional `BRAVE_SEARCH_API_KEY`)
 
 ## Dental authentication
 

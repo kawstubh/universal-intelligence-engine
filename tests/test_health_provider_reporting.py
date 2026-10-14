@@ -7,6 +7,7 @@ def test_health_reports_native_reasoning_fallback_when_openai_is_unconfigured(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     providers = api.health()["providers"]
 
@@ -21,6 +22,7 @@ def test_health_reports_configured_live_provider(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-a-secret")
     monkeypatch.setenv("OPENAI_MODEL", "test-model")
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-search-key")
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     providers = api.health()["providers"]
 
@@ -29,3 +31,13 @@ def test_health_reports_configured_live_provider(monkeypatch):
     assert providers["reasoning_model"] == "test-model"
     assert providers["knowledge"] is True
     assert providers["knowledge_provider"] == "brave-search"
+
+
+def test_health_prefers_tavily_when_configured(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-brave-key")
+
+    providers = api.health()["providers"]
+
+    assert providers["knowledge"] is True
+    assert providers["knowledge_provider"] == "tavily-search"

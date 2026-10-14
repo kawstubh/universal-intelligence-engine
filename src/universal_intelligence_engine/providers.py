@@ -125,6 +125,69 @@ class DisabledKnowledgeProvider:
         return []
 
 
+class TavilySearchProvider:
+    """Live web search through Tavily's search API.
+
+    Configure TAVILY_API_KEY with a key from the provider's free tier.
+    The key is sent only in the HTTPS request body and is never logged.
+    """
+
+    def __init__(self, api_key: str | None = None, max_results: int = 8):
+        self.api_key = api_key or os.getenv("TAVILY_API_KEY")
+        self.max_results = max(1, min(max_results, 20))
+
+    def search(self, request: IntelligenceRequest) -> list[Evidence]:
+        if not self.api_key:
+            raise ProviderNotConfiguredError(
+                "knowledge",
+                "Knowledge provider is not configured: TAVILY_API_KEY is missing",
+            )
+        query = request.goal.strip()
+        if request.locale:
+            query = f"{query} region:{request.locale}"
+        data = _json_request(
+            "https://api.tavily.com/search",
+            method="POST",
+            payload={
+                "api_key": self.api_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": self.max_results,
+                "include_answer": False,
+                "include_raw_content": False,
+            },
+            timeout=15.0,
+        )
+        results = data.get("results", [])
+        if not isinstance(results, list):
+            raise ProviderBadOutput("Tavily returned an invalid results field")
+        evidence: list[Evidence] = []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("url")
+            if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+                continue
+            evidence.append(
+                Evidence(
+                    source="tavily-web",
+                    title=str(item.get("title") or "Untitled result"),
+                    retrieved_at=_utc_now(),
+                    content=str(item.get("content") or ""),
+                    url=url,
+                    language=request.language,
+                    locale=request.locale,
+                    confidence=(
+                        float(item["score"])
+                        if isinstance(item.get("score"), (int, float))
+                        else 0.6
+                    ),
+                    metadata={"provider": "tavily"},
+                )
+            )
+        return evidence
+
+
 class BraveSearchProvider:
     """Live web search through Brave Search API."""
 
