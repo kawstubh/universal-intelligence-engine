@@ -15,6 +15,8 @@ from urllib.error import HTTPError, URLError
 
 from ..web_knowledge import PublicWebKnowledgeStore
 from .security import UnsafeTargetError, safe_urlopen, validate_outbound_url
+from ..learning.distiller import ClaimDistiller
+from ..learning.contradiction import ContradictionEngine
 
 DEFAULT_SEEDS = Path(__file__).resolve().parents[1] / "config" / "seeds.json"
 DOMAIN_REGISTRY = {
@@ -39,9 +41,11 @@ def classify_domain(url: str) -> str:
 class CrossDomainIngestionPipeline:
     """SQLite-backed discovery queue, sharing the approved corpus fetch policy."""
 
-    def __init__(self, store: PublicWebKnowledgeStore, queue_path: str = ".data/ingestion_queue.sqlite3", seed_path: str | None = None):
+    def __init__(self, store: PublicWebKnowledgeStore, queue_path: str = ".data/ingestion_queue.sqlite3", seed_path: str | None = None, claim_memory: ContradictionEngine | None = None):
         self.store = store
         self.queue_path = queue_path
+        self.claim_memory = claim_memory or ContradictionEngine(os.getenv("UIE_CLAIM_MEMORY_PATH", ".data/claim_memory.sqlite3"))
+        self.distiller = ClaimDistiller()
         os.makedirs(os.path.dirname(queue_path) or ".", exist_ok=True)
         with self._connect() as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS ingestion_queue (
@@ -153,6 +157,15 @@ class CrossDomainIngestionPipeline:
             except (ValueError, OSError) as exc:
                 result = {"url": url, "status": "rejected", "reason": type(exc).__name__}
             status = result.get("status", "failed")
+            claim_results = []
+            if status == "stored":
+                document = self.store.get_document(url)
+                if document:
+                    distilled = self.distiller.distill(document.get("content", ""), document.get("canonical_url") or url, row["category"])
+                    claim_results = self.claim_memory.process_claims(distilled)
+                    result["claims_extracted"] = len(distilled)
+                    result["claims_processed"] = len(claim_results)
+                    result["claim_results"] = claim_results
             with self._connect() as conn:
                 current = conn.execute("SELECT attempts FROM ingestion_queue WHERE url=?", (url,)).fetchone()
                 attempts = int(current["attempts"]) + 1

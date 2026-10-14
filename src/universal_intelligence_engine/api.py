@@ -134,10 +134,13 @@ def knowledge_stats(authorization: str | None = Header(default=None)) -> dict[st
     store = PublicWebKnowledgeStore(
         os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3")
     )
+    from .learning.contradiction import ContradictionEngine
+    claims = ContradictionEngine(os.getenv("UIE_CLAIM_MEMORY_PATH", ".data/claim_memory.sqlite3"))
     return {"status": "ok", "corpus": store.stats(),
-            "mode": "bounded-public-web-harvesting",
+            "claims": {"total": len(claims.get_claims()), "contradictions": len(claims.contradictions())},
+            "mode": "bounded-public-web-harvesting-and-claim-distillation",
             "limitations": ["approved-domain allowlist", "robots.txt required",
-                            "HTML text extraction", "lexical retrieval; no model-weight training"]}
+                            "rule-based extraction; claims remain unverified", "no model-weight training"]}
 
 
 @app.post("/v1/knowledge/queue/seed")

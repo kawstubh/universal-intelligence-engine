@@ -207,6 +207,12 @@ class PublicWebKnowledgeStore:
         return {"url": original_url, "status": "stored", "title": title,
                 "characters": len(content), "sha256": digest, "fetched_at": now}
 
+    def get_document(self, url: str) -> dict | None:
+        """Return stored extracted text and provenance for one exact queued URL."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM web_documents WHERE url=? OR canonical_url=? ORDER BY fetched_at DESC LIMIT 1", (url, url)).fetchone()
+        return dict(row) if row else None
+
     def search(self, query: str, limit: int = 5) -> list[Evidence]:
         terms = list(dict.fromkeys(re.findall(r"[a-zA-Z0-9_-]{3,}", query.lower())))[:16]
         if not terms:
