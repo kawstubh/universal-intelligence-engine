@@ -16,3 +16,5 @@ build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+[tool.pytest.ini_options]
+markers = ["integration: opt-in tests that access controlled external services"]

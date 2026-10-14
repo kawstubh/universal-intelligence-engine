@@ -204,3 +204,19 @@ Crawler outbound requests now pre-resolve hostnames and reject non-public/mixed 
 ### Claim distillation and contradiction tracking
 
 When a queue item is successfully stored, UIE now loads its extracted text, applies conservative rule-based sentence distillation, and writes structured claims into `UIE_CLAIM_MEMORY_PATH` (default `.data/claim_memory.sqlite3`). Each claim stores subject, predicate, object assertion, optional temporal anchor, source-prior extraction confidence, provenance URL, category, and `unverified_claim` status. Claims are never auto-verified. Matching claims from a different source host reinforce confidence modestly and append provenance; clear polarity conflicts against a high-confidence matching subject/predicate are preserved as two records with `conflicted_evidence` status and a contradiction-log entry. This is a conservative first pass, not general semantic reasoning: it will miss many paraphrases and should not be used as a sole authority for high-stakes decisions.
+
+
+### Numeric and temporal claim resolution; reasoning retrieval
+
+The contradiction engine now tags clear scalar mismatches (`numeric_discrepancy`) when subject/predicate match and parsed units are compatible. It supports currency symbols, common magnitude suffixes (K/M/B), percentages, and selected measurement/count units; ambiguous or incomparable quantities are deliberately left unclassified. A newer dated assertion that conflicts with an older dated assertion marks the older record `superseded_temporal`, while retaining both records and leaving the newer assertion `unverified_claim`. These rules resolve timestamps conservatively; they do not establish that either claim is true.
+
+`universal_intelligence_engine.learning.query_claims` exposes `query_claims(...)` and `ClaimQueryService` for reasoning integrations. Results include source URLs and explicit warnings for `unverified_claim`, `conflicted_evidence`, and `superseded_temporal`; callers must not treat retrieval as verification.
+
+A bounded, opt-in live smoke test uses the approved public W3C PNG specification page and the same allowlist, robots, redirect, timeout, and payload-limit code path as ingestion:
+
+```powershell
+$env:UIE_RUN_LIVE_SMOKE='1'
+python -m pytest -q tests/test_live_ingestion_smoke.py -m integration
+```
+
+It is skipped during ordinary offline test runs. The test checks that the source is fetched, stored in the corpus, distilled into claim memory, and that provenance and `unverified_claim` status are preserved. External site availability and robots policy can change; a skipped or failing live test must not be reported as a successful harvest.
