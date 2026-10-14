@@ -1,4 +1,4 @@
-﻿from universal_intelligence_engine.ingestion.pipeline import CrossDomainIngestionPipeline, classify_domain
+from universal_intelligence_engine.ingestion.pipeline import CrossDomainIngestionPipeline, classify_domain
 from universal_intelligence_engine.web_knowledge import PublicWebKnowledgeStore
 from unittest.mock import patch, MagicMock
 
@@ -28,8 +28,39 @@ def test_discovery_is_bounded_and_only_queues_approved_hosts(tmp_path):
     response.read.return_value = b'<urlset><url><loc>https://arxiv.org/abs/2301.00000</loc></url><url><loc>https://evil.example/x</loc></url></urlset>'
     response.__enter__.return_value = response
     response.__exit__.return_value = False
-    with patch.object(store, '_robots_allows', return_value=True), patch('universal_intelligence_engine.ingestion.pipeline.urlopen', return_value=response):
+    with patch.object(store, '_robots_allows', return_value=True), patch('universal_intelligence_engine.ingestion.pipeline.safe_urlopen', return_value=response):
         result = pipeline.discover(max_sources=1, max_urls_per_source=1)
     assert result['sources_checked'] == 1
     assert result['queued_new'] == 1
     assert result['queue']['queued'] == 1
+
+
+def test_discovery_ignores_non_sitemap_xml(tmp_path):
+    store = PublicWebKnowledgeStore(str(tmp_path / 'corpus.sqlite3'), min_fetch_interval=0)
+    seed = tmp_path / 'seeds.json'
+    seed.write_text('{"technology_science":["https://arxiv.org/sitemap.xml"]}', encoding='utf-8')
+    pipeline = CrossDomainIngestionPipeline(store, str(tmp_path / 'queue.sqlite3'), str(seed))
+    response = MagicMock()
+    response.geturl.return_value = 'https://arxiv.org/sitemap.xml'
+    response.read.return_value = b'<html><body><a href="https://arxiv.org/abs/2301.00000">paper</a></body></html>'
+    response.__enter__.return_value = response
+    response.__exit__.return_value = False
+    with patch.object(store, '_robots_allows', return_value=True), patch('universal_intelligence_engine.ingestion.pipeline.safe_urlopen', return_value=response):
+        result = pipeline.discover(max_sources=1, max_urls_per_source=20)
+    assert result['sources_checked'] == 0
+    assert result['queue']['total'] == 0
+
+
+def test_transient_failure_is_requeued_with_bounded_retries(tmp_path):
+    store = PublicWebKnowledgeStore(str(tmp_path / 'corpus.sqlite3'), min_fetch_interval=0)
+    pipeline = CrossDomainIngestionPipeline(store, str(tmp_path / 'queue.sqlite3'))
+    pipeline.enqueue(['https://arxiv.org/abs/2301.00000'])
+    with patch.object(store, 'ingest_url', return_value={'url': 'https://arxiv.org/abs/2301.00000', 'status': 'fetch_failed'}):
+        first = pipeline.run_batch(1)
+        assert first['results'][0]['retry_scheduled'] is True
+        second = pipeline.run_batch(1)
+        assert second['results'][0]['retry_scheduled'] is True
+        third = pipeline.run_batch(1)
+        assert third['results'][0]['retry_scheduled'] is False
+    assert pipeline.stats()['skipped'] == 1
+    assert pipeline.stats()['queued'] == 0

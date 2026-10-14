@@ -1,4 +1,4 @@
-﻿from universal_intelligence_engine.web_knowledge import PublicWebKnowledgeStore
+from universal_intelligence_engine.web_knowledge import PublicWebKnowledgeStore
 import pytest
 
 
@@ -42,3 +42,11 @@ def test_source_allowlist_covers_multiple_major_knowledge_domains():
         "sec.gov", "rbi.org.in", "fao.org", "developer.mozilla.org",
     }
     assert required.issubset(DEFAULT_ALLOWED_DOMAINS)
+
+
+def test_web_corpus_rejects_nonstandard_ports_and_oversized_urls(tmp_path):
+    store = PublicWebKnowledgeStore(str(tmp_path / "web.sqlite3"), min_fetch_interval=0)
+    with pytest.raises(ValueError, match="port"):
+        store._validate_url("https://docs.python.org:8443/3/")
+    with pytest.raises(ValueError, match="2048"):
+        store._validate_url("https://docs.python.org/" + "a" * 2100)

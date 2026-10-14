@@ -7,13 +7,14 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import time
 import xml.etree.ElementTree as ET
-from urllib.request import Request, urlopen
+from urllib.request import Request
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
 
 from ..web_knowledge import PublicWebKnowledgeStore
+from .security import UnsafeTargetError, safe_urlopen, validate_outbound_url
 
 DEFAULT_SEEDS = Path(__file__).resolve().parents[1] / "config" / "seeds.json"
 DOMAIN_REGISTRY = {
@@ -98,13 +99,19 @@ class CrossDomainIngestionPipeline:
                 if not self.store._robots_allows(source_url):
                     continue
                 request = Request(source_url, headers={"User-Agent": "UIE-PublicKnowledgeBot/0.1 (+respectful public research)", "Accept": "application/xml, application/rss+xml, application/atom+xml, text/xml"})
-                with urlopen(request, timeout=8) as response:
+                with safe_urlopen(request, timeout=5, allowed_domains=self.store.allowed_domains) as response:
                     final_url = response.geturl()
-                    self.store._validate_url(final_url)
-                    body = response.read(300_001)
-                    if len(body) > 300_000:
+                    validate_outbound_url(final_url, allowed_domains=self.store.allowed_domains)
+                    content_length = response.headers.get("Content-Length")
+                    if content_length and int(content_length) > 2_000_000:
+                        continue
+                    body = response.read(2_000_001)
+                    if len(body) > 2_000_000:
                         continue
                 root = ET.fromstring(body)
+                root_tag = root.tag.rsplit("}", 1)[-1].lower()
+                if root_tag not in {"urlset", "sitemapindex", "rss", "feed", "rdf"}:
+                    continue
                 candidates = []
                 for element in root.iter():
                     tag = element.tag.rsplit("}", 1)[-1].lower()
@@ -125,7 +132,7 @@ class CrossDomainIngestionPipeline:
                         continue
                     discovered.append((category, candidate))
                 checked += 1
-            except Exception:
+            except (ValueError, OSError, HTTPError, URLError, TimeoutError, ET.ParseError, UnsafeTargetError):
                 # One malformed/unavailable feed must not halt the batch.
                 continue
         added = 0
@@ -147,8 +154,13 @@ class CrossDomainIngestionPipeline:
                 result = {"url": url, "status": "rejected", "reason": type(exc).__name__}
             status = result.get("status", "failed")
             with self._connect() as conn:
-                conn.execute("UPDATE ingestion_queue SET status=?,attempts=attempts+1,last_status=?,updated_at=CURRENT_TIMESTAMP WHERE url=?", ("done" if status == "stored" else "skipped", status, url))
-            results.append({**result, "category": row["category"]})
+                current = conn.execute("SELECT attempts FROM ingestion_queue WHERE url=?", (url,)).fetchone()
+                attempts = int(current["attempts"]) + 1
+                retryable = status in {"fetch_failed", "skipped_robots_or_unavailable", "failed"}
+                # Retry transient failures up to three attempts; no endless hot loops.
+                next_state = "queued" if retryable and attempts < 3 else ("done" if status == "stored" else "skipped")
+                conn.execute("UPDATE ingestion_queue SET status=?,attempts=?,last_status=?,updated_at=CURRENT_TIMESTAMP WHERE url=?", (next_state, attempts, status, url))
+            results.append({**result, "category": row["category"], "attempts": attempts, "retry_scheduled": next_state == "queued"})
         return {"processed": len(results), "results": results, "queue": self.stats()}
 
     def stats(self) -> dict:

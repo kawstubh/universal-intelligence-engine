@@ -189,3 +189,13 @@ The initial seven-category seed catalog is in `src/universal_intelligence_engine
 - `POST /v1/knowledge/queue/run?limit=5`
 
 The queue deduplicates URLs and tags each queued item with a category. Each discovery/run call is bounded; this is **operator-triggered**, not a background scheduler. Sitemap/feed access also checks the source allowlist and robots.txt; discovered page URLs must independently pass the allowlist. The worker uses the existing corpus fetch policy and does not write scraped text into validated lesson memory. Seed endpoints and discovery do not mean every listed source is available or that any pages have been harvested yet. Configure durable storage and a real scheduler only after staging validation.
+
+
+### Crawl safety hardening and API tests
+
+The bounded worker validates standard HTTPS URLs (including URL length and port), ignores XML that is not a recognized sitemap/feed root, and retries transient fetch/robots failures a maximum of three attempts before marking an item skipped. Authentication checks for knowledge endpoints are covered by API-level tests. The worker remains operator-triggered; no scheduler is configured.
+
+
+### SSRF and redirect protections
+
+Crawler outbound requests now pre-resolve hostnames and reject non-public/mixed DNS answers, including loopback, RFC1918 private, link-local/cloud metadata, and IPv6 local/private ranges. Redirects are validated before each hop and must remain on the approved domain allowlist. Crawler and robots requests use a five-second timeout. HTTP content is capped at 2,000,000 bytes (including an early Content-Length check and a bounded read). See `tests/test_ingestion_security.py` for adversarial resolver and redirect coverage. DNS checks reduce SSRF/DNS-rebinding risk; for high assurance, deploy outbound egress filtering too, since a conventional urllib client cannot pin the already-validated DNS address to the socket across a separate resolution without a custom transport.

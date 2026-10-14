@@ -15,9 +15,10 @@ import time
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .ingestion.security import UnsafeTargetError, safe_urlopen, validate_outbound_url
 
 from .contracts import Evidence
 
@@ -56,7 +57,7 @@ DEFAULT_ALLOWED_DOMAINS = {
     "unesco.org", "unicef.org", "consumer.ftc.gov", "consumerfinance.gov",
     "incredibleindia.gov.in", "india.gov.in", "weather.gov",
 }
-MAX_BYTES = 1_500_000
+MAX_BYTES = 2_000_000
 MAX_TEXT = 80_000
 USER_AGENT = "UIE-PublicKnowledgeBot/0.1 (+respectful public research)"
 
@@ -125,14 +126,20 @@ class PublicWebKnowledgeStore:
         return conn
 
     def _validate_url(self, url: str) -> tuple[str, str]:
+        if not isinstance(url, str) or len(url) > 2048:
+            raise ValueError("URL must be a string of at most 2048 characters")
         parsed = urlparse(url)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("Only credential-free HTTPS URLs are accepted")
-        host = parsed.hostname.lower().rstrip(".")
-        if not any(host == d or host.endswith("." + d) for d in self.allowed_domains):
-            raise ValueError("URL domain is not in UIE's approved public-source allowlist")
-        if not _is_public_host(host):
-            raise ValueError("URL host does not resolve exclusively to public IP addresses")
+        if parsed.port not in (None, 443):
+            raise ValueError("Only the standard HTTPS port is accepted")
+        if parsed.fragment:
+            url = url.split("#", 1)[0]
+            parsed = urlparse(url)
+        try:
+            host, _addresses = validate_outbound_url(url, allowed_domains=self.allowed_domains)
+        except UnsafeTargetError as exc:
+            raise ValueError(str(exc)) from exc
         return host, url
 
     def _robots_allows(self, url: str) -> bool:
@@ -142,11 +149,13 @@ class PublicWebKnowledgeStore:
         parser.set_url(robots_url)
         try:
             req = Request(robots_url, headers={"User-Agent": USER_AGENT})
-            with urlopen(req, timeout=8) as response:
-                body = response.read(256_000).decode("utf-8", "replace")
+            with safe_urlopen(req, timeout=5, allowed_domains=self.allowed_domains) as response:
+                body = response.read(256_001).decode("utf-8", "replace")
+                if len(body) > 256_000:
+                    return False
             parser.parse(body.splitlines())
             return parser.can_fetch(USER_AGENT, url)
-        except (HTTPError, URLError, TimeoutError, OSError):
+        except (HTTPError, URLError, TimeoutError, OSError, UnsafeTargetError, ValueError):
             # Fail closed if the site's crawl policy cannot be checked.
             return False
 
@@ -160,15 +169,18 @@ class PublicWebKnowledgeStore:
         request = Request(original_url, headers={"User-Agent": USER_AGENT,
                                                   "Accept": "text/html,application/xhtml+xml"})
         try:
-            with urlopen(request, timeout=15) as response:
+            with safe_urlopen(request, timeout=5, allowed_domains=self.allowed_domains) as response:
                 final_url = response.geturl()
                 final_host, _ = self._validate_url(final_url)
                 content_type = response.headers.get("Content-Type", "").lower()
                 if "html" not in content_type:
                     return {"url": original_url, "status": "skipped_non_html"}
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > MAX_BYTES:
+                    return {"url": original_url, "status": "skipped_too_large"}
                 body = response.read(MAX_BYTES + 1)
                 status = int(getattr(response, "status", 200))
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        except (HTTPError, URLError, TimeoutError, OSError, UnsafeTargetError, ValueError) as exc:
             return {"url": original_url, "status": "fetch_failed", "error": type(exc).__name__}
         finally:
             self._last_fetch = time.monotonic()
