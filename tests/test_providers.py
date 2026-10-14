@@ -42,85 +42,68 @@ def test_request_contract_remains_provider_agnostic():
     assert request.locale == "IN-MH"
 
 
-def test_missing_knowledge_provider_fails_closed(monkeypatch):
-    from universal_intelligence_engine.providers import (
-        BraveSearchProvider,
-        ProviderNotConfiguredError,
-    )
-
-    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
-    try:
-        BraveSearchProvider().search(IntelligenceRequest(goal="test"))
-        assert False, "expected provider configuration error"
-    except ProviderNotConfiguredError as exc:
-        assert exc.code == "PROVIDER_NOT_CONFIGURED"
-        assert exc.provider == "knowledge"
-
-
-def test_tavily_provider_maps_search_results_to_evidence(monkeypatch):
+def test_free_public_provider_maps_medical_and_wikipedia_results(monkeypatch):
     from universal_intelligence_engine import providers
 
-    monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
-    captured = {}
+    captured_urls = []
 
-    class FakeTavilyClient:
-        def __init__(self, api_key=None):
-            captured["api_key"] = api_key
-
-        def search(self, **kwargs):
-            captured["search_args"] = kwargs
+    def fake_request(url, **kwargs):
+        captured_urls.append(url)
+        if "europepmc" in url:
             return {
-                "results": [
+                "resultList": {
+                    "result": [
+                        {
+                            "title": "Dental research study",
+                            "abstractText": "Study abstract",
+                            "pubYear": "2025",
+                            "journalTitle": "Dental Journal",
+                            "pmid": "123456",
+                            "doi": "10.1000/example",
+                        }
+                    ]
+                }
+            }
+        return {
+            "query": {
+                "search": [
                     {
-                        "title": "Dental evidence",
-                        "url": "https://example.org/dental",
-                        "content": "Evidence summary",
-                        "score": 0.91,
-                    },
-                    {
-                        "title": "Invalid result",
-                        "url": "javascript:alert(1)",
-                        "content": "Should be ignored",
-                    },
+                        "title": "Dental caries",
+                        "pageid": 987,
+                        "snippet": "A <span>common</span> oral disease &amp; condition.",
+                    }
                 ]
             }
+        }
 
-    monkeypatch.setattr(providers, "TavilyClient", FakeTavilyClient)
-    evidence = providers.TavilySearchProvider().search(
-        IntelligenceRequest(goal="dental evidence", locale="IN-MH", language="en")
+    monkeypatch.setattr(providers, "_json_request", fake_request)
+    evidence = providers.FreePublicKnowledgeProvider().search(
+        IntelligenceRequest(goal="dental caries evidence", locale="IN-MH", language="en")
     )
 
-    assert captured["api_key"] == "test-tavily-key"
-    assert captured["search_args"]["query"] == "dental evidence region:IN-MH"
-    assert captured["search_args"]["search_depth"] == "basic"
-    assert captured["search_args"]["max_results"] == 8
-    assert len(evidence) == 1
-    assert evidence[0].source == "tavily-web"
-    assert evidence[0].url == "https://example.org/dental"
-    assert evidence[0].confidence == 0.91
-    assert evidence[0].metadata["provider"] == "tavily"
+    assert len(evidence) == 2
+    assert evidence[0].source == "europe-pmc-public-api"
+    assert evidence[0].url == "https://europepmc.org/article/MED/123456"
+    assert evidence[0].metadata["publication_year"] == "2025"
+    assert evidence[1].source == "wikipedia-public-api"
+    assert evidence[1].url == "https://en.wikipedia.org/?curid=987"
+    assert evidence[1].content == "A common oral disease & condition."
+    assert any("europepmc" in url for url in captured_urls)
+    assert any("wikipedia.org" in url for url in captured_urls)
 
 
-def test_tavily_provider_uses_keyless_mode_without_key(monkeypatch):
+def test_free_public_provider_returns_empty_evidence_when_sources_fail(monkeypatch):
     from universal_intelligence_engine import providers
 
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    captured = {}
+    def fail_request(url, **kwargs):
+        raise providers.ProviderUnavailable("source unavailable")
 
-    class FakeTavilyClient:
-        def __init__(self, *args, **kwargs):
-            captured["constructed_without_key"] = not args and not kwargs
-
-        def search(self, **kwargs):
-            return {"results": []}
-
-    monkeypatch.setattr(providers, "TavilyClient", FakeTavilyClient)
-    evidence = providers.TavilySearchProvider().search(
-        IntelligenceRequest(goal="keyless test")
+    monkeypatch.setattr(providers, "_json_request", fail_request)
+    evidence = providers.FreePublicKnowledgeProvider().search(
+        IntelligenceRequest(goal="dental evidence")
     )
 
     assert evidence == []
-    assert captured["constructed_without_key"] is True
 
 
 def test_missing_reasoning_provider_fails_closed(monkeypatch):
