@@ -1,56 +1,56 @@
 """Public API for the Universal Intelligence Engine."""
 
+from .agent import AgentRun, AgentStep, AutonomousAgent
 from .algorithm import AdaptiveReasoningCore
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
+from .eyes import Observation, WebObserver
 from .governance import ChangeProposal, GovernanceError, HumanAuthorizationGate
+from .hands import ActionResult, HttpHand
 from .knowledge import CompositeKnowledgeProvider, deduplicate_evidence, rank_evidence
 from .locale import LocaleContext, resolve_locale
 from .memory import LearningEvent, LearningMemory
-from .provenance import ProvenanceRecord
-from .providers import BraveSearchProvider, OpenAIResponsesReasoningProvider
-from .reasoning import NativeReasoningProvider
-from .agent import AgentRun, AgentStep, AutonomousAgent
 from .planner import AdaptivePlanner, Plan, PlanStep, topological_steps, validate_plan
-from .service import IntelligenceService
-from .eyes import Observation, WebObserver
-from .hands import ActionResult, HttpHand
+from .provenance import ProvenanceRecord
+from .providers import FreePublicKnowledgeProvider, OpenAIResponsesReasoningProvider
+from .reasoning import NativeReasoningProvider
 from .runtime import RuntimeEvent, SenseActRuntime
+from .service import IntelligenceService
 
 __version__ = "0.5.0"
 
 __all__ = [
-    "AdaptiveReasoningCore",
+    "ActionResult",
     "AdaptivePlanner",
+    "AdaptiveReasoningCore",
     "AgentRun",
     "AgentStep",
     "AutonomousAgent",
     "BasicResponseEvaluator",
-    "BraveSearchProvider",
     "ChangeProposal",
     "CompositeKnowledgeProvider",
     "Evidence",
+    "FreePublicKnowledgeProvider",
     "GovernanceError",
+    "HttpHand",
     "HumanAuthorizationGate",
     "IntelligenceRequest",
     "IntelligenceResponse",
     "IntelligenceService",
-    "Observation",
-    "WebObserver",
-    "ActionResult",
-    "HttpHand",
-    "RuntimeEvent",
-    "SenseActRuntime",
     "LearningEvent",
     "LearningMemory",
     "LocaleContext",
     "NativeReasoningProvider",
+    "Observation",
     "OpenAIResponsesReasoningProvider",
-    "ProvenanceRecord",
     "Plan",
     "PlanStep",
+    "ProvenanceRecord",
+    "RuntimeEvent",
+    "SenseActRuntime",
     "UniversalIntelligenceEngine",
+    "WebObserver",
     "deduplicate_evidence",
     "rank_evidence",
     "resolve_locale",

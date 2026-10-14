@@ -8,8 +8,6 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false
-      - key: BRAVE_SEARCH_API_KEY
-        sync: false
       - key: UIE_API_KEY
         sync: false
       - key: OPENAI_MODEL
