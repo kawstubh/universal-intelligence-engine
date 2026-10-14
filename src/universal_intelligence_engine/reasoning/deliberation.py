@@ -16,6 +16,7 @@ from ..temporal import detect_contradictions, temporal_assessment
 from .tool_reflexion import ToolReflexionEngine
 from ..learning.deep_reflexion import DeepReflexionEngine
 from ..learning.epistemic_dispatcher import EpistemicDiscoveryDispatcher
+from ..learning.causal_engine import CausalWorldModel
 from .symbolic_verifier import verify_numeric_claims
 
 
@@ -35,6 +36,9 @@ class ProcessRewardEvaluator:
     @classmethod
     def terms(cls, text: str) -> set[str]:
         return {word for word in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", text.lower()) if word not in cls._STOP}
+
+    def __init__(self, causal_engine: CausalWorldModel | None = None):
+        self.causal_engine = causal_engine
 
     def score_step(self, goal: str, evidence: Evidence, prior_sources: set[str]) -> tuple[float, dict]:
         goal_terms = self.terms(goal)
@@ -57,15 +61,39 @@ class ProcessRewardEvaluator:
         if numeric_findings:
             # Deterministic arithmetic contradictions cannot be treated as verified evidence.
             domain_constraint_adherence = 0.0
+        causal_projection = None
+        intervention = evidence.metadata.get("intervention", evidence.metadata.get("candidate_intervention"))
+        if self.causal_engine is not None and isinstance(intervention, dict):
+            target = intervention.get("target_entity")
+            action = intervention.get("intervention_action", intervention.get("action"))
+            if isinstance(target, str) and isinstance(action, str):
+                try:
+                    causal_projection = self.causal_engine.simulate_intervention(
+                        target, action, max_depth=int(intervention.get("max_depth", 2)))
+                    if causal_projection.critical_contraindications or causal_projection.safety_score < 0.35:
+                        domain_constraint_adherence = 0.0
+                    elif causal_projection.projected_risks:
+                        domain_constraint_adherence = min(domain_constraint_adherence, 0.35)
+                except (ValueError, TypeError, OSError):
+                    # Missing or invalid graph data cannot be interpreted as proof of safety.
+                    domain_constraint_adherence = 0.0
         evidence_grounding = (1.0 if evidence.content.strip() and (evidence.url or evidence.metadata.get("provenance"))
                               else (0.35 if evidence.content.strip() and evidence.source else 0.0))
         score = max(0.0, min(1.0, score * 0.75 + 0.10 * logical_consistency + 0.10 * evidence_grounding + 0.05 * domain_constraint_adherence))
+        if causal_projection is not None:
+            if causal_projection.critical_contraindications:
+                score *= 0.25
+            elif causal_projection.projected_risks:
+                score *= 0.65
         return score, {"source": evidence.source, "relevance": round(relevance, 4), "confidence": round(confidence, 4),
                        "freshness": round(freshness, 4), "grounded": grounded, "step_reward": round(score, 4),
                        "logical_consistency": logical_consistency, "evidence_grounding": round(evidence_grounding, 4),
                        "domain_constraint_adherence": domain_constraint_adherence,
                        "symbolic_numeric_findings": numeric_findings,
-                       "symbolic_numeric_valid": not numeric_findings}
+                       "symbolic_numeric_valid": not numeric_findings,
+                       "causal_safety_score": (causal_projection.safety_score if causal_projection else None),
+                       "causal_critical_contraindications": (causal_projection.critical_contraindications if causal_projection else []),
+                       "causal_projected_risks": (causal_projection.projected_risks if causal_projection else [])}
 
     def score_trajectory(self, goal: str, path: Sequence[Evidence]) -> tuple[float, list[dict], dict]:
         steps = []
@@ -94,8 +122,11 @@ class ProcessRewardEvaluator:
 class DeliberationController:
     """Bounded beam search that spends more test-time compute on complex queries."""
 
-    def __init__(self, evaluator: ProcessRewardEvaluator | None = None, *, max_depth: int = 4, max_beam_width: int = 6):
-        self.evaluator = evaluator or ProcessRewardEvaluator()
+    def __init__(self, evaluator: ProcessRewardEvaluator | None = None, *, max_depth: int = 4,
+                 max_beam_width: int = 6, causal_engine: CausalWorldModel | None = None):
+        self.evaluator = evaluator or ProcessRewardEvaluator(causal_engine=causal_engine)
+        if causal_engine is not None:
+            self.evaluator.causal_engine = causal_engine
         self.max_depth = max(1, min(int(max_depth), 5))
         self.max_beam_width = max(2, min(int(max_beam_width), 8))
 
