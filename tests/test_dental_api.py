@@ -181,7 +181,7 @@ def test_intelligence_provider_not_configured_is_clear(monkeypatch):
         def json(self):
             return {
                 "detail": {
-                    "message": "Knowledge provider is not configured: BRAVE_SEARCH_API_KEY is missing",
+                    "message": "Public knowledge sources are temporarily unavailable.",
                     "code": "PROVIDER_NOT_CONFIGURED",
                     "provider": "knowledge",
                 }

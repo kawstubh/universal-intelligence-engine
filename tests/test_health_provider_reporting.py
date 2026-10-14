@@ -1,13 +1,11 @@
 from universal_intelligence_engine import api
 
 
-def test_health_reports_native_reasoning_and_keyless_knowledge_when_unconfigured(
+def test_health_reports_free_public_knowledge_and_native_reasoning_when_unconfigured(
     monkeypatch,
 ):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
-    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     providers = api.health()["providers"]
 
@@ -15,14 +13,14 @@ def test_health_reports_native_reasoning_and_keyless_knowledge_when_unconfigured
     assert providers["reasoning_provider"] == "native"
     assert providers["reasoning_model"] == "native"
     assert providers["knowledge"] is True
-    assert providers["knowledge_provider"] == "tavily-search-keyless"
+    assert providers["knowledge_provider"] == "wikipedia+europe-pmc-public-api"
+    assert providers["knowledge_mode"] == "best-effort-public-sources"
+    assert "Not broad web search" in providers["knowledge_limitations"]
 
 
-def test_health_reports_configured_live_provider(monkeypatch):
+def test_health_reports_configured_reasoning_provider(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-a-secret")
     monkeypatch.setenv("OPENAI_MODEL", "test-model")
-    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-search-key")
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     providers = api.health()["providers"]
 
@@ -30,14 +28,4 @@ def test_health_reports_configured_live_provider(monkeypatch):
     assert providers["reasoning_provider"] == "openai-responses"
     assert providers["reasoning_model"] == "test-model"
     assert providers["knowledge"] is True
-    assert providers["knowledge_provider"] == "brave-search"
-
-
-def test_health_prefers_tavily_when_configured(monkeypatch):
-    monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
-    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-brave-key")
-
-    providers = api.health()["providers"]
-
-    assert providers["knowledge"] is True
-    assert providers["knowledge_provider"] == "tavily-search"
+    assert providers["knowledge_provider"] == "wikipedia+europe-pmc-public-api"
