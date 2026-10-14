@@ -77,8 +77,29 @@ class ProcessRewardEvaluator:
                 except (ValueError, TypeError, OSError):
                     # Missing or invalid graph data cannot be interpreted as proof of safety.
                     domain_constraint_adherence = 0.0
+        spatial_assertions = evidence.metadata.get("spatial_assertions", [])
+        spatial_valid = isinstance(spatial_assertions, list) and bool(spatial_assertions)
+        if spatial_valid:
+            allowed_spatial = {"ADJACENT_TO", "CONTAINS", "PROXIMATE_TO"}
+            for assertion in spatial_assertions:
+                if (not isinstance(assertion, dict)
+                    or assertion.get("predicate") not in allowed_spatial
+                    or not isinstance(assertion.get("subject"), str) or not assertion["subject"].strip()
+                    or not isinstance(assertion.get("object"), str) or not assertion["object"].strip()
+                    or not isinstance(assertion.get("provenance"), str) or not assertion["provenance"].strip()):
+                    spatial_valid = False
+                    break
+                try:
+                    spatial_confidence = float(assertion.get("confidence", 0.0))
+                except (TypeError, ValueError):
+                    spatial_valid = False
+                    break
+                if not 0.0 <= spatial_confidence <= 1.0:
+                    spatial_valid = False
+                    break
         evidence_grounding = (1.0 if evidence.content.strip() and (evidence.url or evidence.metadata.get("provenance"))
-                              else (0.35 if evidence.content.strip() and evidence.source else 0.0))
+                              else (0.65 if evidence.content.strip() and spatial_valid
+                                    else (0.35 if evidence.content.strip() and evidence.source else 0.0)))
         score = max(0.0, min(1.0, score * 0.75 + 0.10 * logical_consistency + 0.10 * evidence_grounding + 0.05 * domain_constraint_adherence))
         if causal_projection is not None:
             if causal_projection.critical_contraindications:
@@ -93,7 +114,8 @@ class ProcessRewardEvaluator:
                        "symbolic_numeric_valid": not numeric_findings,
                        "causal_safety_score": (causal_projection.safety_score if causal_projection else None),
                        "causal_critical_contraindications": (causal_projection.critical_contraindications if causal_projection else []),
-                       "causal_projected_risks": (causal_projection.projected_risks if causal_projection else [])}
+                       "causal_projected_risks": (causal_projection.projected_risks if causal_projection else []),
+                       "spatial_assertions_valid": spatial_valid}
 
     def score_trajectory(self, goal: str, path: Sequence[Evidence]) -> tuple[float, list[dict], dict]:
         steps = []
