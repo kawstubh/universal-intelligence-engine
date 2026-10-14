@@ -8,6 +8,8 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
     "cryptography>=43.0",
+    "aiosqlite>=0.20,<1",
+    "asyncpg>=0.29,<1",
 ]
 
 [build-system]

@@ -1,0 +1,11 @@
+﻿-- UIE cognitive storage schema (SQLite). Idempotent and safe to rerun.
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS uie_entities (id TEXT PRIMARY KEY, name TEXT NOT NULL, entity_type TEXT NOT NULL, domain TEXT NOT NULL, created_at TEXT NOT NULL, normalized_name TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS uie_relations (id TEXT PRIMARY KEY, source_entity_id TEXT NOT NULL REFERENCES uie_entities(id), target_entity_id TEXT NOT NULL REFERENCES uie_entities(id), predicate TEXT NOT NULL, confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1), provenance_url TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'unverified_claim', domain TEXT NOT NULL DEFAULT 'general_reference', claim_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, prev_hash TEXT, record_hash TEXT);
+CREATE INDEX IF NOT EXISTS idx_uie_rel_source ON uie_relations(source_entity_id);
+CREATE INDEX IF NOT EXISTS idx_uie_rel_target ON uie_relations(target_entity_id);
+CREATE INDEX IF NOT EXISTS idx_uie_rel_predicate ON uie_relations(predicate);
+CREATE TABLE IF NOT EXISTS uie_episodes (id TEXT PRIMARY KEY, domain TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS heuristic_rules (id TEXT PRIMARY KEY, domain TEXT NOT NULL, subject TEXT NOT NULL, predicate TEXT NOT NULL, rule_text TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0, provenance_urls TEXT NOT NULL DEFAULT '[]', rule_type TEXT NOT NULL DEFAULT 'general', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, prev_hash TEXT, record_hash TEXT);
+CREATE TABLE IF NOT EXISTS uie_integrity_ledger (sequence_id INTEGER PRIMARY KEY AUTOINCREMENT, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, event_type TEXT NOT NULL, payload_canonical_json TEXT NOT NULL, prev_hash TEXT NOT NULL, record_hash TEXT NOT NULL, hmac_signature TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_ledger_entity ON uie_integrity_ledger(entity_type, entity_id);
