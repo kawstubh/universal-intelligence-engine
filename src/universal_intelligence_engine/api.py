@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .contracts import IntelligenceRequest
+from .contracts import IntelligenceRequest, KnowledgeProvider
 from .dental_ai import router as dental_ai_router
 from .dental_api import router as dental_router
 from .engine import UniversalIntelligenceEngine
@@ -24,6 +24,7 @@ from .providers import (
     OpenAIResponsesReasoningProvider,
     ProviderNotConfiguredError,
     ProviderRateLimitError,
+    TavilySearchProvider,
 )
 from .reasoning import NativeReasoningProvider
 from .service import IntelligenceService
@@ -38,11 +39,13 @@ class IntelligenceRunBody(BaseModel):
 
 
 def build_service() -> IntelligenceService:
-    knowledge = (
-        BraveSearchProvider()
-        if os.getenv("BRAVE_SEARCH_API_KEY")
-        else NoKnowledgeProvider()
-    )
+    knowledge: KnowledgeProvider
+    if os.getenv("TAVILY_API_KEY"):
+        knowledge = TavilySearchProvider()
+    elif os.getenv("BRAVE_SEARCH_API_KEY"):
+        knowledge = BraveSearchProvider()
+    else:
+        knowledge = NoKnowledgeProvider()
     reasoning = (
         OpenAIResponsesReasoningProvider()
         if os.getenv("OPENAI_API_KEY")
@@ -132,10 +135,16 @@ def health() -> dict[str, Any]:
         "engine": "universal-intelligence-engine",
         "version": app.version,
         "providers": {
-            "knowledge": bool(os.getenv("BRAVE_SEARCH_API_KEY")),
+            "knowledge": bool(
+                os.getenv("TAVILY_API_KEY") or os.getenv("BRAVE_SEARCH_API_KEY")
+            ),
             "reasoning": True,
             "knowledge_provider": (
-                "brave-search" if os.getenv("BRAVE_SEARCH_API_KEY") else "unavailable"
+                "tavily-search"
+                if os.getenv("TAVILY_API_KEY")
+                else "brave-search"
+                if os.getenv("BRAVE_SEARCH_API_KEY")
+                else "unavailable"
             ),
             "reasoning_provider": (
                 "openai-responses" if os.getenv("OPENAI_API_KEY") else "native"
