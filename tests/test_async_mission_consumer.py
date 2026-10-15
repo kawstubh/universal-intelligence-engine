@@ -1,4 +1,4 @@
-﻿"""Async discovery queue consumer parity tests for SQLite and live PostgreSQL."""
+"""Async discovery queue consumer parity tests for SQLite and live PostgreSQL."""
 from __future__ import annotations
 import asyncio, json, os, uuid
 from types import SimpleNamespace
@@ -58,10 +58,10 @@ def test_live_postgres_consumer_concurrent_workers_claim_once_and_harvest(tmp_pa
         try:
             suffix=uuid.uuid4().hex[:10]
             dispatcher=EpistemicDiscoveryDispatcher(str(db))
-            item=dispatcher.enqueue(focus_entity='PG Widget '+suffix,query_text='technology software component',target_domains=['technology_science'],seed_allowlist=['https://www.nature.com/'])
+            item=dispatcher.enqueue(focus_entity='PG Widget '+suffix,query_text='technology software component',target_domains=['technology_science'])
             # Move the test mission into the PostgreSQL queue, not the local SQLite queue.
             now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(); mid=item['mission_id']
-            await engine.execute("INSERT INTO uie_discovery_missions(id,focus_entity,entity_key,query_text,target_domains_json,seed_allowlist_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'queued',?,?)",(mid,'PG Widget '+suffix,('pg widget '+suffix), 'technology software component',json.dumps(['technology_science']),json.dumps(['https://www.nature.com/']),now,now))
+            await engine.execute("INSERT INTO uie_discovery_missions(id,focus_entity,entity_key,query_text,target_domains_json,seed_allowlist_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'queued',?,?)",(mid,'PG Widget '+suffix,('pg widget '+suffix), 'technology software component',json.dumps(['technology_science']),json.dumps(item['seed_allowlist'][:1]),now,now))
             a,b=await asyncio.gather(learner(db).drain_and_harvest_missions_async(storage=engine),learner(db).drain_and_harvest_missions_async(storage=engine))
             assert a['missions_claimed']+b['missions_claimed']==1
             row=await engine.fetchone('SELECT status FROM uie_discovery_missions WHERE id=?',(mid,)); assert row['status']=='COMPLETED'
