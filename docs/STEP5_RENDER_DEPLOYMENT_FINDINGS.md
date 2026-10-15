@@ -23,3 +23,8 @@ Render event history returned only the October 14 deployment/build events; no la
 ## Recommendation
 
 Before release, inspect GitHub repository Settings ? Webhooks ? Render delivery history and compare it with Render's Events page. If no successful delivery/build exists for `3fe2c6f`, a manual deploy of the reviewed `main` commit may be needed, but only after explicit release approval. Consider configuring `/health` as the Render health-check path after reviewing the endpoint's dependency semantics. Neither action was performed during Step 5.
+
+
+## Post-PR release procedure (documentation only; not executed)
+
+After PR #29 is reviewed and explicitly squash-merged to `main`, the operator should resolve the previously observed deployment divergence by opening the [UIE Render service dashboard](https://dashboard.render.com/web/srv-db1acgdg1s2s7399oc2g), reviewing the latest `main` commit, and using **Manual Deploy → Deploy latest commit** only after release approval. Before triggering the deployment, set the service Health Check Path to `/health` (the observed configuration was blank). `/health` returned HTTP 200 during the October 14 runtime probe while `/` returned HTTP 404; confirm that `/health` checks the intended dependencies before saving the setting. This is a runbook recommendation, not an assertion that Render was changed or a deployment was performed. Production and Dental staging remain untouched.
