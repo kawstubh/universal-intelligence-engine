@@ -154,11 +154,34 @@ class ClaimQueryService:
                     issues.append({**issue, **stored})
                 response["graph_reflexion"] = {"issues": issues, "constraints_stored": issues,
                     "recalled_constraints": await self._arecall_reflexion_rules(adapter, subject),
-                    "discovery": {"scheduled": False, "status": "async_query_does_not_launch_background_discovery"},
+                    "discovery": {"scheduled": False, "status": "discovery_trigger_evaluated_after_claim_query"},
                     "automatic_assertion_allowed": not bool(issues),
                     "note": "Constraints are cautionary heuristics, not factual resolution; extracted evidence remains unverified."}
             if trigger_learning and subject:
-                response["learning_trigger"] = {"scheduled": False, "status": "async_storage_path_requires_explicit_async_learner"}
+                low_confidence = any(float(c.get("confidence") or 0.0) < 0.60 for c in claims)
+                flagged_claims = any(c.get("status") in {"conflicted_evidence", "unverified_claim", "superseded_temporal"} for c in claims)
+                unresolved_contradictions = any(str(item.get("resolution_status", "unresolved")).lower() == "unresolved"
+                                                for item in contradiction_rows)
+                sparse = len(claims) < 2
+                should_discover = sparse or low_confidence or flagged_claims or unresolved_contradictions
+                if should_discover:
+                    from .epistemic_dispatcher import EpistemicDiscoveryDispatcher
+                    dispatcher = object.__new__(EpistemicDiscoveryDispatcher)
+                    dispatcher.db_path = str(self.memory.db_path)
+                    dispatcher.seed_path = Path(__file__).resolve().parents[1] / "config" / "seeds.json"
+                    reason = ("sparse_claim_evidence" if sparse else
+                              "low_confidence_claim" if low_confidence else
+                              "unresolved_contradiction" if unresolved_contradictions else "flagged_claim_status")
+                    queued = await dispatcher.aenqueue(focus_entity=subject, query_text=subject,
+                                                       reason=reason, storage=adapter)
+                    response["learning_trigger"] = {"scheduled": bool(queued.get("enqueued")),
+                        "status": queued.get("status", queued.get("reason", "not_scheduled")),
+                        "reason": reason, "queue": queued,
+                        "mode": "durable_async_queue", "background_worker": "external_dispatcher_required"}
+                    if include_graph and "graph_reflexion" in response:
+                        response["graph_reflexion"]["discovery"] = response["learning_trigger"]
+                else:
+                    response["learning_trigger"] = {"scheduled": False, "status": "knowledge_has_no_flagged_claims"}
             return response
         finally:
             if own_storage:

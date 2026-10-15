@@ -42,4 +42,4 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install --upgrade pip
       - run: pip install -e '.[dev]'
-      - run: pytest -q tests/test_postgres_live.py tests/test_async_reflexion_live.py tests/test_async_claim_parity.py
+      - run: pytest -q tests/test_postgres_live.py tests/test_async_reflexion_live.py tests/test_async_claim_parity.py tests/test_async_discovery_trigger.py

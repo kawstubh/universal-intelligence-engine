@@ -26,3 +26,12 @@ CREATE TABLE IF NOT EXISTS contradiction_log (
  resolution_status TEXT NOT NULL DEFAULT 'unresolved', detail_tag TEXT NOT NULL DEFAULT 'polarity_conflict'
 );
 CREATE INDEX IF NOT EXISTS idx_contradiction_claims ON contradiction_log(existing_claim_id,incoming_claim_id);
+
+CREATE TABLE IF NOT EXISTS uie_discovery_missions (
+ id TEXT PRIMARY KEY, focus_entity TEXT NOT NULL, entity_key TEXT NOT NULL,
+ query_text TEXT NOT NULL, target_domains_json TEXT NOT NULL,
+ seed_allowlist_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, result_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_uie_discovery_status ON uie_discovery_missions(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_uie_discovery_entity ON uie_discovery_missions(entity_key, created_at);
