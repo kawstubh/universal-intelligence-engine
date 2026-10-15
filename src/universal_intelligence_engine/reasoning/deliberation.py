@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import combinations
+import asyncio
+import concurrent.futures
+import warnings
 import re
 from typing import Sequence
 
@@ -211,6 +214,9 @@ class UIEReasoningCoordinator:
         self.epistemic_dispatcher = EpistemicDiscoveryDispatcher(self.deep_reflexion.memory.db_path)
 
     def reason(self, request: IntelligenceRequest, evidence: Sequence[Evidence], provider: ReasoningProvider) -> IntelligenceResponse:
+        """Deprecated synchronous legacy facade; new integrations should await areason()."""
+        warnings.warn("UIEReasoningCoordinator.reason() is deprecated; use await areason().",
+                      DeprecationWarning, stacklevel=2)
         safe_context = dict(request.context)
         selected_domain = safe_context.get("domain")
         procedural_rules = self.reflexion.applicable_rules(selected_domain if isinstance(selected_domain, str) else None)

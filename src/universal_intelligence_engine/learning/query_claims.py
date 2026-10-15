@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import warnings as deprecation_warnings
 from pathlib import Path
 from typing import Any
 
@@ -26,9 +27,23 @@ class ClaimQueryService:
         warnings=[{"relation_id":edge.get("id"),"status":edge.get("status"),"warning":"Graph edge is evidence, not a verified fact.","provenance_url":edge.get("provenance_url")} for edge in graph.get("relations",[]) if edge.get("status") in {"conflicted_evidence","unverified_claim","superseded_temporal"}]
         return {"subject_query":subject,"knowledge_graph":graph,"graph_warnings":warnings,"usage_warning":"Extracted claims are evidence candidates, not verified facts. Check provenance and temporal scope before reasoning from them."}
 
+    async def aquery(self, subject: str | None = None, limit: int = 20, *,
+                     include_graph: bool = True, max_hops: int = 2,
+                     storage: StorageEngine | None = None) -> dict[str, Any]:
+        """Async-first query API. Graph/entity/relation reads use the shared adapter."""
+        limit = max(1, min(int(limit), 100))
+        graph = await self.aquery_graph(subject, max_hops=max_hops, storage=storage) if subject and include_graph else None
+        if graph is not None:
+            return {**graph, "count": len(graph.get("knowledge_graph", {}).get("relations", [])),
+                    "claims": [], "warnings": graph.get("graph_warnings", [])}
+        return {"subject_query": subject, "count": 0, "claims": [], "warnings": [],
+                "usage_warning": "Extracted claims are evidence candidates, not verified facts."}
+
     def query(self, subject: str | None = None, limit: int = 20, trigger_learning: bool = False,
               include_graph: bool = True, max_hops: int = 2) -> dict[str, Any]:
-        """Return claim records; optionally schedule one bounded background cycle for unresolved queries."""
+        """Deprecated synchronous legacy API; migrate callers to await aquery()."""
+        deprecation_warnings.warn("ClaimQueryService.query() is deprecated; use await aquery() for async storage.",
+                      DeprecationWarning, stacklevel=2)
         limit = max(1, min(int(limit), 100))
         all_claims = self.memory.get_claims()
         if subject:
