@@ -31,7 +31,7 @@ def test_async_query_matches_legacy_claim_filtering_temporal_and_provenance(tmp_
         memory.process_claim(_claim('Nova Holdings','revenue $7B','https://reuters.com/nova', None, .68))
         service=ClaimQueryService(memory)
         legacy=service.query('Orion Systems',include_graph=False,min_confidence=.40)
-        adapter=StorageEngine(sqlite_path=str(db)); await adapter.connect()
+        adapter=StorageEngine(url='sqlite:///' + str(db)); await adapter.connect()
         try:
             async_result=await service.aquery('Orion Systems',include_graph=False,min_confidence=.40,storage=adapter)
             assert async_result['claims']==legacy['claims']
@@ -94,10 +94,11 @@ def test_async_graph_reflexion_avoids_sync_store_constructors(tmp_path, monkeypa
         def forbidden(*args, **kwargs): raise AssertionError('synchronous SQLite store constructor invoked from aquery')
         monkeypatch.setattr(KnowledgeGraphStore,'__init__',forbidden)
         monkeypatch.setattr(HeuristicMemory,'__init__',forbidden)
-        adapter=StorageEngine(sqlite_path=str(db)); await adapter.connect()
+        adapter=StorageEngine(url='sqlite:///' + str(db)); await adapter.connect()
         try:
             result=await service.aquery('Async Entity',storage=adapter)
             assert result['knowledge_graph']['relations']
             assert 'graph_reflexion' in result
         finally: await adapter.close()
     asyncio.run(run())
+
