@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 import json
+import warnings
 
 from .query_claims import ClaimQueryService
 from .semantic_matcher import SemanticMatcher
@@ -25,9 +26,17 @@ class CuriosityAgent:
         self.seed_path = Path(seed_path) if seed_path else DEFAULT_SEEDS
 
     def inspect(self, query: str, max_targets: int = 3) -> list[dict]:
+        warnings.warn("CuriosityAgent.inspect() is deprecated; use await ainspect() for async storage.", DeprecationWarning, stacklevel=2)
+        return self._inspect_claims(query, self.claim_query.query(limit=100)["claims"], max_targets)
+
+    async def ainspect(self, query: str, max_targets: int = 3, *, storage=None) -> list[dict]:
+        """Async-first curiosity scan; reads claim evidence via the shared async adapter."""
+        result = await self.claim_query.aquery(limit=100, include_graph=False, storage=storage)
+        return self._inspect_claims(query, result["claims"], max_targets)
+
+    def _inspect_claims(self, query: str, claims: list[dict], max_targets: int) -> list[dict]:
         max_targets = max(1, min(int(max_targets), 3))
         words = _tokens(query)
-        claims = self.claim_query.query(limit=100)["claims"]
         relevant = SemanticMatcher(threshold=0.18).match(query, claims, threshold=0.18, limit=100)
         if relevant and all(c["status"] not in {"conflicted_evidence", "unverified_claim", "superseded_temporal"} for c in relevant):
             return []

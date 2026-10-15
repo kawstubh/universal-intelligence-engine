@@ -1,7 +1,9 @@
-﻿"""Bounded autonomous discovery, ingestion, claim evaluation and heuristic consolidation."""
+"""Bounded autonomous discovery, ingestion, claim evaluation and heuristic consolidation."""
 from __future__ import annotations
 
 import json
+import asyncio
+import warnings
 import os
 import tempfile
 import threading
@@ -138,10 +140,115 @@ class AutonomousLearner:
                                         "processed": len(batch.get("results", []))})
         return summary
 
+
+    async def drain_and_harvest_missions_async(self, max_missions: int = 2, max_urls_per_mission: int = 5, *, storage=None) -> dict:
+        """Consume durable discovery missions through StorageEngine on SQLite or PostgreSQL.
+
+        Fetch/distillation work is bounded and runs off the event loop; all mission state,
+        claims, graph writes, and integrity events use the async storage boundary.
+        """
+        import hashlib
+        import uuid
+        from ..db.storage_engine import StorageEngine
+        from ..security.provenance_crypto import GENESIS_HASH, canonical_json
+        from .graph_store import KnowledgeGraphStore
+
+        own_storage = storage is None
+        engine = storage or StorageEngine.from_env()
+        if own_storage:
+            await engine.connect()
+            await engine.initialize_schema()
+        dispatcher = EpistemicDiscoveryDispatcher(self.claim_memory.db_path, seed_path=getattr(self.pipeline, "seed_path", None))
+        graph = KnowledgeGraphStore(self.claim_memory.db_path)
+        limit = max(1, min(int(max_missions), 2))
+        url_limit = max(1, min(int(max_urls_per_mission), dispatcher.MAX_SEED_URLS))
+        claimed = []
+        try:
+            # The row lock and transition are one transaction; SKIP LOCKED permits
+            # independent PostgreSQL workers to claim disjoint batches.
+            async with engine.transaction() as tx:
+                if engine.dialect == "postgresql":
+                    rows = await tx.fetchall("SELECT * FROM uie_discovery_missions WHERE status IN ('queued','PENDING','pending') ORDER BY created_at LIMIT ? FOR UPDATE SKIP LOCKED", (limit,))
+                else:
+                    rows = await tx.fetchall("SELECT * FROM uie_discovery_missions WHERE status IN ('queued','PENDING','pending') ORDER BY created_at LIMIT ?", (limit,))
+                for row in rows:
+                    mission_id = str(row["id"])
+                    changed = await tx.execute("UPDATE uie_discovery_missions SET status='HARVESTING',updated_at=? WHERE id=? AND status IN ('queued','PENDING','pending')", (datetime.now(timezone.utc).isoformat(), mission_id))
+                    if not changed.rowcount:
+                        continue
+                    claimed.append({"id": mission_id, "focus_entity": row["focus_entity"], "query_text": row["query_text"], "seed_allowlist": json.loads(row["seed_allowlist_json"])[:url_limit], "target_domains": json.loads(row["target_domains_json"])})
+            summary = {"missions_claimed": len(claimed), "missions": [], "urls_processed": 0, "claims_upserted": 0, "graph_relations_added": 0}
+            for mission in claimed:
+                harvested_claims = []
+                processed = 0
+                errors = []
+                # Existing fetch policy validates seed allowlists, redirects, robots and response caps.
+                for url in list(dict.fromkeys(mission["seed_allowlist"]))[:url_limit]:
+                    try:
+                        result = await asyncio.to_thread(self.pipeline.store.ingest_url, url)
+                        if result.get("status") != "stored":
+                            errors.append(result.get("status", "fetch_failed")); continue
+                        doc = await asyncio.to_thread(self.pipeline.store.get_document, url)
+                        if not doc:
+                            continue
+                        canonical_url = doc.get("canonical_url") or url
+                        distilled = await asyncio.to_thread(self.pipeline.distiller.distill, doc.get("content", ""), canonical_url, (mission["target_domains"] or ["general_reference"])[0])
+                        harvested_claims.extend(c.to_dict() if hasattr(c, "to_dict") else dict(c) for c in distilled)
+                        processed += 1
+                    except Exception as exc:
+                        errors.append(type(exc).__name__)
+                graph_added = 0
+                stored_claims = 0
+                for claim in harvested_claims:
+                    cid = str(claim.get("id") or uuid.uuid4())
+                    claim["id"] = cid
+                    now = datetime.now(timezone.utc).isoformat()
+                    async with engine.transaction() as tx:
+                        await tx.execute("INSERT INTO claims(id,subject,predicate,object_claim,temporal_anchor,confidence,provenance_url,domain,status,provenance_urls,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", (cid, str(claim.get("subject", "")), str(claim.get("predicate", "")), str(claim.get("object_claim", "")), claim.get("temporal_anchor"), float(claim.get("confidence", 0.5)), str(claim.get("provenance_url", "")), str(claim.get("domain", "general_reference")), str(claim.get("status", "unverified_claim")), json.dumps([claim.get("provenance_url", "")] if claim.get("provenance_url") else []), now, now))
+                    if claim.get("subject") and claim.get("predicate") and claim.get("object_claim"):
+                        await graph.aingest_claim(claim, claim_id=cid, storage=engine)
+                        graph_added += 1
+                        stored_claims += 1
+                status = "COMPLETED" if stored_claims else ("FAILED" if errors else "COMPLETED")
+                now = datetime.now(timezone.utc).isoformat()
+                payload = {"id": mission["id"], "status": status, "focus_entity": mission["focus_entity"], "urls_processed": processed, "claims_upserted": stored_claims, "graph_relations_added": graph_added, "errors": errors[:10], "updated_at": now}
+                # Serialize hash-chain head and append completion atomically with status/result.
+                async with engine.transaction() as tx:
+                    if engine.dialect == "postgresql":
+                        await tx.execute("SELECT pg_advisory_xact_lock(hashtext(?))", ("uie-discovery-ledger",))
+                    await tx.execute("UPDATE uie_discovery_missions SET status=?,updated_at=?,result_json=? WHERE id=? AND status='HARVESTING'", (status, now, json.dumps(payload, sort_keys=True)[:12000], mission["id"]))
+                    head = await tx.fetchone("SELECT sequence_id,record_hash FROM uie_integrity_ledger ORDER BY sequence_id DESC LIMIT 1")
+                    previous = head["record_hash"] if head else GENESIS_HASH
+                    if engine.dialect == "postgresql":
+                        allocated = await tx.fetchone("SELECT nextval(pg_get_serial_sequence('uie_integrity_ledger','sequence_id')) AS sequence_id")
+                        sequence_id = int(allocated["sequence_id"])
+                    else:
+                        sequence_id = int(head["sequence_id"]) + 1 if head else 1
+                    wrapped = {"sequence_id": sequence_id, "entity_type": "discovery_mission", "entity_id": mission["id"], "event_type": "DISCOVERY_COMPLETED" if status == "COMPLETED" else "DISCOVERY_FAILED", "payload": payload}
+                    digest = hashlib.sha256(canonical_json(wrapped).encode("utf-8") + previous.encode("ascii")).hexdigest()
+                    await tx.execute("INSERT INTO uie_integrity_ledger(sequence_id,entity_type,entity_id,event_type,payload_canonical_json,prev_hash,record_hash) VALUES(?,?,?,?,?,?,?)", (sequence_id, "discovery_mission", mission["id"], wrapped["event_type"], canonical_json(payload), previous, digest))
+                summary["urls_processed"] += processed
+                summary["claims_upserted"] += stored_claims
+                summary["graph_relations_added"] += graph_added
+                summary["missions"].append({**payload, "ledger_sequence_id": sequence_id})
+            return summary
+        finally:
+            if own_storage:
+                await engine.close()
+
     def run_cycle(self, query: str) -> dict:
+        warnings.warn("AutonomousLearner.run_cycle() is deprecated; use await arun_cycle().", DeprecationWarning, stacklevel=2)
+        targets = self.curiosity.inspect(query, max_targets=self.MAX_DOMAINS)[:self.MAX_DOMAINS]
+        return self._run_cycle_with_targets(query, targets)
+
+    async def arun_cycle(self, query: str) -> dict:
+        """Async-first cycle: query known claim gaps via aquery before bounded ingestion work."""
+        targets = (await self.curiosity.ainspect(query, max_targets=self.MAX_DOMAINS))[:self.MAX_DOMAINS]
+        return self._run_cycle_with_targets(query, targets)
+
+    def _run_cycle_with_targets(self, query: str, targets: list[dict]) -> dict:
         started = time.monotonic()
         deadline = started + self.timeout_seconds
-        targets = self.curiosity.inspect(query, max_targets=self.MAX_DOMAINS)[:self.MAX_DOMAINS]
         try:
             epistemic = self._drain_epistemic_missions(max_entities=2)
         except Exception as exc:
@@ -218,7 +325,7 @@ class AutonomousLearner:
 
     def _run_background(self, query: str) -> None:
         try:
-            self._last_background_result = self.run_cycle(query)
+            self._last_background_result = asyncio.run(self.arun_cycle(query))
         except Exception as exc:
             self._last_background_result = {"error": type(exc).__name__, "status": "failed"}
 

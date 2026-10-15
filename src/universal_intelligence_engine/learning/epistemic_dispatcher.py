@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-from ..security.provenance_crypto import append_integrity_event, ensure_integrity_ledger
+from ..security.provenance_crypto import append_integrity_event, ensure_integrity_ledger, canonical_json, GENESIS_HASH
 
 
 def _now() -> datetime:
@@ -119,6 +119,60 @@ class EpistemicDiscoveryDispatcher:
             append_integrity_event(conn, "discovery_mission", mission_id, "DISCOVERY_ENQUEUED", payload)
         return {"enqueued": True, "mission_id": mission_id, "focus_entity": entity,
                 "target_domains": domains, "seed_allowlist": approved_urls, "status": "queued"}
+
+
+    async def aenqueue(self, *, focus_entity: str, query_text: str, target_domains: list[str] | None = None,
+                       seed_allowlist: list[str] | None = None, reason: str = "low_evidence_grounding",
+                       storage=None) -> dict:
+        """Durably enqueue a bounded discovery mission using the async storage backend.
+
+        Queue row and integrity-ledger event commit atomically. PostgreSQL serializes
+        ledger-head allocation with a transaction-scoped advisory lock; SQLite uses the
+        StorageEngine's writer transaction lock. This runs after the read query's selects.
+        """
+        import hashlib
+        import uuid
+        if storage is None:
+            raise ValueError("a connected StorageEngine is required for async enqueue")
+        entity = re.sub(r"\s+", " ", str(focus_entity).strip())[:160]
+        if not entity or not query_text.strip():
+            return {"enqueued": False, "reason": "missing_entity_or_query"}
+        domains, approved_urls = self._approved_seeds(query_text, target_domains)
+        if seed_allowlist is not None:
+            approved_set = set(approved_urls)
+            approved_urls = [url for url in seed_allowlist if url in approved_set][:self.MAX_SEED_URLS]
+        if not approved_urls:
+            return {"enqueued": False, "reason": "no_approved_seeds"}
+        now = _now()
+        key = _entity_key(entity)
+        async with storage.transaction() as tx:
+            if storage.dialect == "postgresql":
+                await tx.execute("SELECT pg_advisory_xact_lock(hashtext(?))", ("uie-integrity-ledger",))
+            cutoff = (now - self.DEDUP_WINDOW).isoformat()
+            existing = await tx.fetchone("SELECT id,status,created_at FROM uie_discovery_missions WHERE entity_key=? AND created_at>=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1", (key, cutoff))
+            if existing:
+                return {"enqueued": False, "reason": "duplicate_active_mission", "mission_id": existing["id"]}
+            mission_id = str(uuid.uuid4())
+            payload = {"id": mission_id, "focus_entity": entity, "entity_key": key, "query_text": query_text[:500],
+                       "target_domains": domains, "seed_allowlist": approved_urls, "reason": reason,
+                       "created_at": now.isoformat()}
+            await tx.execute("INSERT INTO uie_discovery_missions (id,focus_entity,entity_key,query_text,target_domains_json,seed_allowlist_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'queued',?,?)",
+                (mission_id, entity, key, query_text[:500], json.dumps(domains), json.dumps(approved_urls), now.isoformat(), now.isoformat()))
+            head = await tx.fetchone("SELECT sequence_id,record_hash FROM uie_integrity_ledger ORDER BY sequence_id DESC LIMIT 1")
+            previous = head["record_hash"] if head else GENESIS_HASH
+            if storage.dialect == "postgresql":
+                allocated = await tx.fetchone("SELECT nextval(pg_get_serial_sequence('uie_integrity_ledger','sequence_id')) AS sequence_id")
+                sequence_id = int(allocated["sequence_id"])
+            else:
+                sequence_id = int(head["sequence_id"]) + 1 if head else 1
+            ledger_payload = {"sequence_id": sequence_id, "entity_type": "discovery_mission", "entity_id": mission_id,
+                              "event_type": "DISCOVERY_ENQUEUED", "payload": payload}
+            digest = hashlib.sha256(canonical_json(ledger_payload).encode("utf-8") + previous.encode("ascii")).hexdigest()
+            await tx.execute("INSERT INTO uie_integrity_ledger(sequence_id,entity_type,entity_id,event_type,payload_canonical_json,prev_hash,record_hash) VALUES(?,?,?,?,?,?,?)",
+                (sequence_id, "discovery_mission", mission_id, "DISCOVERY_ENQUEUED", canonical_json(payload), previous, digest))
+        return {"enqueued": True, "mission_id": mission_id, "focus_entity": entity,
+                "target_domains": domains, "seed_allowlist": approved_urls, "status": "queued",
+                "ledger_sequence_id": sequence_id, "ledger_record_hash": digest}
 
     def enqueue_void(self, *, query_text: str, context: dict | None = None, reason: str = "low_evidence_grounding") -> dict:
         entity = self.focus_entity(query_text, context)

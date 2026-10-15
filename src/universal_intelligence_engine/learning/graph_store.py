@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from ..security.provenance_crypto import GENESIS_HASH, calculate_record_hash, verify_memory_chain, append_integrity_event, verify_integrity_ledger, ensure_integrity_ledger
+from ..security.provenance_crypto import GENESIS_HASH, calculate_record_hash, verify_memory_chain, append_integrity_event, verify_integrity_ledger, ensure_integrity_ledger, canonical_json
+from ..db.storage_engine import StorageEngine
 
 
 def _now() -> str:
@@ -349,6 +350,93 @@ class KnowledgeGraphStore:
                 (source["id"], predicate, new_target["id"], old_target["id"]))
         return {"updated": cur.rowcount, "older_object": older_object, "newer_object": newer_object,
                 "status": "superseded_temporal", "audit_history_preserved": True}
+
+    def _async_storage_url(self) -> str:
+        return ":memory:" if self.db_path == ":memory:" else "sqlite:///" + self.db_path
+
+    async def aingest_claim(self, claim: Any, *, claim_id: str | None = None, storage: StorageEngine | None = None) -> dict:
+        """Persist one graph claim using adapter-only SQL and one atomic transaction."""
+        engine=storage or StorageEngine(self._async_storage_url()); owns=storage is None
+        if owns: await engine.connect()
+        def val(key, default=None): return claim.get(key,default) if isinstance(claim,dict) else getattr(claim,key,default)
+        subject=str(val("subject", "")).strip(); predicate=str(val("predicate", "")).strip()
+        obj=str(val("object_claim", val("object", ""))).strip(); domain=str(val("domain", "general_reference") or "general_reference")
+        if not subject or not predicate or not obj: raise ValueError("claim requires subject, predicate, and object_claim")
+        now=_now(); confidence=max(0.0,min(1.0,float(val("confidence",0.5) or 0.5))); provenance=str(val("provenance_url", "") or "")
+        cid=str(claim_id or val("id", "") or uuid.uuid4()); source_id=str(uuid.uuid5(uuid.NAMESPACE_URL,"uie:entity:"+_normal(subject))); target_id=str(uuid.uuid5(uuid.NAMESPACE_URL,"uie:entity:"+_normal(obj)))
+        relation_id=str(uuid.uuid5(uuid.NAMESPACE_URL,"uie:relation:"+cid))
+        try:
+            async with engine.transaction() as tx:
+                for eid,name in ((source_id,subject),(target_id,obj)):
+                    await tx.execute("INSERT INTO uie_entities(id,name,entity_type,domain,created_at,normalized_name) VALUES(?,?,?,?,?,?) ON CONFLICT(normalized_name) DO NOTHING",(eid,name,_guess_type(name),domain,now,_normal(name)))
+                source=await tx.fetchone("SELECT id FROM uie_entities WHERE normalized_name=?",(_normal(subject),)); target=await tx.fetchone("SELECT id FROM uie_entities WHERE normalized_name=?",(_normal(obj),))
+                existing=await tx.fetchone("SELECT * FROM uie_relations WHERE claim_id=?",(cid,)) if cid else None
+                if existing: return {"id":existing["id"],"claim_id":cid,"status":"already_ingested"}
+                existing=await tx.fetchall("SELECT * FROM uie_relations WHERE source_entity_id=? AND lower(predicate)=lower(?) AND target_entity_id=? AND status!='superseded_temporal'",(source["id"],predicate,target["id"]))
+                status=str(val("status","unverified_claim") or "unverified_claim")
+                if existing: relation_id=str(existing[0]["id"]); await tx.execute("UPDATE uie_relations SET confidence=?,provenance_url=?,status=?,domain=?,claim_id=?,updated_at=? WHERE id=?",(max(confidence,float(existing[0]["confidence"])),provenance,status,domain,cid,now,relation_id))
+                else: await tx.execute("INSERT INTO uie_relations(id,source_entity_id,target_entity_id,predicate,confidence,provenance_url,status,domain,claim_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(relation_id,source["id"],target["id"],predicate,confidence,provenance,status,domain,cid,now,now))
+                row=await tx.fetchone("SELECT * FROM uie_relations WHERE id=?",(relation_id,)); payload={k:row[k] for k in ("id","source_entity_id","target_entity_id","predicate","confidence","provenance_url","status","domain","claim_id","created_at","updated_at")}
+                head=await tx.fetchone("SELECT record_hash FROM memory_chain ORDER BY sequence DESC LIMIT 1"); previous=head["record_hash"] if head else GENESIS_HASH
+                wrapped={"record_type":"graph_edge","record_id":relation_id,"payload":payload}; digest=calculate_record_hash(wrapped,previous)
+                await tx.execute("INSERT INTO memory_chain(record_type,record_id,payload_json,prev_hash,record_hash,created_at) VALUES(?,?,?,?,?,?)",("graph_edge",relation_id,canonical_json(wrapped),previous,digest,now))
+                await tx.execute("UPDATE uie_relations SET prev_hash=?,record_hash=? WHERE id=?",(previous,digest,relation_id))
+            return {"id":relation_id,"claim_id":cid,"status":status,"confidence":confidence}
+        finally:
+            if owns: await engine.close()
+
+    async def aget_entity_subgraph(self, entity_name: str, max_hops: int = 2, storage: StorageEngine | None = None) -> dict:
+        """Async adapter-backed graph traversal; all node/edge SQL uses parameterized placeholders."""
+        engine=storage or StorageEngine(self._async_storage_url()); owns=storage is None
+        if owns: await engine.connect()
+        hops=max(0,min(6,int(max_hops))); normalized=_normal(entity_name)
+        try:
+            start=await engine.fetchone("SELECT * FROM uie_entities WHERE normalized_name=?",(normalized,))
+            if not start and normalized:
+                candidates=await engine.fetchall("SELECT * FROM uie_entities WHERE normalized_name LIKE ? ORDER BY length(normalized_name) LIMIT 2",(f"%{normalized}%",))
+                start=candidates[0] if len(candidates)==1 else None
+            if not start: return {"root":None,"nodes":[],"relations":[],"max_hops":hops}
+            nodes={start["id"]:{**dict(start),"hop":0}}; relations=[]; seen=set(); queue=deque([(start["id"],0)])
+            while queue:
+                current,depth=queue.popleft()
+                if depth>=hops: continue
+                rows=await engine.fetchall("SELECT r.*,s.name AS source_name,t.name AS target_name,s.entity_type AS source_type,t.entity_type AS target_type,s.domain AS source_domain,t.domain AS target_domain FROM uie_relations r JOIN uie_entities s ON s.id=r.source_entity_id JOIN uie_entities t ON t.id=r.target_entity_id WHERE r.source_entity_id=? OR r.target_entity_id=? ORDER BY r.created_at,r.id",(current,current))
+                for row in rows:
+                    item=dict(row); rid=item["id"]
+                    if rid not in seen:
+                        seen.add(rid); hop=depth+1; item["hop"]=hop; item["raw_confidence"]=item["confidence"]; item["traversal_confidence"]=round(item["confidence"]*(self.confidence_decay**(hop-1)),6); relations.append(item)
+                    other=item["target_entity_id"] if item["source_entity_id"]==current else item["source_entity_id"]
+                    if other not in nodes:
+                        node=await engine.fetchone("SELECT * FROM uie_entities WHERE id=?",(other,))
+                        if node: nodes[other]={**dict(node),"hop":depth+1}; queue.append((other,depth+1))
+            ids=list(nodes)
+            if ids:
+                placeholders=",".join("?" for _ in ids); contradictions=await engine.fetchall("SELECT * FROM uie_graph_contradictions WHERE source_entity_id IN ("+placeholders+") ORDER BY created_at",tuple(ids))
+            else: contradictions=[]
+            return {"root":dict(start),"nodes":list(nodes.values()),"relations":relations,"contradictions":[dict(x) for x in contradictions],"max_hops":hops,"confidence_decay":self.confidence_decay}
+        finally:
+            if owns: await engine.close()
+
+    async def averify_integrity_chain(self, table_name: str = "memory_chain", storage: StorageEngine | None = None) -> tuple[bool,str | None]:
+        """Verify graph memory-chain rows fetched through the storage abstraction."""
+        if table_name not in {"memory_chain","uie_integrity_ledger"}: raise ValueError("unsupported integrity table")
+        engine=storage or StorageEngine(self._async_storage_url()); owns=storage is None
+        if owns: await engine.connect()
+        try:
+            if table_name=="memory_chain":
+                rows=await engine.fetchall("SELECT sequence,record_type,record_id,payload_json,prev_hash,record_hash,created_at FROM memory_chain ORDER BY sequence")
+                records=[{"record_payload":json.loads(row["payload_json"]),"prev_hash":row["prev_hash"],"record_hash":row["record_hash"]} for row in rows]
+                return verify_memory_chain(records)
+            rows=await engine.fetchall("SELECT * FROM uie_integrity_ledger ORDER BY sequence_id")
+            previous=GENESIS_HASH
+            for index,row in enumerate(rows,1):
+                payload=json.loads(row["payload_canonical_json"]); wrapped={"sequence_id":row["sequence_id"],"entity_type":row["entity_type"],"entity_id":row["entity_id"],"event_type":row["event_type"],"payload":payload}
+                digest=__import__("hashlib").sha256(canonical_json(wrapped).encode("utf-8")+previous.encode("ascii")).hexdigest()
+                if int(row["sequence_id"])!=index or row["prev_hash"]!=previous or row["record_hash"]!=digest: return False,f"ledger sequence {index}: hash chain mismatch"
+                previous=digest
+            return True,None
+        finally:
+            if owns: await engine.close()
 
     def get_contradictions(self, limit: int = 100) -> list[dict]:
         with self._connect() as conn:

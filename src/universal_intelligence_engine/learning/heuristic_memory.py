@@ -6,7 +6,8 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from ..security.provenance_crypto import GENESIS_HASH, calculate_record_hash, append_integrity_event, ensure_integrity_ledger
+from ..security.provenance_crypto import GENESIS_HASH, calculate_record_hash, append_integrity_event, ensure_integrity_ledger, canonical_json
+from ..db.storage_engine import StorageEngine
 
 
 class HeuristicMemory:
@@ -123,5 +124,65 @@ class HeuristicMemory:
         for row in rows:
             item = dict(row)
             item["provenance_urls"] = json.loads(item["provenance_urls"])
+            result.append(item)
+        return result
+
+    async def astore_constraint(self, *, storage: StorageEngine, domain: str, subject: str, predicate: str,
+                                rule_text: str, provenance_urls: list[str] | None = None,
+                                confidence: float = 0.65, rule_type: str = "graph_constraint") -> dict:
+        """Async transactional constraint write; rule, memory chain and audit ledger commit together."""
+        urls = list(dict.fromkeys(url for url in (provenance_urls or []) if url))
+        confidence = min(0.75, max(0.0, float(confidence)))
+        now = datetime.now(timezone.utc).isoformat()
+        async with storage.transaction() as tx:
+            if storage.dialect == "postgresql":
+                await tx.execute("SELECT pg_advisory_xact_lock(hashtext(?))", ("uie-ledger-chain",))
+            row = await tx.fetchone("SELECT * FROM heuristic_rules WHERE domain=? AND subject=? AND predicate=? AND rule_type=? ORDER BY updated_at DESC LIMIT 1", (domain, subject, predicate, rule_type))
+            if row:
+                rule_id = row["id"]
+                merged_urls = list(dict.fromkeys(json.loads(row["provenance_urls"] or "[]") + urls))
+                confidence = min(0.75, max(confidence, float(row["confidence"])))
+                await tx.execute("UPDATE heuristic_rules SET rule_text=?,confidence=?,provenance_urls=?,updated_at=? WHERE id=?", (rule_text, confidence, canonical_json(merged_urls), now, rule_id))
+                action = "updated"
+            else:
+                rule_id, action = str(uuid.uuid4()), "inserted"
+                await tx.execute("INSERT INTO heuristic_rules(id,domain,subject,predicate,rule_text,confidence,provenance_urls,rule_type,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (rule_id, domain, subject, predicate, rule_text, confidence, canonical_json(urls), rule_type, now, now))
+            row = await tx.fetchone("SELECT * FROM heuristic_rules WHERE id=?", (rule_id,))
+            payload = {k: row[k] for k in ("id","domain","subject","predicate","rule_text","confidence","provenance_urls","rule_type","created_at","updated_at")}
+            wrapped = {"record_type":"heuristic", "record_id":rule_id, "payload":payload}
+            head = await tx.fetchone("SELECT record_hash FROM memory_chain ORDER BY sequence DESC LIMIT 1")
+            previous = head["record_hash"] if head else GENESIS_HASH
+            digest = calculate_record_hash(wrapped, previous)
+            await tx.execute("INSERT INTO memory_chain(record_type,record_id,payload_json,prev_hash,record_hash,created_at) VALUES(?,?,?,?,?,?)", ("heuristic",rule_id,canonical_json(wrapped),previous,digest,now))
+            if storage.dialect == "postgresql":
+                await tx.execute("SELECT setval(pg_get_serial_sequence('memory_chain','sequence'), ?, true)", (int((await tx.fetchone("SELECT MAX(sequence) AS sequence FROM memory_chain"))["sequence"]),))
+            await tx.execute("UPDATE heuristic_rules SET prev_hash=?,record_hash=? WHERE id=?", (previous,digest,rule_id))
+            ledger_head = await tx.fetchone("SELECT sequence_id,record_hash FROM uie_integrity_ledger ORDER BY sequence_id DESC LIMIT 1")
+            seq = int(ledger_head["sequence_id"])+1 if ledger_head else 1
+            ledger_prev = ledger_head["record_hash"] if ledger_head else GENESIS_HASH
+            event = "CONFIDENCE_UPDATE" if action == "updated" else "INSERT"
+            ledger_payload = canonical_json(payload)
+            ledger_hash_payload = {"sequence_id":seq,"entity_type":"heuristic","entity_id":rule_id,"event_type":event,"payload":json.loads(ledger_payload)}
+            ledger_digest = __import__("hashlib").sha256(canonical_json(ledger_hash_payload).encode("utf-8")+ledger_prev.encode("ascii")).hexdigest()
+            await tx.execute("INSERT INTO uie_integrity_ledger(sequence_id,entity_type,entity_id,event_type,payload_canonical_json,prev_hash,record_hash) VALUES(?,?,?,?,?,?,?)", (seq,"heuristic",rule_id,event,ledger_payload,ledger_prev,ledger_digest))
+            if storage.dialect == "postgresql":
+                await tx.execute("SELECT setval(pg_get_serial_sequence('uie_integrity_ledger','sequence_id'), ?, true)", (seq,))
+        return {"stored":True,"id":rule_id,"confidence":confidence,"action":action,"rule_type":rule_type}
+
+    async def arecall_constraints(self, *, storage: StorageEngine, domain: str | None = None,
+                                  subject: str | None = None, rule_type: str | None = None,
+                                  limit: int = 100) -> list[dict]:
+        """Read rules through the async storage adapter, never sqlite3 directly."""
+        clauses=[]; params=[]
+        for column, value in (("domain",domain),("subject",subject),("rule_type",rule_type)):
+            if value is not None:
+                clauses.append(f"{column}=?"); params.append(value)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = await storage.fetchall("SELECT * FROM heuristic_rules"+where+" ORDER BY updated_at DESC LIMIT ?", (*params,max(1,min(int(limit),500))))
+        result=[]
+        for row in rows:
+            item=dict(row)
+            try: item["provenance_urls"] = json.loads(item.get("provenance_urls") or "[]")
+            except (TypeError,json.JSONDecodeError): item["provenance_urls"]=[]
             result.append(item)
         return result
