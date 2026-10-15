@@ -61,6 +61,8 @@ def test_live_postgres_consumer_concurrent_workers_claim_once_and_harvest(tmp_pa
             item=dispatcher.enqueue(focus_entity='PG Widget '+suffix,query_text='technology software component',target_domains=['technology_science'])
             # Move the test mission into the PostgreSQL queue, not the local SQLite queue.
             now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(); mid=item['mission_id']
+            # Earlier integration tests share the CI database; isolate this concurrency assertion.
+            await engine.execute("UPDATE uie_discovery_missions SET status='TEST_CLEANUP' WHERE status IN ('queued','PENDING','pending')")
             await engine.execute("INSERT INTO uie_discovery_missions(id,focus_entity,entity_key,query_text,target_domains_json,seed_allowlist_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'queued',?,?)",(mid,'PG Widget '+suffix,('pg widget '+suffix), 'technology software component',json.dumps(['technology_science']),json.dumps(item['seed_allowlist'][:1]),now,now))
             a,b=await asyncio.gather(learner(db).drain_and_harvest_missions_async(storage=engine),learner(db).drain_and_harvest_missions_async(storage=engine))
             assert a['missions_claimed']+b['missions_claimed']==1
