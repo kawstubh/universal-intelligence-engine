@@ -41,7 +41,7 @@ def test_live_postgres_schema_concurrency_upsert_advisory_lock_and_hash_chain():
             async def append(index):
                 event_id = f"{entity_id}-{index}"
                 async with engine.transaction() as tx:
-                    await tx.execute("SELECT pg_advisory_xact_lock(hashtext(?))", "uie-ledger-chain")
+                    await tx.execute("SELECT pg_advisory_xact_lock(hashtext(?))", ("uie-ledger-chain",))
                     head = await tx.fetchone("SELECT sequence_id,record_hash FROM uie_integrity_ledger ORDER BY sequence_id DESC LIMIT 1")
                     prev = head["record_hash"] if head else GENESIS_HASH
                     seq = int(head["sequence_id"]) + 1 if head else 1
