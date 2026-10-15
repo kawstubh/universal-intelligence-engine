@@ -1,7 +1,9 @@
-﻿"""Bounded autonomous discovery, ingestion, claim evaluation and heuristic consolidation."""
+"""Bounded autonomous discovery, ingestion, claim evaluation and heuristic consolidation."""
 from __future__ import annotations
 
 import json
+import asyncio
+import warnings
 import os
 import tempfile
 import threading
@@ -139,9 +141,18 @@ class AutonomousLearner:
         return summary
 
     def run_cycle(self, query: str) -> dict:
+        warnings.warn("AutonomousLearner.run_cycle() is deprecated; use await arun_cycle().", DeprecationWarning, stacklevel=2)
+        targets = self.curiosity.inspect(query, max_targets=self.MAX_DOMAINS)[:self.MAX_DOMAINS]
+        return self._run_cycle_with_targets(query, targets)
+
+    async def arun_cycle(self, query: str) -> dict:
+        """Async-first cycle: query known claim gaps via aquery before bounded ingestion work."""
+        targets = (await self.curiosity.ainspect(query, max_targets=self.MAX_DOMAINS))[:self.MAX_DOMAINS]
+        return self._run_cycle_with_targets(query, targets)
+
+    def _run_cycle_with_targets(self, query: str, targets: list[dict]) -> dict:
         started = time.monotonic()
         deadline = started + self.timeout_seconds
-        targets = self.curiosity.inspect(query, max_targets=self.MAX_DOMAINS)[:self.MAX_DOMAINS]
         try:
             epistemic = self._drain_epistemic_missions(max_entities=2)
         except Exception as exc:
@@ -218,7 +229,7 @@ class AutonomousLearner:
 
     def _run_background(self, query: str) -> None:
         try:
-            self._last_background_result = self.run_cycle(query)
+            self._last_background_result = asyncio.run(self.arun_cycle(query))
         except Exception as exc:
             self._last_background_result = {"error": type(exc).__name__, "status": "failed"}
 
