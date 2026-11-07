@@ -276,3 +276,44 @@ def test_admin_can_list_workspaces_only_inside_their_organisation(tenant_api):
         "/v1/dental/organisations/org-b/workspaces", headers=headers
     )
     assert denied.status_code == 403
+
+def test_admin_cannot_assign_or_manage_doctor_from_another_organisation(tenant_api):
+    client, store = tenant_api
+    store.create_doctor(
+        {
+            "id": "hospital-admin",
+            "email": "hospital-admin@example.test",
+            "password_hash": dental_auth.hash_password("hospital admin password"),
+            "role": "doctor",
+            "clinic_id": "clinic-c",
+        }
+    )
+    store.create_doctor_membership("hospital-admin", "clinic-c", "admin")
+    login = client.post(
+        "/v1/dental/auth/password/login",
+        json={
+            "email": "hospital-admin@example.test",
+            "password": "hospital admin password",
+        },
+    )
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    assignment = client.post(
+        "/v1/dental/workspaces/clinic-c/memberships",
+        headers=headers,
+        json={"doctor_id": "doctor-target", "role": "dentist"},
+    )
+    assert assignment.status_code == 403
+    assert assignment.json()["detail"]["code"] == "DOCTOR_ORGANISATION_MISMATCH"
+
+    # Also protect pre-existing/corrupt cross-tenant membership rows from
+    # being administered through the target organisation's workspace.
+    store.create_doctor_membership("doctor-target", "clinic-c", "doctor")
+    update = client.patch(
+        "/v1/dental/workspaces/clinic-c/memberships/doctor-target",
+        headers=headers,
+        json={"active": False},
+    )
+    assert update.status_code == 403
+    assert update.json()["detail"]["code"] == "DOCTOR_ORGANISATION_MISMATCH"
