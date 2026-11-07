@@ -49,7 +49,7 @@ The migration must register every existing distinct clinic ID as a workspace and
 - Role and workspace context come from the membership row, not request payloads.
 - Cross-workspace patient, appointment, chart, periodontal, AI event, staff, and billing access is denied.
 - The UIE core remains domain-agnostic. Dental patient context continues to be assembled in the Dental API only after the active workspace has authorised access.
-- Membership deactivation takes effect on the next authenticated request.
+- Membership roles are `owner`, `admin`, `doctor`, or `dentist`; `owner` and `admin` can administer workspaces within their own organisation. Membership deactivation takes effect on the next authenticated request.
 - Never expose password hashes, token hashes, or secret environment values in API responses or logs.
 
 ## Doctor App behavior
