@@ -1,8 +1,8 @@
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Lock
-import time
 
-import universal_intelligence_engine.dental_store as dental_store
+from universal_intelligence_engine import dental_store
 
 
 def test_get_dental_store_initializes_only_once_for_concurrent_requests(monkeypatch):
