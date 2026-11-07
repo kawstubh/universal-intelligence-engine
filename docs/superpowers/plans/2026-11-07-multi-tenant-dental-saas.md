@@ -43,7 +43,7 @@
 - Produces tables `dental_organisations`, `dental_clinics`, and `dental_doctor_memberships`.
 - Organisation fields: `id`, `name`, `organisation_type`, `active`, `created_at`.
 - Clinic fields: `id`, `organisation_id`, `name`, `clinic_type`, `parent_clinic_id`, `active`, `created_at`.
-- Membership fields: `id`, `doctor_id`, `clinic_id`, `role`, `active`, `created_at`; unique constraint on (`doctor_id`, `clinic_id`).
+- Membership fields: `id`, `doctor_id`, `clinic_id`, `role`, `active`, `created_at`; unique constraint on (`doctor_id`, `clinic_id`). Allowed roles: `owner`, `admin`, `doctor`, `dentist`.
 
 - [ ] **Step 1: Write migration tests** asserting that every distinct legacy clinic ID is represented by one workspace, every existing doctor receives a membership matching its legacy clinic and role, and patient/appointment/chart row counts and IDs remain unchanged.
 - [ ] **Step 2: Run the migration tests and verify they fail** because the registry and membership tables do not exist.
@@ -83,8 +83,8 @@
 **Interfaces:**
 - Login response retains `access_token`, `token_type`, `expires_in`, and `user`; adds `workspaces` with authorised active workspace metadata.
 - `POST /v1/dental/auth/workspace/switch` accepts `clinic_id` and returns a replacement `access_token`, active user context, and available workspaces.
-- `require_doctor` continues returning `id`, `user_id`, `email`, `clinic_id`, and `role`, deriving role from the active membership.
-- Add store operation `revoke_session(token_hash: str) -> None` if not already available; use existing hashed-token storage.
+- `require_doctor` continues returning `id`, `user_id`, `email`, `clinic_id`, and `role`, deriving role from the active membership. It accepts `owner`, `admin`, `doctor`, and `dentist`; owner/admin checks are enforced within the actor's organisation.
+- Use the existing `DentalStore.revoke_session(token_hash: str) -> None` and hashed-token storage.
 
 - [ ] **Step 1: Write tests** for multi-workspace login response, single-workspace backward compatibility, successful switch, rejection of non-member workspace, revocation of the previous token, and immediate denial after membership deactivation.
 - [ ] **Step 2: Run tests and verify they fail for the expected missing workspace behavior.**
@@ -106,7 +106,7 @@
 - `POST /v1/dental/organisations/{organisation_id}/workspaces` creates another workspace only for an owner/admin already belonging to that organisation.
 - `POST /v1/dental/workspaces/{clinic_id}/memberships` links an existing doctor identity to a workspace only when the actor has owner/admin permission in that organisation.
 - `PATCH /v1/dental/workspaces/{clinic_id}/memberships/{doctor_id}` activates/deactivates an existing membership under the same organisation.
-- All request models validate organisation type, clinic type, role and bounded text lengths. Client-supplied role/clinic context never overrides the authenticated actor.
+- All request models validate organisation type, clinic type, role and bounded text lengths. Owner/admin permissions are checked within the same organisation. Client-supplied role/clinic context never overrides the authenticated actor.
 
 - [ ] **Step 1: Write tests** for authorised organisation creation, branch/workspace creation, membership assignment, membership deactivation, and 403/404 responses for cross-organisation administration.
 - [ ] **Step 2: Run tests and verify the expected missing-route failures.**
@@ -117,6 +117,8 @@
 ### Task 5: Add Doctor app workspace selection and switching
 
 **Files:**
+- Create: `doctor-app/src/auth/workspaceContext.js` (pure workspace normalization/default-selection/session-persistence helpers)
+- Create: `doctor-app/src/auth/workspaceContext.test.cjs` (Node built-in tests)
 - Modify: `doctor-app/src/api/doctorApi.js`
 - Modify: `doctor-app/src/auth/passwordAuth.js`
 - Modify: `doctor-app/App.js`
@@ -129,9 +131,9 @@
 - Persist the replacement token and active user using the existing `doctor_session` and `doctor_user` AsyncStorage keys.
 - Expose the active workspace and workspace list to the Doctor app screen.
 
-- [ ] **Step 1: Write tests** for a single-workspace login, multi-workspace response parsing, successful token replacement, and failed switch leaving the existing stored session unchanged.
+- [ ] **Step 1: Write `workspaceContext.test.cjs` tests** for single-workspace default selection, multi-workspace list normalization, successful session persistence, and failed switch leaving the existing stored session unchanged.
 - [ ] **Step 2: Run tests and verify the missing helper/behavior failures.**
-- [ ] **Step 3: Implement API helpers and session persistence** without changing the API base URL, app identifiers, package ID, EAS project ID, or signing configuration.
+- [ ] **Step 3: Implement `normalizeWorkspaces(workspaces)`, `selectDefaultWorkspace(workspaces, defaultClinicId)`, and `persistWorkspaceSession(storage, session)` in `workspaceContext.js`; implement API helpers and use the pure persistence helper with AsyncStorage. Do not change the API base URL, app identifiers, package ID, EAS project ID, or signing configuration.
 - [ ] **Step 4: Add a workspace selector** that is skipped for a single workspace and available from the Doctor app header/menu when multiple workspaces exist. Show organisation and workspace names; reload workspace-scoped patients/appointments after a successful switch.
 - [ ] **Step 5: Run mobile tests and Expo Android export/type checks available in the repository.**
 - [ ] **Step 6: Commit** as `feat: add doctor workspace switcher`.
