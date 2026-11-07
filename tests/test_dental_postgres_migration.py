@@ -8,6 +8,7 @@ import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy.engine import make_url
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,9 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
         monkeypatch.setenv("DATABASE_URL", scoped_url_text)
         monkeypatch.delenv("DENTAL_SQLITE_PATH", raising=False)
         config = Config(str(ROOT / "alembic.ini"))
+        assert ScriptDirectory.from_config(config).get_heads() == [
+            "0007_dental_audit_workspace"
+        ]
         command.upgrade(config, "0005_password_auth")
 
         schema_engine = sa.create_engine(scoped_url)
