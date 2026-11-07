@@ -36,7 +36,7 @@ Dr Pranali Dental Clinic remains the first tenant. Its existing patients, appoin
 Use the existing shared PostgreSQL database with tenant isolation enforced by the FastAPI Dental adapter and store layer. Introduce:
 - `dental_organisations`: the legal/business tenant (clinic, hospital, or group).
 - `dental_clinics`: operational workspaces/locations/departments belonging to an organisation. Preserve each existing `clinic_id` as the workspace ID for existing rows.
-- `dental_doctor_memberships`: many-to-many doctor-to-workspace membership with a workspace role and active flag.
+- `dental_doctor_memberships`: many-to-many doctor-to-workspace membership with a workspace role and active flag. Organisation types are `clinic`, `hospital`, and `group`; workspace types are `clinic`, `branch`, and `hospital_department`.
 
 Keep `dental_doctors` as the global doctor identity table with its unique email and password hash. Retain its existing `clinic_id` and `role` columns as legacy/default-workspace compatibility fields; new authorization decisions use the active membership record. Keep existing session tokens and hashed-token storage. A session remains bound to one active workspace at a time; switching issues a replacement bearer token and revokes the previous token.
 
@@ -49,7 +49,7 @@ The migration must register every existing distinct clinic ID as a workspace and
 - Role and workspace context come from the membership row, not request payloads.
 - Cross-workspace patient, appointment, chart, periodontal, AI event, staff, and billing access is denied.
 - The UIE core remains domain-agnostic. Dental patient context continues to be assembled in the Dental API only after the active workspace has authorised access.
-- Membership roles are `owner`, `admin`, `doctor`, or `dentist`; `owner` and `admin` can administer workspaces within their own organisation. Membership deactivation takes effect on the next authenticated request.
+- Membership roles are `owner`, `admin`, `doctor`, or `dentist`; `owner` and `admin` can administer workspaces within their own organisation. Membership deactivation takes effect on the next authenticated request. New audit events record the active workspace ID; historical audit rows are retained.
 - Never expose password hashes, token hashes, or secret environment values in API responses or logs.
 
 ## Doctor App behavior
