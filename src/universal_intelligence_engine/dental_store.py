@@ -301,6 +301,160 @@ class DentalStore:
         )
         return item
 
+    def organisations_for_doctor(self, doctor_id: str) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT DISTINCT o.id, o.name, o.organisation_type, o.active, o.created_at "
+            "FROM dental_organisations o "
+            "JOIN dental_clinics c ON c.organisation_id=o.id "
+            "JOIN dental_doctor_memberships m ON m.clinic_id=c.id "
+            "WHERE m.doctor_id=%s AND m.active=true AND c.active=true AND o.active=true "
+            "ORDER BY o.name"
+            if self.database_url
+            else "SELECT DISTINCT o.id, o.name, o.organisation_type, o.active, o.created_at "
+            "FROM dental_organisations o "
+            "JOIN dental_clinics c ON c.organisation_id=o.id "
+            "JOIN dental_doctor_memberships m ON m.clinic_id=c.id "
+            "WHERE m.doctor_id=? AND m.active=1 AND c.active=1 AND o.active=1 "
+            "ORDER BY o.name"
+        )
+        return self._execute(sql, (doctor_id,))
+
+    def workspaces_for_doctor(self, doctor_id: str) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT c.id, c.id AS clinic_id, c.organisation_id, c.name, "
+            "c.clinic_type, c.parent_clinic_id, c.active, c.created_at, "
+            "o.name AS organisation_name, o.organisation_type, m.role "
+            "FROM dental_clinics c "
+            "JOIN dental_organisations o ON o.id=c.organisation_id "
+            "JOIN dental_doctor_memberships m ON m.clinic_id=c.id "
+            "WHERE m.doctor_id=%s AND m.active=true AND c.active=true AND o.active=true "
+            "ORDER BY o.name, c.name"
+            if self.database_url
+            else "SELECT c.id, c.id AS clinic_id, c.organisation_id, c.name, "
+            "c.clinic_type, c.parent_clinic_id, c.active, c.created_at, "
+            "o.name AS organisation_name, o.organisation_type, m.role "
+            "FROM dental_clinics c "
+            "JOIN dental_organisations o ON o.id=c.organisation_id "
+            "JOIN dental_doctor_memberships m ON m.clinic_id=c.id "
+            "WHERE m.doctor_id=? AND m.active=1 AND c.active=1 AND o.active=1 "
+            "ORDER BY o.name, c.name"
+        )
+        return self._execute(sql, (doctor_id,))
+
+    def doctor_membership(
+        self, doctor_id: str, clinic_id: str
+    ) -> dict[str, Any] | None:
+        sql = (
+            "SELECT id, doctor_id, clinic_id, role, active, created_at "
+            "FROM dental_doctor_memberships WHERE doctor_id=%s AND clinic_id=%s"
+            if self.database_url
+            else "SELECT id, doctor_id, clinic_id, role, active, created_at "
+            "FROM dental_doctor_memberships WHERE doctor_id=? AND clinic_id=?"
+        )
+        rows = self._execute(sql, (doctor_id, clinic_id))
+        return rows[0] if rows else None
+
+    def create_organisation(self, data: dict[str, Any]) -> dict[str, Any]:
+        item = {
+            "id": data.get("id") or _id(),
+            "name": data["name"].strip(),
+            "organisation_type": data["organisation_type"],
+            "active": data.get("active", True),
+            "created_at": data.get("created_at") or _now(),
+        }
+        sql = (
+            "INSERT INTO dental_organisations(id,name,organisation_type,active,created_at) "
+            "VALUES (%s,%s,%s,%s,%s)"
+            if self.database_url
+            else "INSERT INTO dental_organisations(id,name,organisation_type,active,created_at) "
+            "VALUES (?,?,?,?,?)"
+        )
+        self._execute(
+            sql,
+            tuple(
+                item[key]
+                for key in ("id", "name", "organisation_type", "active", "created_at")
+            ),
+        )
+        return item
+
+    def create_clinic(self, data: dict[str, Any]) -> dict[str, Any]:
+        item = {
+            "id": data.get("id") or _id(),
+            "organisation_id": data["organisation_id"],
+            "name": data["name"].strip(),
+            "clinic_type": data.get("clinic_type", "clinic"),
+            "parent_clinic_id": data.get("parent_clinic_id"),
+            "active": data.get("active", True),
+            "created_at": data.get("created_at") or _now(),
+        }
+        sql = (
+            "INSERT INTO dental_clinics"
+            "(id,organisation_id,name,clinic_type,parent_clinic_id,active,created_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s)"
+            if self.database_url
+            else "INSERT INTO dental_clinics"
+            "(id,organisation_id,name,clinic_type,parent_clinic_id,active,created_at) "
+            "VALUES (?,?,?,?,?,?,?)"
+        )
+        self._execute(
+            sql,
+            tuple(
+                item[key]
+                for key in (
+                    "id",
+                    "organisation_id",
+                    "name",
+                    "clinic_type",
+                    "parent_clinic_id",
+                    "active",
+                    "created_at",
+                )
+            ),
+        )
+        return item
+
+    def create_doctor_membership(
+        self, doctor_id: str, clinic_id: str, role: str
+    ) -> dict[str, Any]:
+        item = {
+            "id": _id(),
+            "doctor_id": doctor_id,
+            "clinic_id": clinic_id,
+            "role": role,
+            "active": True,
+            "created_at": _now(),
+        }
+        sql = (
+            "INSERT INTO dental_doctor_memberships"
+            "(id,doctor_id,clinic_id,role,active,created_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s)"
+            if self.database_url
+            else "INSERT INTO dental_doctor_memberships"
+            "(id,doctor_id,clinic_id,role,active,created_at) "
+            "VALUES (?,?,?,?,?,?)"
+        )
+        self._execute(
+            sql,
+            tuple(
+                item[key]
+                for key in ("id", "doctor_id", "clinic_id", "role", "active", "created_at")
+            ),
+        )
+        return item
+
+    def set_doctor_membership_active(
+        self, doctor_id: str, clinic_id: str, active: bool
+    ) -> None:
+        sql = (
+            "UPDATE dental_doctor_memberships SET active=%s "
+            "WHERE doctor_id=%s AND clinic_id=%s"
+            if self.database_url
+            else "UPDATE dental_doctor_memberships SET active=? "
+            "WHERE doctor_id=? AND clinic_id=?"
+        )
+        self._execute(sql, (active, doctor_id, clinic_id))
+
     def create_session(self, doctor_id: str, token_hash: str, expires_at: int):
         self._execute(
             "INSERT INTO dental_sessions(token_hash,doctor_id,expires_at,revoked) VALUES (%s,%s,%s,%s)"
@@ -406,13 +560,14 @@ class DentalStore:
         action: str,
         resource_type: str,
         resource_id: str | None = None,
+        clinic_id: str | None = None,
     ) -> None:
         # Do not put patient names, phone numbers, clinical text, or AI prompts in audit metadata/logs.
         self._execute(
-            "INSERT INTO dental_audit_events(id,actor_id,action,resource_type,resource_id,metadata_json,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)"
+            "INSERT INTO dental_audit_events(id,actor_id,action,resource_type,resource_id,clinic_id,metadata_json,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
             if self.database_url
-            else "INSERT INTO dental_audit_events(id,actor_id,action,resource_type,resource_id,metadata_json,created_at) VALUES (?,?,?,?,?,?,?)",
-            (_id(), actor_id, action, resource_type, resource_id, "{}", _now()),
+            else "INSERT INTO dental_audit_events(id,actor_id,action,resource_type,resource_id,clinic_id,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (_id(), actor_id, action, resource_type, resource_id, clinic_id, "{}", _now()),
         )
 
     def patient_by_user_id(self, user_id: str, patient_id: str | None = None):
