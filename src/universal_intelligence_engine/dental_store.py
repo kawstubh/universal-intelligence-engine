@@ -347,6 +347,30 @@ class DentalStore:
         )
         return self._execute(sql, (doctor_id,))
 
+    def workspaces_for_organisation(self, organisation_id: str) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT c.id, c.organisation_id, c.name, c.clinic_type, "
+            "c.parent_clinic_id, c.active, c.created_at, "
+            "o.name AS organisation_name, o.organisation_type, "
+            "(SELECT COUNT(*) FROM dental_doctor_memberships m "
+            "WHERE m.clinic_id=c.id AND m.active=true) AS active_doctors "
+            "FROM dental_clinics c "
+            "JOIN dental_organisations o ON o.id=c.organisation_id "
+            "WHERE c.organisation_id=%s AND c.active=true AND o.active=true "
+            "ORDER BY c.name"
+            if self.database_url
+            else "SELECT c.id, c.organisation_id, c.name, c.clinic_type, "
+            "c.parent_clinic_id, c.active, c.created_at, "
+            "o.name AS organisation_name, o.organisation_type, "
+            "(SELECT COUNT(*) FROM dental_doctor_memberships m "
+            "WHERE m.clinic_id=c.id AND m.active=1) AS active_doctors "
+            "FROM dental_clinics c "
+            "JOIN dental_organisations o ON o.id=c.organisation_id "
+            "WHERE c.organisation_id=? AND c.active=1 AND o.active=1 "
+            "ORDER BY c.name"
+        )
+        return self._execute(sql, (organisation_id,))
+
     def doctor_membership(
         self, doctor_id: str, clinic_id: str
     ) -> dict[str, Any] | None:

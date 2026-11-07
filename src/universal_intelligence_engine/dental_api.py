@@ -337,6 +337,11 @@ async def create_organisation_workspace(
             "parent_clinic_id": body.parent_clinic_id,
         }
     )
+    # Keep the creating organisation administrator authorised in the new
+    # workspace so it can be selected and managed immediately.
+    membership = store.create_doctor_membership(
+        actor["id"], workspace["id"], actor["role"]
+    )
     store.audit(
         actor["id"],
         "workspace.created",
@@ -344,7 +349,24 @@ async def create_organisation_workspace(
         workspace["id"],
         clinic_id=actor["clinic_id"],
     )
+    store.audit(
+        actor["id"],
+        "membership.created",
+        "doctor_membership",
+        membership["id"],
+        clinic_id=actor["clinic_id"],
+    )
     return workspace
+
+
+@router.get("/organisations/{organisation_id}/workspaces")
+async def list_organisation_workspaces(
+    organisation_id: str,
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    store = get_dental_store()
+    _require_organisation_admin(store, actor, organisation_id)
+    return {"workspaces": store.workspaces_for_organisation(organisation_id)}
 
 
 @router.post("/workspaces/{clinic_id}/memberships", status_code=201)

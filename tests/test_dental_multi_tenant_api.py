@@ -125,7 +125,7 @@ def test_owner_can_create_organisation_and_first_workspace(tenant_api, admin_hea
 def test_owner_can_create_workspace_only_inside_own_organisation(
     tenant_api, admin_headers
 ):
-    client, _store = tenant_api
+    client, store = tenant_api
     created = client.post(
         "/v1/dental/organisations/org-a/workspaces",
         headers=admin_headers,
@@ -133,11 +133,39 @@ def test_owner_can_create_workspace_only_inside_own_organisation(
     )
     assert created.status_code == 201, created.text
     assert created.json()["organisation_id"] == "org-a"
+    membership = store.doctor_membership("doctor-admin", created.json()["id"])
+    assert membership is not None
+    assert membership["role"] == "owner"
+    assert membership["active"] in (True, 1)
+    authorised = client.get("/v1/dental/auth/workspaces", headers=admin_headers)
+    assert created.json()["id"] in {
+        workspace["id"] for workspace in authorised.json()["workspaces"]
+    }
 
     denied = client.post(
         "/v1/dental/organisations/org-b/workspaces",
         headers=admin_headers,
         json={"name": "Forbidden Branch", "clinic_type": "branch"},
+    )
+    assert denied.status_code == 403
+
+
+def test_owner_can_list_workspaces_only_inside_own_organisation(
+    tenant_api, admin_headers
+):
+    client, _store = tenant_api
+    response = client.get(
+        "/v1/dental/organisations/org-a/workspaces", headers=admin_headers
+    )
+    assert response.status_code == 200, response.text
+    workspaces = response.json()["workspaces"]
+    assert {workspace["id"] for workspace in workspaces} == {"clinic-a", "clinic-b"}
+    counts = {workspace["id"]: workspace["active_doctors"] for workspace in workspaces}
+    assert counts == {"clinic-a": 1, "clinic-b": 0}
+    assert {workspace["organisation_type"] for workspace in workspaces} == {"group"}
+
+    denied = client.get(
+        "/v1/dental/organisations/org-b/workspaces", headers=admin_headers
     )
     assert denied.status_code == 403
 
@@ -215,3 +243,8 @@ def test_non_admin_cannot_create_organisation(tenant_api):
         json={"name": "Not Allowed", "organisation_type": "clinic"},
     )
     assert response.status_code == 403
+    workspace_list = client.get(
+        "/v1/dental/organisations/org-a/workspaces",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert workspace_list.status_code == 403
