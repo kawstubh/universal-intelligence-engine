@@ -70,6 +70,11 @@ class DentalStore:
     def backend(self) -> str:
         return "postgres" if self.database_url else "sqlite"
 
+    def healthcheck(self) -> bool:
+        """Return whether the configured persistence backend accepts a query."""
+        rows = self._execute("SELECT 1 AS ok")
+        return bool(rows and int(rows[0]["ok"]) == 1)
+
     def _sqlite(self):
         conn = sqlite3.connect(self.sqlite_path)
         conn.row_factory = sqlite3.Row
@@ -294,64 +299,6 @@ class DentalStore:
             ),
         )
         return item
-
-    def latest_otp(self, phone: str):
-        rows = self._execute(
-            "SELECT * FROM dental_otp_challenges WHERE phone=%s ORDER BY created_at DESC LIMIT 1"
-            if self.database_url
-            else "SELECT * FROM dental_otp_challenges WHERE phone=? ORDER BY created_at DESC LIMIT 1",
-            (phone,),
-        )
-        return rows[0] if rows else None
-
-    def create_otp(
-        self,
-        phone: str,
-        otp_hash: str,
-        challenge_id: str,
-        created_at: int,
-        expires_at: int,
-    ):
-        self._execute(
-            "INSERT INTO dental_otp_challenges(id,phone,otp_hash,challenge_id,created_at,expires_at,attempts,consumed) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
-            if self.database_url
-            else "INSERT INTO dental_otp_challenges(id,phone,otp_hash,challenge_id,created_at,expires_at,attempts,consumed) VALUES (?,?,?,?,?,?,?,?)",
-            (
-                _id(),
-                phone,
-                otp_hash,
-                challenge_id,
-                str(created_at),
-                str(expires_at),
-                0,
-                False,
-            ),
-        )
-
-    def get_otp(self, phone: str, challenge_id: str):
-        rows = self._execute(
-            "SELECT * FROM dental_otp_challenges WHERE phone=%s AND challenge_id=%s AND consumed=false"
-            if self.database_url
-            else "SELECT * FROM dental_otp_challenges WHERE phone=? AND challenge_id=? AND consumed=0",
-            (phone, challenge_id),
-        )
-        return rows[0] if rows else None
-
-    def increment_otp_attempt(self, row_id: str):
-        self._execute(
-            "UPDATE dental_otp_challenges SET attempts=attempts+1 WHERE id=%s"
-            if self.database_url
-            else "UPDATE dental_otp_challenges SET attempts=attempts+1 WHERE id=?",
-            (row_id,),
-        )
-
-    def consume_otp(self, row_id: str):
-        self._execute(
-            "UPDATE dental_otp_challenges SET consumed=true WHERE id=%s"
-            if self.database_url
-            else "UPDATE dental_otp_challenges SET consumed=1 WHERE id=?",
-            (row_id,),
-        )
 
     def create_session(self, doctor_id: str, token_hash: str, expires_at: int):
         self._execute(

@@ -15,6 +15,7 @@ from . import __version__
 from .contracts import IntelligenceRequest, KnowledgeProvider
 from .dental_ai import router as dental_ai_router
 from .dental_api import router as dental_router
+from .dental_store import get_dental_store
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
@@ -119,6 +120,29 @@ def _authorize(authorization: str | None) -> None:
     expected_header = f"Bearer {expected}"
     if not hmac.compare_digest(supplied, expected_header):
         raise HTTPException(status_code=401, detail="Invalid API credentials")
+
+
+@app.get("/ready")
+def readiness() -> dict[str, Any]:
+    """Readiness probe: confirm the Dental persistence backend is reachable."""
+    try:
+        store = get_dental_store()
+        if not store.healthcheck():
+            raise RuntimeError("database probe returned no result")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "not_ready",
+                "component": "dental_database",
+                "message": "Dental database is unavailable",
+            },
+        ) from exc
+    return {
+        "status": "ready",
+        "component": "dental_api",
+        "database": store.backend,
+    }
 
 
 @app.get("/health")
