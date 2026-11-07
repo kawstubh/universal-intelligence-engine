@@ -205,3 +205,41 @@ def test_bootstrap_admin_receives_owner_membership_in_master_workspace(
     membership = store.doctor_membership(doctor["id"], "clinic-a")
     assert membership is not None
     assert (membership["role"], membership["active"]) == ("owner", 1)
+
+
+
+def test_bootstrap_admin_uses_single_legacy_workspace_when_id_is_not_configured(
+    tmp_path: Path, monkeypatch
+):
+    database_path = tmp_path / "bootstrap-single-clinic.sqlite3"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DENTAL_SQLITE_PATH", str(database_path))
+    monkeypatch.setenv(
+        "ALEMBIC_CONFIG",
+        str(Path(__file__).resolve().parents[1] / "alembic.ini"),
+    )
+    monkeypatch.delenv("DENTAL_MASTER_CLINIC_ID", raising=False)
+    monkeypatch.setenv("DENTAL_BOOTSTRAP_ADMIN_EMAIL", "single-bootstrap@example.test")
+    monkeypatch.setenv("DENTAL_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-password-strong")
+
+    store = DentalStore()
+    store.create_organisation(
+        {"id": "org-single", "name": "Dr Pranali Dental Clinic", "organisation_type": "clinic"}
+    )
+    store.create_clinic(
+        {
+            "id": "legacy-main-clinic",
+            "organisation_id": "org-single",
+            "name": "Dr Pranali Dental Clinic",
+            "clinic_type": "clinic",
+        }
+    )
+    monkeypatch.setattr(dental_auth, "get_dental_store", lambda: store)
+
+    dental_auth._bootstrap_admin()
+
+    doctor = store.doctor_by_email("single-bootstrap@example.test")
+    assert doctor is not None
+    membership = store.doctor_membership(doctor["id"], "legacy-main-clinic")
+    assert membership is not None
+    assert membership["role"] == "owner"

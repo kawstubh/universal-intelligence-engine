@@ -122,9 +122,23 @@ def upgrade() -> None:
         ),
     )
 
-    master_clinic_id = (
-        os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
-    )
+    clinic_ids = _legacy_clinic_ids(bind)
+    configured_master_clinic_id = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip()
+    if configured_master_clinic_id:
+        master_clinic_id = configured_master_clinic_id
+    elif "dr-pranali" in clinic_ids:
+        master_clinic_id = "dr-pranali"
+    elif len(clinic_ids) == 1:
+        # A single legacy clinic is unambiguous and becomes the first tenant.
+        master_clinic_id = clinic_ids[0]
+    elif len(clinic_ids) > 1:
+        raise RuntimeError(
+            "Multiple legacy clinic IDs exist. Set DENTAL_MASTER_CLINIC_ID "
+            "to the Dr Pranali clinic ID before applying this migration."
+        )
+    else:
+        master_clinic_id = "dr-pranali"
+
     master_clinic_name = (
         os.getenv("DENTAL_MASTER_CLINIC_NAME", "").strip()
         or "Dr Pranali Dental Clinic"
@@ -133,7 +147,7 @@ def upgrade() -> None:
 
     # Register every legacy workspace found in any clinic-scoped Dental table.
     # Clinical records are read only; this migration never updates or moves them.
-    for clinic_id in _legacy_clinic_ids(bind):
+    for clinic_id in clinic_ids:
         organisation_id = _stable_organisation_id(clinic_id)
         organisation_exists = bind.execute(
             sa.text("SELECT 1 FROM dental_organisations WHERE id = :id"),

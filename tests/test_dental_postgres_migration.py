@@ -84,6 +84,14 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 sa.text("SELECT id FROM dental_clinics")
             ).scalars().all()
             assert workspaces == ["legacy-pg-clinic"]
+            organisation = connection.execute(
+                sa.text("SELECT name FROM dental_organisations")
+            ).scalar_one()
+            workspace_name = connection.execute(
+                sa.text("SELECT name FROM dental_clinics")
+            ).scalar_one()
+            assert organisation == "Dr Pranali Dental Clinic"
+            assert workspace_name == "Dr Pranali Dental Clinic"
 
             memberships = connection.execute(
                 sa.text(

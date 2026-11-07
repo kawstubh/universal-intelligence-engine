@@ -77,7 +77,25 @@ def _bootstrap_admin() -> None:
     store = get_dental_store()
     if store.doctor_by_email(email):
         return
-    clinic_id = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
+    configured_clinic_id = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip()
+    if configured_clinic_id:
+        clinic_id = configured_clinic_id
+    else:
+        existing_clinics = store._execute(
+            "SELECT id FROM dental_clinics ORDER BY id"
+        )
+        existing_clinic_ids = [str(row["id"]) for row in existing_clinics]
+        if "dr-pranali" in existing_clinic_ids:
+            clinic_id = "dr-pranali"
+        elif len(existing_clinic_ids) == 1:
+            clinic_id = existing_clinic_ids[0]
+        elif len(existing_clinic_ids) > 1:
+            raise RuntimeError(
+                "Multiple clinic workspaces exist. Set DENTAL_MASTER_CLINIC_ID "
+                "before creating the bootstrap administrator."
+            )
+        else:
+            clinic_id = "dr-pranali"
     clinic_rows = store._execute(
         "SELECT id FROM dental_clinics WHERE id=%s"
         if store.database_url

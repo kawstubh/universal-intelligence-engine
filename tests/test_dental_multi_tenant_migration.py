@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
@@ -168,4 +169,37 @@ def test_workspace_migration_backfills_memberships_without_rewriting_clinical_ro
                 sa.text(f"SELECT id FROM {table} ORDER BY id")
             ).scalars().all()
             assert actual == expected
+    engine.dispose()
+
+
+
+def test_multiple_legacy_clinics_require_explicit_master_clinic_id(
+    tmp_path: Path, monkeypatch
+) -> None:
+    database_path = tmp_path / "ambiguous-legacy-clinics.sqlite3"
+    monkeypatch.setenv("DENTAL_SQLITE_PATH", str(database_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DENTAL_MASTER_CLINIC_ID", raising=False)
+    config = Config(str(ROOT / "alembic.ini"))
+    command.upgrade(config, "0005_password_auth")
+
+    engine = sa.create_engine(f"sqlite:///{database_path.as_posix()}")
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO dental_doctors "
+                "(id,email,phone,password_hash,role,clinic_id,active,created_at) "
+                "VALUES ('doc-a','a@example.test','','hash','doctor','clinic-a',1,'2026-01-01')"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO dental_doctors "
+                "(id,email,phone,password_hash,role,clinic_id,active,created_at) "
+                "VALUES ('doc-b','b@example.test','','hash','doctor','clinic-b',1,'2026-01-01')"
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="DENTAL_MASTER_CLINIC_ID"):
+        command.upgrade(config, "head")
     engine.dispose()
