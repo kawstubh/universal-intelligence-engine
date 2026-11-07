@@ -9,7 +9,13 @@ import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .dental_auth import hash_password, login_password, logout_doctor, require_doctor
+from .dental_auth import (
+    hash_password,
+    login_password,
+    logout_doctor,
+    require_doctor,
+    switch_doctor_workspace,
+)
 from .dental_billing import create_order as create_membership_order_impl
 from .dental_billing import handle_webhook as handle_membership_webhook
 from .dental_billing import plans as membership_plans
@@ -23,6 +29,10 @@ router = APIRouter(prefix="/v1/dental", tags=["dental"])
 class DoctorPasswordLoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=256)
+
+
+class WorkspaceSwitchIn(BaseModel):
+    clinic_id: str = Field(min_length=1, max_length=128)
 
 
 class DoctorAccountCreateIn(BaseModel):
@@ -160,6 +170,17 @@ async def membership_webhook(
 @router.post("/auth/password/login")
 async def doctor_password_login(body: DoctorPasswordLoginIn, request: Request):
     return await login_password(body.email, body.password, request)
+
+
+@router.post("/auth/workspace/switch")
+async def doctor_workspace_switch(
+    body: WorkspaceSwitchIn,
+    doctor: Annotated[dict, Depends(require_doctor)],
+    authorization: str | None = Header(default=None),
+):
+    return await switch_doctor_workspace(
+        authorization, body.clinic_id, current_user=doctor
+    )
 
 
 @router.post("/auth/doctors")

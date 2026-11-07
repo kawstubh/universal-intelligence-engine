@@ -11,6 +11,7 @@ import hmac
 import os
 import secrets
 import time
+import uuid
 from collections import defaultdict, deque
 
 from fastapi import Header, HTTPException, Request
@@ -77,15 +78,56 @@ def _bootstrap_admin() -> None:
     if store.doctor_by_email(email):
         return
     clinic_id = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
+    clinic_rows = store._execute(
+        "SELECT id FROM dental_clinics WHERE id=%s"
+        if store.database_url
+        else "SELECT id FROM dental_clinics WHERE id=?",
+        (clinic_id,),
+    )
+    if not clinic_rows:
+        organisation_id = "org-" + uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"uie:dental:legacy-organisation:{clinic_id}",
+        ).hex
+        organisation_rows = store._execute(
+            "SELECT id FROM dental_organisations WHERE id=%s"
+            if store.database_url
+            else "SELECT id FROM dental_organisations WHERE id=?",
+            (organisation_id,),
+        )
+        if not organisation_rows:
+            store.create_organisation(
+                {
+                    "id": organisation_id,
+                    "name": os.getenv(
+                        "DENTAL_MASTER_CLINIC_NAME", "Dr Pranali Dental Clinic"
+                    ).strip(),
+                    "organisation_type": "clinic",
+                }
+            )
+        store.create_clinic(
+            {
+                "id": clinic_id,
+                "organisation_id": organisation_id,
+                "name": os.getenv(
+                    "DENTAL_MASTER_CLINIC_NAME", "Dr Pranali Dental Clinic"
+                ).strip(),
+                "clinic_type": "clinic",
+            }
+        )
+
+    doctor_id = secrets.token_hex(16)
     store.create_doctor(
         {
-            "id": secrets.token_hex(16),
+            "id": doctor_id,
             "email": email,
             "password_hash": hash_password(password),
             "role": "admin",
             "clinic_id": clinic_id,
         }
     )
+    if not store.doctor_membership(doctor_id, clinic_id):
+        store.create_doctor_membership(doctor_id, clinic_id, "owner")
 
 
 def _check_login_rate_limit(ip: str) -> None:
@@ -108,7 +150,8 @@ async def login_password(email: str, password: str, request: Request) -> dict:
     _check_login_rate_limit(request.client.host if request.client else "unknown")
     _bootstrap_admin()
     normalized_email = email.strip().lower()
-    doctor = get_dental_store().doctor_by_email(normalized_email)
+    store = get_dental_store()
+    doctor = store.doctor_by_email(normalized_email)
     if (
         not doctor
         or not doctor.get("active", True)
@@ -121,10 +164,30 @@ async def login_password(email: str, password: str, request: Request) -> dict:
                 "message": "Email or password is incorrect",
             },
         )
+
+    workspaces = store.workspaces_for_doctor(str(doctor["id"]))
+    if not workspaces:
+        raise HTTPException(
+            403,
+            detail={
+                "code": "NO_ACTIVE_WORKSPACE",
+                "message": "This doctor has no active clinic workspace membership",
+            },
+        )
+    default_workspace = next(
+        (
+            workspace
+            for workspace in workspaces
+            if str(workspace["id"]) == str(doctor.get("clinic_id") or "")
+        ),
+        workspaces[0],
+    )
+    clinic_id = str(default_workspace["id"])
+    role = str(default_workspace["role"])
     token = secrets.token_urlsafe(48)
     expires_at = int(time.time()) + SESSION_TTL
-    get_dental_store().create_session(
-        f"{doctor['id']}|{doctor['clinic_id']}|{doctor['role']}",
+    store.create_session(
+        f"{doctor['id']}|{clinic_id}|{role}",
         _hash(token),
         expires_at,
     )
@@ -135,9 +198,10 @@ async def login_password(email: str, password: str, request: Request) -> dict:
         "user": {
             "id": doctor["id"],
             "email": doctor["email"],
-            "role": doctor["role"],
-            "clinic_id": doctor["clinic_id"],
+            "role": role,
+            "clinic_id": clinic_id,
         },
+        "workspaces": workspaces,
     }
 
 
@@ -163,7 +227,8 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
                 "message": "Invalid or expired doctor session",
             },
         )
-    row = get_dental_store().get_session(_hash(token))
+    store = get_dental_store()
+    row = store.get_session(_hash(token))
     if (
         not row
         or int(float(row["expires_at"])) < int(time.time())
@@ -177,7 +242,7 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
             },
         )
     parts = str(row["doctor_id"]).split("|", 2)
-    if len(parts) != 3:
+    if len(parts) < 2:
         raise HTTPException(
             401,
             detail={
@@ -185,36 +250,38 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
                 "message": "Doctor session has no clinic context",
             },
         )
-    user_id, clinic_id, role = parts
-    doctor = get_dental_store().doctor_by_id(user_id)
+    user_id, clinic_id = parts[0], parts[1]
+    doctor = store.doctor_by_id(user_id)
     if not doctor or not doctor.get("active", True):
         raise HTTPException(
             401,
             detail={
                 "code": "ACCOUNT_DISABLED",
-                "message": "This clinic account is inactive",
+                "message": "This doctor account is inactive",
             },
         )
-    if str(doctor.get("clinic_id")) != clinic_id or str(doctor.get("role")) != role:
+
+    workspace = next(
+        (
+            item
+            for item in store.workspaces_for_doctor(user_id)
+            if str(item["id"]) == clinic_id
+        ),
+        None,
+    )
+    if not workspace:
         raise HTTPException(
             401,
             detail={
-                "code": "SESSION_INVALID",
-                "message": "Session account permissions changed",
+                "code": "WORKSPACE_ACCESS_REVOKED",
+                "message": "This doctor no longer has access to the active workspace",
             },
         )
-    if role not in {"doctor", "dentist", "admin"}:
+    role = str(workspace["role"])
+    if role not in {"owner", "admin", "doctor", "dentist"}:
         raise HTTPException(
             403,
             detail={"code": "DOCTOR_ROLE_REQUIRED", "message": "Doctor role required"},
-        )
-    if not clinic_id:
-        raise HTTPException(
-            403,
-            detail={
-                "code": "CLINIC_CONTEXT_REQUIRED",
-                "message": "Clinic context required",
-            },
         )
     return {
         "id": user_id,
@@ -222,4 +289,51 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
         "email": doctor["email"],
         "clinic_id": clinic_id,
         "role": role,
+    }
+
+
+async def switch_doctor_workspace(
+    authorization: str | None,
+    clinic_id: str,
+    current_user: dict | None = None,
+) -> dict:
+    if current_user is None:
+        current_user = await require_doctor(authorization)
+    store = get_dental_store()
+    workspaces = store.workspaces_for_doctor(current_user["id"])
+    target = next(
+        (workspace for workspace in workspaces if str(workspace["id"]) == clinic_id),
+        None,
+    )
+    if not target:
+        raise HTTPException(
+            403,
+            detail={
+                "code": "WORKSPACE_ACCESS_DENIED",
+                "message": "You do not have active access to this workspace",
+            },
+        )
+
+    new_token = secrets.token_urlsafe(48)
+    expires_at = int(time.time()) + SESSION_TTL
+    store.create_session(
+        f"{current_user['id']}|{clinic_id}|{target['role']}",
+        _hash(new_token),
+        expires_at,
+    )
+    old_token = authorization[7:].strip() if authorization else ""
+    if old_token:
+        store.revoke_session(_hash(old_token))
+
+    return {
+        "access_token": new_token,
+        "token_type": "Bearer",
+        "expires_in": SESSION_TTL,
+        "user": {
+            "id": current_user["id"],
+            "email": current_user["email"],
+            "role": target["role"],
+            "clinic_id": clinic_id,
+        },
+        "workspaces": workspaces,
     }
