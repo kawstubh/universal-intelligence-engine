@@ -248,3 +248,31 @@ def test_non_admin_cannot_create_organisation(tenant_api):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert workspace_list.status_code == 403
+
+
+def test_admin_can_list_workspaces_only_inside_their_organisation(tenant_api):
+    client, store = tenant_api
+    store.create_doctor_membership("doctor-target", "clinic-a", "admin")
+    login = client.post(
+        "/v1/dental/auth/password/login",
+        json={
+            "email": "target@example.test",
+            "password": "another correct horse battery",
+        },
+    )
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    response = client.get(
+        "/v1/dental/organisations/org-a/workspaces", headers=headers
+    )
+    assert response.status_code == 200, response.text
+    assert {workspace["id"] for workspace in response.json()["workspaces"]} == {
+        "clinic-a",
+        "clinic-b",
+    }
+
+    denied = client.get(
+        "/v1/dental/organisations/org-b/workspaces", headers=headers
+    )
+    assert denied.status_code == 403
