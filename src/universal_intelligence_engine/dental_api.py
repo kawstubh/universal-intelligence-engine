@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 from .dental_auth import (
     hash_password,
     login_password,
-    login_google,
     logout_doctor,
     require_doctor,
     switch_doctor_workspace,
@@ -32,9 +31,6 @@ class DoctorPasswordLoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=256)
 
-
-class DoctorGoogleLoginIn(BaseModel):
-    id_token: str = Field(min_length=20, max_length=10000)
 
 
 class WorkspaceSwitchIn(BaseModel):
@@ -201,10 +197,6 @@ async def membership_webhook(
 async def doctor_password_login(body: DoctorPasswordLoginIn, request: Request):
     return await login_password(body.email, body.password, request)
 
-
-@router.post("/auth/google")
-async def doctor_google_login(body: DoctorGoogleLoginIn, request: Request):
-    return await login_google(body.id_token, request)
 
 
 @router.post("/auth/workspace/switch")
