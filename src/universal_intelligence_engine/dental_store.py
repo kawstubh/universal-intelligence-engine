@@ -17,6 +17,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 
@@ -675,10 +676,19 @@ def _iso_from_epoch(value: int) -> str:
 
 
 _store: DentalStore | None = None
+_store_lock = Lock()
 
 
 def get_dental_store() -> DentalStore:
+    """Initialize the persistence store once, even when requests arrive concurrently.
+
+    Store construction can run Alembic migrations when DENTAL_AUTO_MIGRATE is
+    enabled. Alembic uses process-global context state, so concurrent first
+    requests must not attempt to initialize/migrate the store simultaneously.
+    """
     global _store
     if _store is None:
-        _store = DentalStore()
+        with _store_lock:
+            if _store is None:
+                _store = DentalStore()
     return _store
