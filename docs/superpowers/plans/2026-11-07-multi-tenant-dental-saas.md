@@ -41,8 +41,8 @@
 
 **Interfaces:**
 - Produces tables `dental_organisations`, `dental_clinics`, and `dental_doctor_memberships`.
-- Organisation fields: `id`, `name`, `organisation_type`, `active`, `created_at`.
-- Clinic fields: `id`, `organisation_id`, `name`, `clinic_type`, `parent_clinic_id`, `active`, `created_at`.
+- Organisation fields: `id`, `name`, `organisation_type`, `active`, `created_at`; `organisation_type` is `clinic`, `hospital`, or `group`.
+- Clinic fields: `id`, `organisation_id`, `name`, `clinic_type`, `parent_clinic_id`, `active`, `created_at`; `clinic_type` is `clinic`, `branch`, or `hospital_department`.
 - Membership fields: `id`, `doctor_id`, `clinic_id`, `role`, `active`, `created_at`; unique constraint on (`doctor_id`, `clinic_id`). Allowed roles: `owner`, `admin`, `doctor`, `dentist`.
 
 - [ ] **Step 1: Write migration tests** asserting that every distinct legacy clinic ID is represented by one workspace, every existing doctor receives a membership matching its legacy clinic and role, and patient/appointment/chart row counts and IDs remain unchanged.
@@ -58,6 +58,8 @@
 - Test: `tests/test_dental_multi_tenant_store.py`
 
 **Interfaces:**
+- Update `audit(actor_id, action, resource_type, resource_id=None, clinic_id=None)` to persist workspace context for new events.
+- Add nullable `clinic_id` to `dental_audit_events` in the schema migration; retain all historical audit rows.
 - `organisations_for_doctor(doctor_id: str) -> list[dict[str, Any]]`
 - `workspaces_for_doctor(doctor_id: str) -> list[dict[str, Any]]`
 - `doctor_membership(doctor_id: str, clinic_id: str) -> dict[str, Any] | None`
@@ -66,9 +68,9 @@
 - `create_doctor_membership(doctor_id: str, clinic_id: str, role: str) -> dict[str, Any]`
 - `set_doctor_membership_active(doctor_id: str, clinic_id: str, active: bool) -> None`
 
-- [ ] **Step 1: Write tests** for listing only active memberships, retrieving a single doctor/workspace membership, creating organisations/workspaces/memberships, and deactivating a membership.
+- [ ] **Step 1: Write tests** for listing only active memberships, retrieving a single doctor/workspace membership, creating organisations/workspaces/memberships, deactivating a membership, and recording the active workspace ID in new audit events.
 - [ ] **Step 2: Run the tests and verify the expected missing-method failures.**
-- [ ] **Step 3: Implement the methods** using the store's existing PostgreSQL/SQLite placeholder conventions and transaction patterns.
+- [ ] **Step 3: Implement the methods** using the store's existing PostgreSQL/SQLite placeholder conventions and transaction patterns. Keep historical audit rows intact; populate `clinic_id` for new workspace-scoped audit events.
 - [ ] **Step 4: Run the store tests and existing store/API tests.**
 - [ ] **Step 5: Commit** as `feat: add dental workspace membership persistence`.
 
@@ -83,7 +85,7 @@
 **Interfaces:**
 - Login response retains `access_token`, `token_type`, `expires_in`, and `user`; adds `workspaces` with authorised active workspace metadata.
 - `POST /v1/dental/auth/workspace/switch` accepts `clinic_id` and returns a replacement `access_token`, active user context, and available workspaces.
-- `require_doctor` continues returning `id`, `user_id`, `email`, `clinic_id`, and `role`, deriving role from the active membership. It accepts `owner`, `admin`, `doctor`, and `dentist`; owner/admin checks are enforced within the actor's organisation.
+- `require_doctor` continues returning `id`, `user_id`, `email`, `clinic_id`, and `role`, deriving role from the active membership. It accepts `owner`, `admin`, `doctor`, and `dentist`; it must not compare the membership role to the legacy `dental_doctors.role` field. Owner/admin checks are enforced within the actor's organisation.
 - Use the existing `DentalStore.revoke_session(token_hash: str) -> None` and hashed-token storage.
 
 - [ ] **Step 1: Write tests** for multi-workspace login response, single-workspace backward compatibility, successful switch, rejection of non-member workspace, revocation of the previous token, and immediate denial after membership deactivation.
@@ -110,7 +112,7 @@
 
 - [ ] **Step 1: Write tests** for authorised organisation creation, branch/workspace creation, membership assignment, membership deactivation, and 403/404 responses for cross-organisation administration.
 - [ ] **Step 2: Run tests and verify the expected missing-route failures.**
-- [ ] **Step 3: Implement routes** with explicit same-organisation checks and audit events; do not expose password hashes or token hashes.
+- [ ] **Step 3: Implement routes** with explicit same-organisation checks and audit events carrying the active workspace ID; do not expose password hashes or token hashes.
 - [ ] **Step 4: Run the full backend suite** including existing cross-clinic patient access and UIE doctor-only tests.
 - [ ] **Step 5: Commit** as `feat: add dental organisation and workspace APIs`.
 
