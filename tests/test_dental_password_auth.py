@@ -92,24 +92,6 @@ def test_password_login_rejects_wrong_password(monkeypatch):
     assert response.status_code == 401
     assert response.json()["detail"]["code"] == "INVALID_CREDENTIALS"
 
-
-def test_google_login_route_is_available_without_breaking_password_login():
-    paths = set(app.openapi()["paths"])
-    assert "/v1/dental/auth/google" in paths
-    assert "/v1/dental/auth/password/login" in paths
-
-
-def test_google_login_fails_closed_when_not_configured(monkeypatch):
-    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID", raising=False)
-    monkeypatch.delenv("DENTAL_GOOGLE_ALLOWED_EMAILS", raising=False)
-    dental_auth._LOGIN_ATTEMPTS.clear()
-    response = TestClient(app).post(
-        "/v1/dental/auth/google", json={"id_token": "x" * 40}
-    )
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "GOOGLE_LOGIN_NOT_CONFIGURED"
-
-
 def test_bootstrap_admin_does_not_recreate_existing_admin(monkeypatch):
     """First-run bootstrap is idempotent once the configured admin exists."""
     from universal_intelligence_engine import dental_auth
@@ -135,3 +117,9 @@ def test_bootstrap_admin_does_not_recreate_existing_admin(monkeypatch):
     monkeypatch.setattr(dental_auth, "get_dental_store", lambda: store)
     dental_auth._bootstrap_admin()
     assert store.created == []
+
+
+def test_only_clinic_password_login_route_is_exposed():
+    paths = set(app.openapi()["paths"])
+    assert "/v1/dental/auth/password/login" in paths
+    assert "/v1/dental/auth/google" not in paths
