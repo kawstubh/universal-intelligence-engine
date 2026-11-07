@@ -357,3 +357,22 @@ def test_admin_creator_is_added_to_new_workspace_membership(tenant_api):
     assert workspace_id in {
         workspace["id"] for workspace in authorised.json()["workspaces"]
     }
+
+def test_active_doctor_counts_exclude_inactive_doctors_and_memberships(tenant_api, admin_headers):
+    client, store = tenant_api
+    store.create_doctor_membership("doctor-target", "clinic-a", "dentist")
+    store.create_doctor_membership("doctor-admin", "clinic-b", "dentist")
+    store.set_doctor_membership_active("doctor-admin", "clinic-b", False)
+    store._execute("UPDATE dental_doctors SET active=0 WHERE id=?", ("doctor-target",))
+
+    response = client.get(
+        "/v1/dental/organisations/org-a/workspaces", headers=admin_headers
+    )
+    assert response.status_code == 200, response.text
+    counts = {
+        workspace["id"]: workspace["active_doctors"]
+        for workspace in response.json()["workspaces"]
+    }
+    # The owner in clinic-a remains active; an inactive doctor and an inactive
+    # membership must not contribute to their respective workspace counts.
+    assert counts == {"clinic-a": 1, "clinic-b": 0}
