@@ -5,10 +5,16 @@ from universal_intelligence_engine.api import app
 PUBLIC_PATHS = {
     "/v1/dental/health",
     "/v1/dental/auth/google",
+    "/v1/dental/auth/password/login",
     "/v1/dental/public/appointments",
     "/v1/dental/billing/plans",
     "/v1/dental/billing/razorpay/webhook",
 }
+
+
+def _is_patient_ai_route(path: str) -> bool:
+    # Patient-facing AI is deliberately disabled and separately tested.
+    return path.startswith("/v1/dental/ai/patient/")
 
 
 def _sample_path(path: str) -> str:
@@ -29,33 +35,34 @@ def test_no_demo_or_otp_release_auth_symbols():
 
 
 def test_protected_dental_routes_require_auth_dependency():
-
     for route in app.routes:
-        if not getattr(route, "path", "").startswith("/v1/dental/"):
+        path = getattr(route, "path", "")
+        if not path.startswith("/v1/dental/"):
             continue
-        if route.path in PUBLIC_PATHS:
+        if path in PUBLIC_PATHS or _is_patient_ai_route(path):
             continue
         dependency_calls = {
             getattr(dep.call, "__name__", "")
             for dep in getattr(route, "dependant", None).dependencies
         }
-        assert "require_doctor" in dependency_calls, f"missing auth on {route.path}"
+        assert "require_doctor" in dependency_calls, f"missing auth on {path}"
 
 
 def test_protected_dental_requests_return_401_without_bearer():
     client = TestClient(app)
     seen = set()
     for route in app.routes:
-        if not getattr(route, "path", "").startswith("/v1/dental/"):
+        path = getattr(route, "path", "")
+        if not path.startswith("/v1/dental/"):
             continue
-        if route.path in PUBLIC_PATHS or route.path in seen:
+        if path in PUBLIC_PATHS or _is_patient_ai_route(path) or path in seen:
             continue
-        seen.add(route.path)
+        seen.add(path)
         method = next(iter(getattr(route, "methods", {"GET"})))
-        response = client.request(method, _sample_path(route.path))
+        response = client.request(method, _sample_path(path))
         assert response.status_code == 401, (
             method,
-            route.path,
+            path,
             response.status_code,
             response.text,
         )
