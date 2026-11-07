@@ -250,6 +250,26 @@ def _get_workspace_record(store, clinic_id: str) -> dict | None:
     return rows[0] if rows else None
 
 
+def _require_doctor_same_organisation(
+    store, doctor: dict, organisation_id: str
+) -> None:
+    # A doctor identity is anchored to the organisation of its original
+    # workspace. Prevent an administrator from another tenant attaching or
+    # managing that identity by guessing or obtaining its doctor ID.
+    home_clinic_id = str(doctor.get("clinic_id") or "")
+    home_workspace = (
+        _get_workspace_record(store, home_clinic_id) if home_clinic_id else None
+    )
+    if not home_workspace or home_workspace["organisation_id"] != organisation_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "DOCTOR_ORGANISATION_MISMATCH",
+                "message": "Doctors can only be assigned within their own organisation",
+            },
+        )
+
+
 @router.get("/auth/workspaces")
 async def list_doctor_workspaces(
     doctor: Annotated[dict, Depends(require_doctor)],
@@ -391,6 +411,9 @@ async def create_workspace_membership(
             status_code=404,
             detail={"code": "DOCTOR_NOT_FOUND", "message": "Doctor account not found"},
         )
+    _require_doctor_same_organisation(
+        store, target_doctor, target_workspace["organisation_id"]
+    )
     if body.role == "owner" and actor.get("role") != "owner":
         raise HTTPException(
             status_code=403,
@@ -439,6 +462,15 @@ async def update_workspace_membership(
                 "message": "Doctor membership not found in this workspace",
             },
         )
+    target_doctor = store.doctor_by_id(doctor_id)
+    if not target_doctor:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "DOCTOR_NOT_FOUND", "message": "Doctor account not found"},
+        )
+    _require_doctor_same_organisation(
+        store, target_doctor, target_workspace["organisation_id"]
+    )
     if doctor_id == actor["id"] and not body.active:
         raise HTTPException(
             status_code=400,
