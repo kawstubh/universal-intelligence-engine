@@ -601,7 +601,7 @@ async def create_patient(
 ):
     store = get_dental_store()
     item = store.create_patient(body.model_dump(), _clinic_id(actor))
-    store.audit(actor.get("user_id"), "create", "patient", item["id"])
+    store.audit(actor.get("user_id"), "create", "patient", item["id"], clinic_id=_clinic_id(actor))
     return item
 
 
@@ -628,7 +628,7 @@ async def create_public_appointment(body: PublicAppointmentIn):
         },
         master_clinic,
     )
-    store.audit("public-intake", "request", "appointment", appointment["id"])
+    store.audit("public-intake", "request", "appointment", appointment["id"], clinic_id=master_clinic)
     return {"status": "requested", "appointment": appointment}
 
 
@@ -636,6 +636,16 @@ async def create_public_appointment(body: PublicAppointmentIn):
 async def screen_scan(
     body: ScanScreenIn, actor: Annotated[dict, Depends(require_doctor)]
 ):
+    store = get_dental_store()
+    clinic_id = _clinic_id(actor)
+    if body.patient_id and not store.get_patient(body.patient_id, clinic_id):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Patient is not accessible from this clinic",
+                "code": "PATIENT_CLINIC_ACCESS_DENIED",
+            },
+        )
     adapter = get_scano_adapter()
     try:
         result = await adapter.screen(
@@ -650,7 +660,7 @@ async def screen_scan(
         raise HTTPException(
             status_code=503, detail="Scan screening is temporarily unavailable."
         ) from exc
-    get_dental_store().audit(actor.get("user_id"), "screen", "scan", body.patient_id)
+    store.audit(actor.get("user_id"), "screen", "scan", body.patient_id, clinic_id=clinic_id)
     return result
 
 
@@ -670,7 +680,7 @@ async def send_whatsapp_template(
         raise HTTPException(
             status_code=503, detail="WhatsApp delivery is temporarily unavailable."
         ) from exc
-    get_dental_store().audit(actor.get("user_id"), "send", "whatsapp", body.to.strip())
+    get_dental_store().audit(actor.get("user_id"), "send", "whatsapp", body.to.strip(), clinic_id=_clinic_id(actor))
     return result
 
 
@@ -706,7 +716,7 @@ async def update_appointment(
     item = store.update_appointment(appointment_id, changes, _clinic_id(actor))
     if not item:
         raise HTTPException(status_code=404, detail="Appointment not found")
-    store.audit(actor.get("user_id"), "update", "appointment", appointment_id)
+    store.audit(actor.get("user_id"), "update", "appointment", appointment_id, clinic_id=_clinic_id(actor))
     return item
 
 
@@ -715,8 +725,11 @@ async def create_appointment(
     body: AppointmentIn, actor: Annotated[dict, Depends(require_doctor)]
 ):
     store = get_dental_store()
-    item = store.create_appointment(body.model_dump(), _clinic_id(actor))
-    store.audit(actor.get("user_id"), "create", "appointment", item["id"])
+    clinic_id = _clinic_id(actor)
+    if not store.get_patient(body.patient_id, clinic_id):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    item = store.create_appointment(body.model_dump(), clinic_id)
+    store.audit(actor.get("user_id"), "create", "appointment", item["id"], clinic_id=clinic_id)
     return item
 
 
@@ -732,8 +745,11 @@ async def save_chart(
     if body.patient_id != patient_id:
         raise HTTPException(status_code=400, detail="patient_id mismatch")
     store = get_dental_store()
-    item = store.save_chart(body.model_dump(), _clinic_id(actor))
-    store.audit(actor.get("user_id"), "write", "dental_chart", item["id"])
+    clinic_id = _clinic_id(actor)
+    if not store.get_patient(patient_id, clinic_id):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    item = store.save_chart(body.model_dump(), clinic_id)
+    store.audit(actor.get("user_id"), "write", "dental_chart", item["id"], clinic_id=clinic_id)
     return item
 
 
@@ -752,9 +768,17 @@ async def save_periodontogram(
 ):
     if body.patient_id != patient_id:
         raise HTTPException(status_code=400, detail="patient_id mismatch")
-    item = get_dental_store().save_periodontogram(body.model_dump(), _clinic_id(actor))
-    get_dental_store().audit(
-        actor.get("user_id"), "write", "periodontogram", item["id"]
+    store = get_dental_store()
+    clinic_id = _clinic_id(actor)
+    if not store.get_patient(patient_id, clinic_id):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    item = store.save_periodontogram(body.model_dump(), clinic_id)
+    store.audit(
+        actor.get("user_id"),
+        "write",
+        "periodontogram",
+        item["id"],
+        clinic_id=clinic_id,
     )
     return item
 
@@ -881,5 +905,5 @@ async def run_dental_intelligence(
     store = get_dental_store()
     if body.patient_id:
         store.record_ai(body.patient_id, body.goal, result, clinic_id)
-    store.audit(actor.get("id"), "run", "dental_intelligence", body.patient_id)
+    store.audit(actor.get("id"), "run", "dental_intelligence", body.patient_id, clinic_id=clinic_id)
     return result

@@ -158,6 +158,8 @@ class DentalStore:
     def create_appointment(
         self, data: dict[str, Any], clinic_id: str
     ) -> dict[str, Any]:
+        if not self.get_patient(str(data["patient_id"]), clinic_id):
+            raise ValueError("Patient not found in clinic")
         item = {
             "id": _id(),
             "patient_id": data["patient_id"],
@@ -226,6 +228,8 @@ class DentalStore:
 
     def save_chart(self, data: dict[str, Any], clinic_id: str) -> dict[str, Any]:
         patient_id, tooth_fdi = data["patient_id"], data["tooth_fdi"]
+        if not self.get_patient(patient_id, clinic_id):
+            raise ValueError("Patient not found in clinic")
         self._execute(
             "DELETE FROM dental_chart_entries WHERE patient_id=%s AND tooth_fdi=%s AND clinic_id=%s"
             if self.database_url
@@ -270,6 +274,8 @@ class DentalStore:
         self, data: dict[str, Any], clinic_id: str
     ) -> dict[str, Any]:
         patient_id, tooth_fdi = data["patient_id"], data["tooth_fdi"]
+        if not self.get_patient(patient_id, clinic_id):
+            raise ValueError("Patient not found in clinic")
         self._execute(
             "DELETE FROM dental_periodontal_entries WHERE patient_id=%s AND tooth_fdi=%s AND clinic_id=%s"
             if self.database_url
