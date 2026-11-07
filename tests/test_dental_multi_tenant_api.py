@@ -317,3 +317,43 @@ def test_admin_cannot_assign_or_manage_doctor_from_another_organisation(tenant_a
     )
     assert update.status_code == 403
     assert update.json()["detail"]["code"] == "DOCTOR_ORGANISATION_MISMATCH"
+
+def test_admin_creator_is_added_to_new_workspace_membership(tenant_api):
+    client, store = tenant_api
+    store.create_doctor(
+        {
+            "id": "clinic-admin",
+            "email": "clinic-admin@example.test",
+            "password_hash": dental_auth.hash_password("clinic admin password"),
+            "role": "doctor",
+            "clinic_id": "clinic-a",
+        }
+    )
+    store.create_doctor_membership("clinic-admin", "clinic-a", "admin")
+    login = client.post(
+        "/v1/dental/auth/password/login",
+        json={
+            "email": "clinic-admin@example.test",
+            "password": "clinic admin password",
+        },
+    )
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    created = client.post(
+        "/v1/dental/organisations/org-a/workspaces",
+        headers=headers,
+        json={"name": "Admin-created branch", "clinic_type": "branch"},
+    )
+    assert created.status_code == 201, created.text
+    workspace_id = created.json()["id"]
+    membership = store.doctor_membership("clinic-admin", workspace_id)
+    assert membership is not None
+    assert membership["role"] == "admin"
+    assert membership["active"] in (True, 1)
+
+    authorised = client.get("/v1/dental/auth/workspaces", headers=headers)
+    assert authorised.status_code == 200
+    assert workspace_id in {
+        workspace["id"] for workspace in authorised.json()["workspaces"]
+    }
