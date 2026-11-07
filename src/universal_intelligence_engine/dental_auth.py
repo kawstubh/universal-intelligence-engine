@@ -263,7 +263,8 @@ async def login_google(id_token: str, request: Request) -> dict:
         ) from None
 
     store = get_dental_store()
-    doctor = store.doctor_by_email(email)
+    linked_doctor_email = os.getenv("DENTAL_GOOGLE_DOCTOR_EMAIL", "").strip().lower() or email
+    doctor = store.doctor_by_email(linked_doctor_email)
     if not doctor or not doctor.get("active", True):
         raise HTTPException(
             403,
