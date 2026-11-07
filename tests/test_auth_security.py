@@ -4,7 +4,6 @@ from universal_intelligence_engine.api import app
 
 PUBLIC_PATHS = {
     "/v1/dental/health",
-    "/v1/dental/auth/google",
     "/v1/dental/auth/password/login",
     "/v1/dental/public/appointments",
     "/v1/dental/billing/plans",
@@ -31,6 +30,7 @@ def test_no_demo_or_otp_release_auth_symbols():
     assert not hasattr(auth, "DEMO_OTP")
     assert not hasattr(auth, "request_otp")
     assert not hasattr(auth, "verify_otp")
+    assert not hasattr(auth, "login_google")
     assert "otp/request" not in api.__dict__.get("router").routes.__repr__().lower()
 
 
