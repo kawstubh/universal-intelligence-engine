@@ -518,7 +518,7 @@ class DentalStore:
         return item
 
     def set_doctor_membership_active(
-        self, doctor_id: str, clinic_id: str, active: bool
+        self, doctor_id: str, clinic_id: str, active: bool, connection=None
     ) -> None:
         sql = (
             "UPDATE dental_doctor_memberships SET active=%s "
@@ -527,7 +527,7 @@ class DentalStore:
             else "UPDATE dental_doctor_memberships SET active=? "
             "WHERE doctor_id=? AND clinic_id=?"
         )
-        self._execute(sql, (active, doctor_id, clinic_id))
+        self._execute(sql, (active, doctor_id, clinic_id), connection=connection)
 
     def create_session(self, doctor_id: str, token_hash: str, expires_at: int):
         self._execute(
