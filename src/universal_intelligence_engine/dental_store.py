@@ -529,12 +529,15 @@ class DentalStore:
         )
         self._execute(sql, (active, doctor_id, clinic_id), connection=connection)
 
-    def create_session(self, doctor_id: str, token_hash: str, expires_at: int):
+    def create_session(
+        self, doctor_id: str, token_hash: str, expires_at: int, connection=None
+    ):
         self._execute(
             "INSERT INTO dental_sessions(token_hash,doctor_id,expires_at,revoked) VALUES (%s,%s,%s,%s)"
             if self.database_url
             else "INSERT INTO dental_sessions(token_hash,doctor_id,expires_at,revoked) VALUES (?,?,?,?)",
             (token_hash, doctor_id, str(expires_at), False),
+            connection=connection,
         )
 
     def get_session(self, token_hash: str):
@@ -546,12 +549,13 @@ class DentalStore:
         )
         return rows[0] if rows else None
 
-    def revoke_session(self, token_hash: str) -> None:
+    def revoke_session(self, token_hash: str, connection=None) -> None:
         self._execute(
             "UPDATE dental_sessions SET revoked=true WHERE token_hash=%s"
             if self.database_url
             else "UPDATE dental_sessions SET revoked=1 WHERE token_hash=?",
             (token_hash,),
+            connection=connection,
         )
 
     def doctor_by_email(self, email: str):
