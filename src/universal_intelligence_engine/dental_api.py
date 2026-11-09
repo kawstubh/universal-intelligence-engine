@@ -293,38 +293,43 @@ async def create_organisation(
     store = get_dental_store()
     organisation_id = secrets.token_hex(16)
     clinic_id = secrets.token_hex(16)
-    organisation = store.create_organisation(
-        {
-            "id": organisation_id,
-            "name": body.name.strip(),
-            "organisation_type": body.organisation_type,
-        }
-    )
-    workspace = store.create_clinic(
-        {
-            "id": clinic_id,
-            "organisation_id": organisation_id,
-            "name": (body.workspace_name or body.name).strip(),
-            "clinic_type": body.clinic_type,
-        }
-    )
-    membership = store.create_doctor_membership(
-        actor["id"], clinic_id, "owner"
-    )
-    store.audit(
-        actor["id"],
-        "organisation.created",
-        "organisation",
-        organisation_id,
-        clinic_id=actor["clinic_id"],
-    )
-    store.audit(
-        actor["id"],
-        "workspace.created",
-        "clinic",
-        clinic_id,
-        clinic_id=actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        organisation = store.create_organisation(
+            {
+                "id": organisation_id,
+                "name": body.name.strip(),
+                "organisation_type": body.organisation_type,
+            },
+            connection=connection,
+        )
+        workspace = store.create_clinic(
+            {
+                "id": clinic_id,
+                "organisation_id": organisation_id,
+                "name": (body.workspace_name or body.name).strip(),
+                "clinic_type": body.clinic_type,
+            },
+            connection=connection,
+        )
+        membership = store.create_doctor_membership(
+            actor["id"], clinic_id, "owner", connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "organisation.created",
+            "organisation",
+            organisation_id,
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
+        store.audit(
+            actor["id"],
+            "workspace.created",
+            "clinic",
+            clinic_id,
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return {
         "organisation": organisation,
         "workspace": workspace,
@@ -350,34 +355,38 @@ async def create_organisation_workspace(
                     "message": "Parent workspace not found in this organisation",
                 },
             )
-    workspace = store.create_clinic(
-        {
-            "id": secrets.token_hex(16),
-            "organisation_id": organisation_id,
-            "name": body.name.strip(),
-            "clinic_type": body.clinic_type,
-            "parent_clinic_id": body.parent_clinic_id,
-        }
-    )
-    # Keep the creating organisation administrator authorised in the new
-    # workspace so it can be selected and managed immediately.
-    membership = store.create_doctor_membership(
-        actor["id"], workspace["id"], actor["role"]
-    )
-    store.audit(
-        actor["id"],
-        "workspace.created",
-        "clinic",
-        workspace["id"],
-        clinic_id=actor["clinic_id"],
-    )
-    store.audit(
-        actor["id"],
-        "membership.created",
-        "doctor_membership",
-        membership["id"],
-        clinic_id=actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        workspace = store.create_clinic(
+            {
+                "id": secrets.token_hex(16),
+                "organisation_id": organisation_id,
+                "name": body.name.strip(),
+                "clinic_type": body.clinic_type,
+                "parent_clinic_id": body.parent_clinic_id,
+            },
+            connection=connection,
+        )
+        # Keep the creating organisation administrator authorised in the new
+        # workspace so it can be selected and managed immediately.
+        membership = store.create_doctor_membership(
+            actor["id"], workspace["id"], actor["role"], connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "workspace.created",
+            "clinic",
+            workspace["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
+        store.audit(
+            actor["id"],
+            "membership.created",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return workspace
 
 
@@ -521,25 +530,28 @@ async def create_doctor_account(
                 "message": "An account already exists for this email",
             },
         )
-    doctor = store.create_doctor(
-        {
-            "id": secrets.token_hex(16),
-            "email": email,
-            "password_hash": hash_password(body.password),
-            "role": body.role,
-            "clinic_id": actor["clinic_id"],
-        }
-    )
-    membership = store.create_doctor_membership(
-        doctor["id"], actor["clinic_id"], body.role
-    )
-    store.audit(
-        actor["id"],
-        "membership.created",
-        "doctor_membership",
-        membership["id"],
-        clinic_id=actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        doctor = store.create_doctor(
+            {
+                "id": secrets.token_hex(16),
+                "email": email,
+                "password_hash": hash_password(body.password),
+                "role": body.role,
+                "clinic_id": actor["clinic_id"],
+            },
+            connection=connection,
+        )
+        membership = store.create_doctor_membership(
+            doctor["id"], actor["clinic_id"], body.role, connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "membership.created",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return {
         "id": doctor["id"],
         "email": doctor["email"],
