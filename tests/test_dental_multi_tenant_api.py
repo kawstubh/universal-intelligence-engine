@@ -127,6 +127,11 @@ def test_owner_can_create_organisation_and_first_workspace(tenant_api, admin_hea
         organisation["id"]
         for organisation in store.organisations_for_doctor("doctor-admin")
     }
+    created_workspaces = store.workspaces_for_organisation(body["organisation"]["id"])
+    assert [
+        (workspace["id"], workspace["active_doctors"])
+        for workspace in created_workspaces
+    ] == [(body["workspace"]["id"], 1)]
 
 
 def test_owner_can_create_workspace_only_inside_own_organisation(
@@ -341,6 +346,11 @@ def test_corrupt_cross_organisation_admin_membership_cannot_authenticate_or_acce
     assert [o["id"] for o in store.organisations_for_doctor("doctor-target")] == [
         "org-a"
     ]
+    partner_workspaces = store.workspaces_for_organisation("org-b")
+    assert [
+        (workspace["id"], workspace["active_doctors"])
+        for workspace in partner_workspaces
+    ] == [("clinic-c", 0)]
 
     login = client.post(
         "/v1/dental/auth/password/login",
