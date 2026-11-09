@@ -264,14 +264,15 @@ def _get_workspace_record(store, clinic_id: str) -> dict | None:
 def _require_doctor_same_organisation(
     store, doctor: dict, organisation_id: str
 ) -> None:
-    # A doctor identity is anchored to the organisation of its original
-    # workspace. Prevent an administrator from another tenant attaching or
-    # managing that identity by guessing or obtaining its doctor ID.
-    home_clinic_id = str(doctor.get("clinic_id") or "")
-    home_workspace = (
-        _get_workspace_record(store, home_clinic_id) if home_clinic_id else None
-    )
-    if not home_workspace or home_workspace["organisation_id"] != organisation_id:
+    # Most doctor identities are anchored to the organisation of their
+    # original workspace. An organisation creator is the deliberate exception:
+    # their active owner membership plus organisation.created audit provenance
+    # authorises them in the organisation they created, as also used by
+    # organisations_for_doctor() and workspace discovery.
+    authorised_organisations = {
+        str(item["id"]) for item in store.organisations_for_doctor(doctor["id"])
+    }
+    if str(organisation_id) not in authorised_organisations:
         raise HTTPException(
             status_code=403,
             detail={
