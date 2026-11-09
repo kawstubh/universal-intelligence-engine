@@ -102,50 +102,55 @@ def _bootstrap_admin() -> None:
         else "SELECT id FROM dental_clinics WHERE id=?",
         (clinic_id,),
     )
-    if not clinic_rows:
-        organisation_id = "org-" + uuid.uuid5(
-            uuid.NAMESPACE_URL,
-            f"uie:dental:legacy-organisation:{clinic_id}",
-        ).hex
-        organisation_rows = store._execute(
-            "SELECT id FROM dental_organisations WHERE id=%s"
-            if store.database_url
-            else "SELECT id FROM dental_organisations WHERE id=?",
-            (organisation_id,),
-        )
-        if not organisation_rows:
-            store.create_organisation(
+    doctor_id = secrets.token_hex(16)
+    with store.transaction() as connection:
+        if not clinic_rows:
+            organisation_id = "org-" + uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"uie:dental:legacy-organisation:{clinic_id}",
+            ).hex
+            organisation_rows = store._execute(
+                "SELECT id FROM dental_organisations WHERE id=%s"
+                if store.database_url
+                else "SELECT id FROM dental_organisations WHERE id=?",
+                (organisation_id,),
+            )
+            if not organisation_rows:
+                store.create_organisation(
+                    {
+                        "id": organisation_id,
+                        "name": os.getenv(
+                            "DENTAL_MASTER_CLINIC_NAME", "Dr Pranali Dental Clinic"
+                        ).strip(),
+                        "organisation_type": "clinic",
+                    },
+                    connection=connection,
+                )
+            store.create_clinic(
                 {
-                    "id": organisation_id,
+                    "id": clinic_id,
+                    "organisation_id": organisation_id,
                     "name": os.getenv(
                         "DENTAL_MASTER_CLINIC_NAME", "Dr Pranali Dental Clinic"
                     ).strip(),
-                    "organisation_type": "clinic",
-                }
+                    "clinic_type": "clinic",
+                },
+                connection=connection,
             )
-        store.create_clinic(
-            {
-                "id": clinic_id,
-                "organisation_id": organisation_id,
-                "name": os.getenv(
-                    "DENTAL_MASTER_CLINIC_NAME", "Dr Pranali Dental Clinic"
-                ).strip(),
-                "clinic_type": "clinic",
-            }
-        )
 
-    doctor_id = secrets.token_hex(16)
-    store.create_doctor(
-        {
-            "id": doctor_id,
-            "email": email,
-            "password_hash": hash_password(password),
-            "role": "admin",
-            "clinic_id": clinic_id,
-        }
-    )
-    if not store.doctor_membership(doctor_id, clinic_id):
-        store.create_doctor_membership(doctor_id, clinic_id, "owner")
+        store.create_doctor(
+            {
+                "id": doctor_id,
+                "email": email,
+                "password_hash": hash_password(password),
+                "role": "admin",
+                "clinic_id": clinic_id,
+            },
+            connection=connection,
+        )
+        store.create_doctor_membership(
+            doctor_id, clinic_id, "owner", connection=connection
+        )
 
 
 def _check_login_rate_limit(ip: str) -> None:
@@ -334,14 +339,16 @@ async def switch_doctor_workspace(
 
     new_token = secrets.token_urlsafe(48)
     expires_at = int(time.time()) + SESSION_TTL
-    store.create_session(
-        f"{current_user['id']}|{clinic_id}|{target['role']}",
-        _hash(new_token),
-        expires_at,
-    )
     old_token = authorization[7:].strip() if authorization else ""
-    if old_token:
-        store.revoke_session(_hash(old_token))
+    with store.transaction() as connection:
+        store.create_session(
+            f"{current_user['id']}|{clinic_id}|{target['role']}",
+            _hash(new_token),
+            expires_at,
+            connection=connection,
+        )
+        if old_token:
+            store.revoke_session(_hash(old_token), connection=connection)
 
     return {
         "access_token": new_token,
