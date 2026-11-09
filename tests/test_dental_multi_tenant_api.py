@@ -376,3 +376,111 @@ def test_active_doctor_counts_exclude_inactive_doctors_and_memberships(tenant_ap
     # The owner in clinic-a remains active; an inactive doctor and an inactive
     # membership must not contribute to their respective workspace counts.
     assert counts == {"clinic-a": 1, "clinic-b": 0}
+
+
+
+def test_organisation_creation_rolls_back_if_creator_membership_fails(
+    tenant_api, admin_headers, monkeypatch
+):
+    client, store = tenant_api
+    original_create_membership = store.create_doctor_membership
+
+    def fail_after_membership_insert(doctor_id, clinic_id, role, connection=None):
+        original_create_membership(
+            doctor_id, clinic_id, role, connection=connection
+        )
+        raise RuntimeError("simulated creator membership failure")
+
+    monkeypatch.setattr(
+        store, "create_doctor_membership", fail_after_membership_insert
+    )
+
+    with pytest.raises(RuntimeError, match="simulated creator membership failure"):
+        client.post(
+            "/v1/dental/organisations",
+            headers=admin_headers,
+            json={
+                "name": "Rollback Network",
+                "organisation_type": "group",
+                "workspace_name": "Rollback First Workspace",
+                "clinic_type": "clinic",
+            },
+        )
+
+    assert store._execute(
+        "SELECT id FROM dental_organisations WHERE name=?",
+        ("Rollback Network",),
+    ) == []
+    assert store._execute(
+        "SELECT id FROM dental_clinics WHERE name=?",
+        ("Rollback First Workspace",),
+    ) == []
+
+
+def test_workspace_creation_rolls_back_if_audit_fails(
+    tenant_api, admin_headers, monkeypatch
+):
+    client, store = tenant_api
+    original_audit = store.audit
+
+    def fail_after_audit_insert(
+        actor_id, action, resource_type, resource_id=None, clinic_id=None, connection=None
+    ):
+        original_audit(
+            actor_id,
+            action,
+            resource_type,
+            resource_id,
+            clinic_id=clinic_id,
+            connection=connection,
+        )
+        raise RuntimeError("simulated workspace audit failure")
+
+    monkeypatch.setattr(store, "audit", fail_after_audit_insert)
+
+    with pytest.raises(RuntimeError, match="simulated workspace audit failure"):
+        client.post(
+            "/v1/dental/organisations/org-a/workspaces",
+            headers=admin_headers,
+            json={"name": "Rollback Branch", "clinic_type": "branch"},
+        )
+
+    assert store._execute(
+        "SELECT id FROM dental_clinics WHERE name=?",
+        ("Rollback Branch",),
+    ) == []
+    assert store._execute(
+        "SELECT id FROM dental_doctor_memberships WHERE clinic_id IN "
+        "(SELECT id FROM dental_clinics WHERE name=?)",
+        ("Rollback Branch",),
+    ) == []
+
+
+def test_doctor_account_creation_rolls_back_if_membership_fails(
+    tenant_api, admin_headers, monkeypatch
+):
+    client, store = tenant_api
+    original_create_membership = store.create_doctor_membership
+
+    def fail_after_membership_insert(doctor_id, clinic_id, role, connection=None):
+        original_create_membership(
+            doctor_id, clinic_id, role, connection=connection
+        )
+        raise RuntimeError("simulated doctor membership failure")
+
+    monkeypatch.setattr(
+        store, "create_doctor_membership", fail_after_membership_insert
+    )
+
+    with pytest.raises(RuntimeError, match="simulated doctor membership failure"):
+        client.post(
+            "/v1/dental/auth/doctors",
+            headers=admin_headers,
+            json={
+                "email": "rollback-doctor@example.test",
+                "password": "rollback-doctor-password",
+                "role": "dentist",
+            },
+        )
+
+    assert store.doctor_by_email("rollback-doctor@example.test") is None
