@@ -219,6 +219,16 @@ def _require_organisation_admin(store, actor: dict, organisation_id: str) -> dic
                 "message": "An organisation owner or administrator is required",
             },
         )
+    actor_doctor = store.doctor_by_id(actor["id"])
+    if not actor_doctor:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ORGANISATION_ACCESS_DENIED",
+                "message": "The administrator account is unavailable",
+            },
+        )
+    _require_doctor_same_organisation(store, actor_doctor, organisation_id)
     active_workspace = next(
         (
             workspace

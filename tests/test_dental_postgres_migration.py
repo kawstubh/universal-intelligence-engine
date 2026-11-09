@@ -155,6 +155,15 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             "active_doctors"
         ] == 1
 
+        # A corrupted cross-organisation membership must not grant the doctor
+        # a second workspace or organisation during login/workspace discovery.
+        assert [w["id"] for w in store.workspaces_for_doctor("doctor-pg")] == [
+            "legacy-pg-clinic"
+        ]
+        assert [o["id"] for o in store.organisations_for_doctor("doctor-pg")] == [
+            home_organisation_id
+        ]
+
         with pytest.raises(RuntimeError, match="simulated PostgreSQL rollback"):
             with store.transaction() as connection:
                 store.create_organisation(

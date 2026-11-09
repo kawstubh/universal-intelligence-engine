@@ -318,6 +318,53 @@ def test_admin_cannot_assign_or_manage_doctor_from_another_organisation(tenant_a
     assert update.status_code == 403
     assert update.json()["detail"]["code"] == "DOCTOR_ORGANISATION_MISMATCH"
 
+
+def test_corrupt_cross_organisation_admin_membership_cannot_authenticate_or_access_directory(
+    tenant_api,
+):
+    client, store = tenant_api
+    store.create_doctor_membership("doctor-target", "clinic-a", "doctor")
+    store.create_doctor_membership("doctor-target", "clinic-c", "admin")
+
+    # The doctor's identity is anchored to clinic-a/org-a. A manually inserted
+    # admin membership in clinic-c/org-b must not appear in login or workspace APIs.
+    assert [w["id"] for w in store.workspaces_for_doctor("doctor-target")] == [
+        "clinic-a"
+    ]
+    assert [o["id"] for o in store.organisations_for_doctor("doctor-target")] == [
+        "org-a"
+    ]
+
+    login = client.post(
+        "/v1/dental/auth/password/login",
+        json={
+            "email": "target@example.test",
+            "password": "another correct horse battery",
+        },
+    )
+    assert login.status_code == 200, login.text
+    assert [w["id"] for w in login.json()["workspaces"]] == ["clinic-a"]
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    denied = client.get("/v1/dental/organisations/org-b/workspaces", headers=headers)
+    assert denied.status_code == 403
+
+    # Also reject a previously issued session whose workspace context points at
+    # the corrupted cross-organisation membership.
+    stale_token = "corrupt-cross-organisation-admin-session-token"
+    store.create_session(
+        "doctor-target|clinic-c|admin",
+        dental_auth._hash(stale_token),
+        4102444800,
+    )
+    stale = client.get(
+        "/v1/dental/organisations/org-b/workspaces",
+        headers={"Authorization": f"Bearer {stale_token}"},
+    )
+    assert stale.status_code == 401
+    assert stale.json()["detail"]["code"] == "WORKSPACE_ACCESS_REVOKED"
+
+
+
 def test_admin_creator_is_added_to_new_workspace_membership(tenant_api):
     client, store = tenant_api
     store.create_doctor(
