@@ -129,6 +129,18 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             ("legacy-pg-clinic",),
         )[0]
         home_organisation_id = home_workspace["organisation_id"]
+        store.create_doctor(
+            {
+                "id": "doctor-admin-pg",
+                "email": "pg-admin@example.test",
+                "password_hash": "test-hash",
+                "role": "admin",
+                "clinic_id": "legacy-pg-clinic",
+            }
+        )
+        store.create_doctor_membership(
+            "doctor-admin-pg", "legacy-pg-clinic", "admin"
+        )
         store.create_organisation(
             {
                 "id": "org-pg-partner",
