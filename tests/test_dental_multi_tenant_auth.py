@@ -132,6 +132,35 @@ def test_workspace_switch_rotates_token_and_revokes_previous_session(auth_enviro
     assert new_request.json()["role"] == "dentist"
 
 
+def test_workspace_switch_rolls_back_if_old_session_revocation_fails(
+    auth_environment, monkeypatch
+):
+    client, store = auth_environment
+    login = _login(client)
+    old_token = login["access_token"]
+    original_revoke = store.revoke_session
+
+    def fail_after_revoke(token_hash, connection=None):
+        original_revoke(token_hash, connection=connection)
+        raise RuntimeError("simulated session revocation failure")
+
+    monkeypatch.setattr(store, "revoke_session", fail_after_revoke)
+
+    with pytest.raises(RuntimeError, match="session revocation failure"):
+        client.post(
+            "/v1/dental/auth/workspace/switch",
+            json={"clinic_id": "clinic-b"},
+            headers={"Authorization": f"Bearer {old_token}"},
+        )
+
+    sessions = store._execute(
+        "SELECT token_hash, revoked FROM dental_sessions ORDER BY token_hash"
+    )
+    assert len(sessions) == 1
+    assert sessions[0]["token_hash"] == dental_auth._hash(old_token)
+    assert sessions[0]["revoked"] in (False, 0)
+
+
 def test_switch_rejects_workspace_without_membership_and_keeps_current_token(auth_environment):
     client, _store = auth_environment
     login = _login(client)
@@ -205,6 +234,45 @@ def test_bootstrap_admin_receives_owner_membership_in_master_workspace(
     membership = store.doctor_membership(doctor["id"], "clinic-a")
     assert membership is not None
     assert (membership["role"], membership["active"]) == ("owner", 1)
+
+
+
+def test_bootstrap_admin_rolls_back_first_workspace_if_membership_fails(
+    tmp_path: Path, monkeypatch
+):
+    database_path = tmp_path / "bootstrap-rollback.sqlite3"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DENTAL_SQLITE_PATH", str(database_path))
+    monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
+    monkeypatch.setenv(
+        "ALEMBIC_CONFIG",
+        str(Path(__file__).resolve().parents[1] / "alembic.ini"),
+    )
+    monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "bootstrap-clinic")
+    monkeypatch.setenv("DENTAL_BOOTSTRAP_ADMIN_EMAIL", "rollback-bootstrap@example.test")
+    monkeypatch.setenv("DENTAL_BOOTSTRAP_ADMIN_PASSWORD", "bootstrap-password-strong")
+
+    store = DentalStore()
+    monkeypatch.setattr(dental_auth, "get_dental_store", lambda: store)
+    original_create_membership = store.create_doctor_membership
+
+    def fail_after_membership_insert(doctor_id, clinic_id, role, connection=None):
+        original_create_membership(
+            doctor_id, clinic_id, role, connection=connection
+        )
+        raise RuntimeError("simulated bootstrap membership failure")
+
+    monkeypatch.setattr(
+        store, "create_doctor_membership", fail_after_membership_insert
+    )
+
+    with pytest.raises(RuntimeError, match="bootstrap membership failure"):
+        dental_auth._bootstrap_admin()
+
+    assert store.doctor_by_email("rollback-bootstrap@example.test") is None
+    assert store._execute("SELECT id FROM dental_organisations") == []
+    assert store._execute("SELECT id FROM dental_clinics") == []
+    assert store._execute("SELECT id FROM dental_doctors") == []
 
 
 
