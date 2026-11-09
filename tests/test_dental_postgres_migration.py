@@ -117,6 +117,12 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 sa.text("SELECT id FROM dental_appointments")
             ).scalars().all() == ["appointment-pg"]
 
+        # SQLAlchemy's test URL uses the +psycopg driver suffix; DentalStore
+        # connects with psycopg directly and therefore needs libpq's plain URL scheme.
+        psycopg_url = scoped_url.set(drivername="postgresql")
+        monkeypatch.setenv(
+            "DATABASE_URL", psycopg_url.render_as_string(hide_password=False)
+        )
         store = DentalStore()
         home_workspace = store._execute(
             "SELECT organisation_id FROM dental_clinics WHERE id=%s",
