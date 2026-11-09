@@ -134,3 +134,47 @@ def test_audit_event_records_workspace_context(store: DentalStore):
             "clinic_id": "clinic-a",
         }
     ]
+
+
+
+def test_active_doctor_counts_ignore_corrupt_cross_organisation_memberships(
+    store: DentalStore,
+):
+    store.create_organisation(
+        {"id": "org-a", "name": "Clinic Group", "organisation_type": "group"}
+    )
+    store.create_organisation(
+        {"id": "org-b", "name": "Partner Hospital", "organisation_type": "hospital"}
+    )
+    store.create_clinic(
+        {
+            "id": "clinic-a",
+            "organisation_id": "org-a",
+            "name": "Main Clinic",
+            "clinic_type": "clinic",
+        }
+    )
+    store.create_clinic(
+        {
+            "id": "clinic-b",
+            "organisation_id": "org-b",
+            "name": "Partner Department",
+            "clinic_type": "hospital_department",
+        }
+    )
+    _seed_doctor(store)
+    store.create_doctor_membership("doctor-1", "clinic-a", "doctor")
+    # Simulate a legacy/corrupted row that bypassed the API's tenant check.
+    store.create_doctor_membership("doctor-1", "clinic-b", "doctor")
+
+    clinic_counts = {
+        row["id"]: row["active_doctors"]
+        for row in store.workspaces_for_organisation("org-a")
+    }
+    hospital_counts = {
+        row["id"]: row["active_doctors"]
+        for row in store.workspaces_for_organisation("org-b")
+    }
+
+    assert clinic_counts == {"clinic-a": 1}
+    assert hospital_counts == {"clinic-b": 0}
