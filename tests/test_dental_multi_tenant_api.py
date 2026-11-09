@@ -527,6 +527,30 @@ def test_active_doctor_counts_exclude_inactive_doctors_and_memberships(tenant_ap
 
 
 
+def test_active_doctor_counts_exclude_administrative_accounts(
+    tenant_api, admin_headers
+):
+    client, store = tenant_api
+    store.create_doctor(
+        {
+            "id": "doctor-admin-account",
+            "email": "staff-admin@example.test",
+            "password_hash": "test-hash",
+            "role": "admin",
+            "clinic_id": "clinic-a",
+        }
+    )
+    store.create_doctor_membership("doctor-admin-account", "clinic-a", "admin")
+
+    response = client.get(
+        "/v1/dental/organisations/org-a/workspaces", headers=admin_headers
+    )
+    assert response.status_code == 200, response.text
+    counts = {row["id"]: row["active_doctors"] for row in response.json()["workspaces"]}
+    assert counts == {"clinic-a": 1, "clinic-b": 0}
+
+
+
 def test_organisation_creation_rolls_back_if_creator_membership_fails(
     tenant_api, admin_headers, monkeypatch
 ):
