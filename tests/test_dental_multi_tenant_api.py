@@ -484,3 +484,160 @@ def test_doctor_account_creation_rolls_back_if_membership_fails(
         )
 
     assert store.doctor_by_email("rollback-doctor@example.test") is None
+
+def test_workspace_membership_creation_rolls_back_if_audit_fails(
+    tenant_api, admin_headers, monkeypatch
+):
+    client, store = tenant_api
+    original_audit = store.audit
+    attempted_resource_ids = []
+
+    def fail_after_audit_insert(
+        actor_id, action, resource_type, resource_id=None, clinic_id=None, connection=None
+    ):
+        attempted_resource_ids.append(resource_id)
+        original_audit(
+            actor_id,
+            action,
+            resource_type,
+            resource_id,
+            clinic_id=clinic_id,
+            connection=connection,
+        )
+        raise RuntimeError("simulated membership-create audit failure")
+
+    monkeypatch.setattr(store, "audit", fail_after_audit_insert)
+
+    with pytest.raises(RuntimeError, match="membership-create audit failure"):
+        client.post(
+            "/v1/dental/workspaces/clinic-b/memberships",
+            headers=admin_headers,
+            json={"doctor_id": "doctor-target", "role": "dentist"},
+        )
+
+    assert store.doctor_membership("doctor-target", "clinic-b") is None
+    assert attempted_resource_ids
+    assert store._execute(
+        "SELECT id FROM dental_audit_events WHERE resource_id=?",
+        (attempted_resource_ids[0],),
+    ) == []
+
+
+def test_workspace_membership_update_rolls_back_if_audit_fails(
+    tenant_api, admin_headers, monkeypatch
+):
+    client, store = tenant_api
+    membership = store.create_doctor_membership(
+        "doctor-target", "clinic-b", "dentist"
+    )
+    original_audit = store.audit
+
+    def fail_after_audit_insert(
+        actor_id, action, resource_type, resource_id=None, clinic_id=None, connection=None
+    ):
+        original_audit(
+            actor_id,
+            action,
+            resource_type,
+            resource_id,
+            clinic_id=clinic_id,
+            connection=connection,
+        )
+        raise RuntimeError("simulated membership-update audit failure")
+
+    monkeypatch.setattr(store, "audit", fail_after_audit_insert)
+
+    with pytest.raises(RuntimeError, match="membership-update audit failure"):
+        client.patch(
+            "/v1/dental/workspaces/clinic-b/memberships/doctor-target",
+            headers=admin_headers,
+            json={"active": False},
+        )
+
+    persisted = store.doctor_membership("doctor-target", "clinic-b")
+    assert persisted is not None
+    assert persisted["active"] in (True, 1)
+    assert store._execute(
+        "SELECT id FROM dental_audit_events WHERE resource_id=? AND action=?",
+        (membership["id"], "membership.deactivated"),
+    ) == []
+
+
+def test_doctor_deactivation_rolls_back_if_audit_fails(
+    tenant_api, admin_headers, monkeypatch
+):
+    client, store = tenant_api
+    membership = store.create_doctor_membership(
+        "doctor-target", "clinic-a", "dentist"
+    )
+    original_audit = store.audit
+
+    def fail_after_audit_insert(
+        actor_id, action, resource_type, resource_id=None, clinic_id=None, connection=None
+    ):
+        original_audit(
+            actor_id,
+            action,
+            resource_type,
+            resource_id,
+            clinic_id=clinic_id,
+            connection=connection,
+        )
+        raise RuntimeError("simulated doctor-deactivation audit failure")
+
+    monkeypatch.setattr(store, "audit", fail_after_audit_insert)
+
+    with pytest.raises(RuntimeError, match="doctor-deactivation audit failure"):
+        client.post(
+            "/v1/dental/auth/doctors/doctor-target/deactivate",
+            headers=admin_headers,
+        )
+
+    persisted = store.doctor_membership("doctor-target", "clinic-a")
+    assert persisted is not None
+    assert persisted["active"] in (True, 1)
+    assert store._execute(
+        "SELECT id FROM dental_audit_events WHERE resource_id=? AND action=?",
+        (membership["id"], "membership.deactivated"),
+    ) == []
+
+
+def test_doctor_deactivation_rejects_corrupt_cross_organisation_membership(
+    tenant_api
+):
+    client, store = tenant_api
+    store.create_doctor(
+        {
+            "id": "hospital-admin",
+            "email": "hospital-admin@example.test",
+            "password_hash": dental_auth.hash_password("hospital admin password"),
+            "role": "doctor",
+            "clinic_id": "clinic-c",
+        }
+    )
+    store.create_doctor_membership("hospital-admin", "clinic-c", "admin")
+    corrupt_membership = store.create_doctor_membership(
+        "doctor-target", "clinic-c", "dentist"
+    )
+    login = client.post(
+        "/v1/dental/auth/password/login",
+        json={
+            "email": "hospital-admin@example.test",
+            "password": "hospital admin password",
+        },
+    )
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    response = client.post(
+        "/v1/dental/auth/doctors/doctor-target/deactivate",
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "DOCTOR_ORGANISATION_MISMATCH"
+    persisted = store.doctor_membership("doctor-target", "clinic-c")
+    assert persisted is not None
+    assert persisted["id"] == corrupt_membership["id"]
+    assert persisted["active"] in (True, 1)
+
