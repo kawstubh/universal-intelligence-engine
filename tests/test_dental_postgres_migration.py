@@ -11,6 +11,8 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy.engine import make_url
 
+from universal_intelligence_engine.dental_store import DentalStore
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -114,6 +116,90 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             assert connection.execute(
                 sa.text("SELECT id FROM dental_appointments")
             ).scalars().all() == ["appointment-pg"]
+
+        store = DentalStore()
+        home_workspace = store._execute(
+            "SELECT organisation_id FROM dental_clinics WHERE id=%s",
+            ("legacy-pg-clinic",),
+        )[0]
+        home_organisation_id = home_workspace["organisation_id"]
+        store.create_organisation(
+            {
+                "id": "org-pg-partner",
+                "name": "Partner Hospital",
+                "organisation_type": "hospital",
+            }
+        )
+        store.create_clinic(
+            {
+                "id": "partner-pg-clinic",
+                "organisation_id": "org-pg-partner",
+                "name": "Partner Department",
+                "clinic_type": "hospital_department",
+            }
+        )
+        # Simulate a corrupted membership row that bypassed API tenant checks.
+        store.create_doctor_membership(
+            "doctor-pg", "partner-pg-clinic", "dentist"
+        )
+        assert store.workspaces_for_organisation("org-pg-partner")[0][
+            "active_doctors"
+        ] == 0
+        assert store.workspaces_for_organisation(home_organisation_id)[0][
+            "active_doctors"
+        ] == 1
+
+        with pytest.raises(RuntimeError, match="simulated PostgreSQL rollback"):
+            with store.transaction() as connection:
+                store.create_organisation(
+                    {
+                        "id": "org-pg-rollback",
+                        "name": "Rollback Organisation",
+                        "organisation_type": "group",
+                    },
+                    connection=connection,
+                )
+                store.create_clinic(
+                    {
+                        "id": "clinic-pg-rollback",
+                        "organisation_id": "org-pg-rollback",
+                        "name": "Rollback Workspace",
+                        "clinic_type": "clinic",
+                    },
+                    connection=connection,
+                )
+                store.create_doctor_membership(
+                    "doctor-pg",
+                    "clinic-pg-rollback",
+                    "dentist",
+                    connection=connection,
+                )
+                store.audit(
+                    "doctor-pg",
+                    "workspace.created",
+                    "clinic",
+                    "clinic-pg-rollback",
+                    clinic_id="legacy-pg-clinic",
+                    connection=connection,
+                )
+                raise RuntimeError("simulated PostgreSQL rollback")
+
+        assert store._execute(
+            "SELECT id FROM dental_organisations WHERE id=%s",
+            ("org-pg-rollback",),
+        ) == []
+        assert store._execute(
+            "SELECT id FROM dental_clinics WHERE id=%s",
+            ("clinic-pg-rollback",),
+        ) == []
+        assert store._execute(
+            "SELECT id FROM dental_doctor_memberships WHERE clinic_id=%s",
+            ("clinic-pg-rollback",),
+        ) == []
+        assert store._execute(
+            "SELECT id FROM dental_audit_events WHERE resource_id=%s",
+            ("clinic-pg-rollback",),
+        ) == []
     finally:
         if schema_engine is not None:
             schema_engine.dispose()
