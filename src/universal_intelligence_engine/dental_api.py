@@ -436,14 +436,18 @@ async def create_workspace_membership(
                 "message": "Doctor already has a membership in this workspace",
             },
         )
-    membership = store.create_doctor_membership(body.doctor_id, clinic_id, body.role)
-    store.audit(
-        actor["id"],
-        "membership.created",
-        "doctor_membership",
-        membership["id"],
-        clinic_id=actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        membership = store.create_doctor_membership(
+            body.doctor_id, clinic_id, body.role, connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "membership.created",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return membership
 
 
@@ -493,14 +497,18 @@ async def update_workspace_membership(
             status_code=403,
             detail={"code": "OWNER_ROLE_REQUIRED", "message": "Only an owner can change an owner membership"},
         )
-    store.set_doctor_membership_active(doctor_id, clinic_id, body.active)
-    store.audit(
-        actor["id"],
-        "membership.activated" if body.active else "membership.deactivated",
-        "doctor_membership",
-        membership["id"],
-        clinic_id=actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        store.set_doctor_membership_active(
+            doctor_id, clinic_id, body.active, connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "membership.activated" if body.active else "membership.deactivated",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return {
         "doctor_id": doctor_id,
         "clinic_id": clinic_id,
@@ -584,6 +592,18 @@ async def deactivate_doctor_account(
                 "message": "Doctor account not found in this workspace",
             },
         )
+    actor_workspace = _get_workspace_record(store, actor["clinic_id"])
+    if not actor_workspace or not actor_workspace["active"]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ORGANISATION_ACCESS_DENIED",
+                "message": "The active workspace is not available",
+            },
+        )
+    _require_doctor_same_organisation(
+        store, target, actor_workspace["organisation_id"]
+    )
     if doctor_id == actor["id"]:
         raise HTTPException(
             status_code=400,
@@ -597,14 +617,18 @@ async def deactivate_doctor_account(
             status_code=403,
             detail={"code": "OWNER_ROLE_REQUIRED", "message": "Only an owner can deactivate an owner membership"},
         )
-    store.set_doctor_membership_active(doctor_id, actor["clinic_id"], False)
-    store.audit(
-        actor["id"],
-        "membership.deactivated",
-        "doctor_membership",
-        membership["id"],
-        clinic_id=actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        store.set_doctor_membership_active(
+            doctor_id, actor["clinic_id"], False, connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "membership.deactivated",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return {
         "ok": True,
         "id": doctor_id,
