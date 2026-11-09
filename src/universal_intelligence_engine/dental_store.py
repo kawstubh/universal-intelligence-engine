@@ -351,7 +351,10 @@ class DentalStore:
             "JOIN dental_doctors d ON d.id=m.doctor_id "
             "JOIN dental_clinics home ON home.id=d.clinic_id "
             "WHERE m.doctor_id=%s AND m.active=true AND c.active=true AND o.active=true "
-            "AND home.organisation_id=o.id "
+            "AND (home.organisation_id=o.id OR (m.role='owner' AND EXISTS ("
+            "SELECT 1 FROM dental_audit_events a WHERE a.actor_id=m.doctor_id "
+            "AND a.action='organisation.created' AND a.resource_type='organisation' "
+            "AND a.resource_id=o.id))) "
             "ORDER BY o.name"
             if self.database_url
             else "SELECT DISTINCT o.id, o.name, o.organisation_type, o.active, o.created_at "
@@ -361,7 +364,10 @@ class DentalStore:
             "JOIN dental_doctors d ON d.id=m.doctor_id "
             "JOIN dental_clinics home ON home.id=d.clinic_id "
             "WHERE m.doctor_id=? AND m.active=1 AND c.active=1 AND o.active=1 "
-            "AND home.organisation_id=o.id "
+            "AND (home.organisation_id=o.id OR (m.role='owner' AND EXISTS ("
+            "SELECT 1 FROM dental_audit_events a WHERE a.actor_id=m.doctor_id "
+            "AND a.action='organisation.created' AND a.resource_type='organisation' "
+            "AND a.resource_id=o.id))) "
             "ORDER BY o.name"
         )
         return self._execute(sql, (doctor_id,))
@@ -377,7 +383,10 @@ class DentalStore:
             "JOIN dental_doctors d ON d.id=m.doctor_id "
             "JOIN dental_clinics home ON home.id=d.clinic_id "
             "WHERE m.doctor_id=%s AND m.active=true AND c.active=true AND o.active=true "
-            "AND home.organisation_id=c.organisation_id "
+            "AND (home.organisation_id=c.organisation_id OR (m.role='owner' AND EXISTS ("
+            "SELECT 1 FROM dental_audit_events a WHERE a.actor_id=m.doctor_id "
+            "AND a.action='organisation.created' AND a.resource_type='organisation' "
+            "AND a.resource_id=c.organisation_id))) "
             "ORDER BY o.name, c.name"
             if self.database_url
             else "SELECT c.id, c.id AS clinic_id, c.organisation_id, c.name, "
@@ -389,7 +398,10 @@ class DentalStore:
             "JOIN dental_doctors d ON d.id=m.doctor_id "
             "JOIN dental_clinics home ON home.id=d.clinic_id "
             "WHERE m.doctor_id=? AND m.active=1 AND c.active=1 AND o.active=1 "
-            "AND home.organisation_id=c.organisation_id "
+            "AND (home.organisation_id=c.organisation_id OR (m.role='owner' AND EXISTS ("
+            "SELECT 1 FROM dental_audit_events a WHERE a.actor_id=m.doctor_id "
+            "AND a.action='organisation.created' AND a.resource_type='organisation' "
+            "AND a.resource_id=c.organisation_id))) "
             "ORDER BY o.name, c.name"
         )
         return self._execute(sql, (doctor_id,))

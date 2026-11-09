@@ -70,18 +70,15 @@ def test_doctor_workspace_queries_return_only_active_memberships(store: DentalSt
     assert [(item["id"], item["role"]) for item in workspaces] == [
         ("clinic-b", "dentist"),
         ("clinic-a", "doctor"),
-        ("clinic-c", "admin"),
     ]
     organisations = store.organisations_for_doctor("doctor-1")
     assert [(item["id"], item["name"]) for item in organisations] == [
         ("org-a", "Clinic Group"),
-        ("org-b", "Partner Hospital"),
     ]
 
     store.set_doctor_membership_active("doctor-1", "clinic-b", False)
     assert [item["id"] for item in store.workspaces_for_doctor("doctor-1")] == [
         "clinic-a",
-        "clinic-c",
     ]
     membership = store.doctor_membership("doctor-1", "clinic-b")
     assert (

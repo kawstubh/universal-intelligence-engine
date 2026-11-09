@@ -120,6 +120,13 @@ def test_owner_can_create_organisation_and_first_workspace(tenant_api, admin_hea
     membership = store.doctor_membership("doctor-admin", body["workspace"]["id"])
     assert membership is not None
     assert (membership["role"], membership["active"]) == ("owner", 1)
+    assert body["workspace"]["id"] in {
+        workspace["id"] for workspace in store.workspaces_for_doctor("doctor-admin")
+    }
+    assert body["organisation"]["id"] in {
+        organisation["id"]
+        for organisation in store.organisations_for_doctor("doctor-admin")
+    }
 
 
 def test_owner_can_create_workspace_only_inside_own_organisation(
@@ -363,6 +370,31 @@ def test_corrupt_cross_organisation_admin_membership_cannot_authenticate_or_acce
     assert stale.status_code == 401
     assert stale.json()["detail"]["code"] == "WORKSPACE_ACCESS_REVOKED"
 
+
+
+
+def test_corrupt_cross_organisation_owner_membership_requires_creation_audit(
+    tenant_api,
+):
+    client, store = tenant_api
+    store.create_doctor_membership("doctor-target", "clinic-a", "doctor")
+    store.create_doctor_membership("doctor-target", "clinic-c", "owner")
+
+    assert [w["id"] for w in store.workspaces_for_doctor("doctor-target")] == [
+        "clinic-a"
+    ]
+    assert [o["id"] for o in store.organisations_for_doctor("doctor-target")] == [
+        "org-a"
+    ]
+    login = client.post(
+        "/v1/dental/auth/password/login",
+        json={
+            "email": "target@example.test",
+            "password": "another correct horse battery",
+        },
+    )
+    assert login.status_code == 200, login.text
+    assert [w["id"] for w in login.json()["workspaces"]] == ["clinic-a"]
 
 
 def test_admin_creator_is_added_to_new_workspace_membership(tenant_api):
