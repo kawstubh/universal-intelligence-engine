@@ -134,6 +134,65 @@ def test_owner_can_create_organisation_and_first_workspace(tenant_api, admin_hea
     ] == [(body["workspace"]["id"], 1)]
 
 
+def test_audited_organisation_creator_can_join_another_workspace_in_their_organisation(
+    tenant_api, admin_headers
+):
+    client, store = tenant_api
+    created = client.post(
+        "/v1/dental/organisations",
+        headers=admin_headers,
+        json={
+            "name": "Creator-Owned Hospital Group",
+            "organisation_type": "hospital",
+            "workspace_name": "First Department",
+            "clinic_type": "hospital_department",
+        },
+    )
+    assert created.status_code == 201, created.text
+    organisation_id = created.json()["organisation"]["id"]
+    first_workspace_id = created.json()["workspace"]["id"]
+
+    store.create_doctor(
+        {
+            "id": "second-org-owner",
+            "email": "second-org-owner@example.test",
+            "password_hash": dental_auth.hash_password("second org owner password"),
+            "role": "doctor",
+            "clinic_id": first_workspace_id,
+        }
+    )
+    store.create_doctor_membership("second-org-owner", first_workspace_id, "owner")
+    login = client.post(
+        "/v1/dental/auth/password/login",
+        json={
+            "email": "second-org-owner@example.test",
+            "password": "second org owner password",
+        },
+    )
+    assert login.status_code == 200, login.text
+    owner_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    second_workspace = client.post(
+        f"/v1/dental/organisations/{organisation_id}/workspaces",
+        headers=owner_headers,
+        json={"name": "Second Department", "clinic_type": "hospital_department"},
+    )
+    assert second_workspace.status_code == 201, second_workspace.text
+
+    assigned = client.post(
+        f"/v1/dental/workspaces/{second_workspace.json()['id']}/memberships",
+        headers=owner_headers,
+        json={"doctor_id": "doctor-admin", "role": "owner"},
+    )
+    assert assigned.status_code == 201, assigned.text
+    creator_membership = store.doctor_membership(
+        "doctor-admin", second_workspace.json()["id"]
+    )
+    assert creator_membership is not None
+    assert creator_membership["role"] == "owner"
+    assert creator_membership["active"] in (True, 1)
+
+
 def test_owner_can_create_workspace_only_inside_own_organisation(
     tenant_api, admin_headers
 ):
