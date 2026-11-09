@@ -164,6 +164,49 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             home_organisation_id
         ]
 
+        # A legitimate owner of a newly created organisation may have an
+        # original workspace in another organisation. The creation audit is
+        # the provenance that makes this membership valid and countable.
+        with store.transaction() as connection:
+            store.create_organisation(
+                {
+                    "id": "org-pg-owner",
+                    "name": "Owner Organisation",
+                    "organisation_type": "group",
+                },
+                connection=connection,
+            )
+            store.create_clinic(
+                {
+                    "id": "owner-pg-clinic",
+                    "organisation_id": "org-pg-owner",
+                    "name": "Owner First Workspace",
+                    "clinic_type": "clinic",
+                },
+                connection=connection,
+            )
+            store.create_doctor_membership(
+                "doctor-pg", "owner-pg-clinic", "owner", connection=connection
+            )
+            store.audit(
+                "doctor-pg",
+                "organisation.created",
+                "organisation",
+                "org-pg-owner",
+                clinic_id="legacy-pg-clinic",
+                connection=connection,
+            )
+        assert store.workspaces_for_organisation("org-pg-owner")[0][
+            "active_doctors"
+        ] == 1
+        assert "owner-pg-clinic" in {
+            workspace["id"] for workspace in store.workspaces_for_doctor("doctor-pg")
+        }
+        assert "org-pg-owner" in {
+            organisation["id"]
+            for organisation in store.organisations_for_doctor("doctor-pg")
+        }
+
         with pytest.raises(RuntimeError, match="simulated PostgreSQL rollback"):
             with store.transaction() as connection:
                 store.create_organisation(
