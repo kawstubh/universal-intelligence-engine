@@ -8,6 +8,7 @@ this module never creates tables directly.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import json
 import os
 import secrets
@@ -81,7 +82,41 @@ class DentalStore:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    @contextmanager
+    def transaction(self):
+        """Run related Dental writes on one connection and commit them together."""
+        if self.database_url:
+            if self._pg is None:
+                raise RuntimeError("PostgreSQL driver is not configured")
+            with self._pg.connect(self.database_url) as conn:
+                yield conn
+            return
+
+        conn = self._sqlite()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
+    def _execute(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+        connection=None,
+    ) -> list[dict[str, Any]]:
+        if connection is not None:
+            if self.database_url:
+                with connection.cursor() as cur:
+                    cur.execute(sql, params)
+                    rows = []
+                    if cur.description:
+                        columns = [d.name for d in cur.description]
+                        rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+                    return rows
+            cur = connection.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()] if cur.description else []
+
         if self.database_url:
             pg = self._pg
             if pg is None:
@@ -354,7 +389,9 @@ class DentalStore:
             "o.name AS organisation_name, o.organisation_type, "
             "(SELECT COUNT(*) FROM dental_doctor_memberships m "
             "JOIN dental_doctors d ON d.id=m.doctor_id "
-            "WHERE m.clinic_id=c.id AND m.active=true AND d.active=true) AS active_doctors "
+            "JOIN dental_clinics home ON home.id=d.clinic_id "
+            "WHERE m.clinic_id=c.id AND m.active=true AND d.active=true "
+            "AND home.organisation_id=c.organisation_id) AS active_doctors "
             "FROM dental_clinics c "
             "JOIN dental_organisations o ON o.id=c.organisation_id "
             "WHERE c.organisation_id=%s AND c.active=true AND o.active=true "
@@ -365,7 +402,9 @@ class DentalStore:
             "o.name AS organisation_name, o.organisation_type, "
             "(SELECT COUNT(*) FROM dental_doctor_memberships m "
             "JOIN dental_doctors d ON d.id=m.doctor_id "
-            "WHERE m.clinic_id=c.id AND m.active=1 AND d.active=1) AS active_doctors "
+            "JOIN dental_clinics home ON home.id=d.clinic_id "
+            "WHERE m.clinic_id=c.id AND m.active=1 AND d.active=1 "
+            "AND home.organisation_id=c.organisation_id) AS active_doctors "
             "FROM dental_clinics c "
             "JOIN dental_organisations o ON o.id=c.organisation_id "
             "WHERE c.organisation_id=? AND c.active=1 AND o.active=1 "
@@ -386,7 +425,7 @@ class DentalStore:
         rows = self._execute(sql, (doctor_id, clinic_id))
         return rows[0] if rows else None
 
-    def create_organisation(self, data: dict[str, Any]) -> dict[str, Any]:
+    def create_organisation(self, data: dict[str, Any], connection=None) -> dict[str, Any]:
         item = {
             "id": data.get("id") or _id(),
             "name": data["name"].strip(),
@@ -407,10 +446,11 @@ class DentalStore:
                 item[key]
                 for key in ("id", "name", "organisation_type", "active", "created_at")
             ),
+            connection=connection,
         )
         return item
 
-    def create_clinic(self, data: dict[str, Any]) -> dict[str, Any]:
+    def create_clinic(self, data: dict[str, Any], connection=None) -> dict[str, Any]:
         item = {
             "id": data.get("id") or _id(),
             "organisation_id": data["organisation_id"],
@@ -443,11 +483,12 @@ class DentalStore:
                     "created_at",
                 )
             ),
+            connection=connection,
         )
         return item
 
     def create_doctor_membership(
-        self, doctor_id: str, clinic_id: str, role: str
+        self, doctor_id: str, clinic_id: str, role: str, connection=None
     ) -> dict[str, Any]:
         item = {
             "id": _id(),
@@ -472,6 +513,7 @@ class DentalStore:
                 item[key]
                 for key in ("id", "doctor_id", "clinic_id", "role", "active", "created_at")
             ),
+            connection=connection,
         )
         return item
 
@@ -530,7 +572,7 @@ class DentalStore:
         )
         return rows[0] if rows else None
 
-    def create_doctor(self, data: dict[str, Any]) -> dict[str, Any]:
+    def create_doctor(self, data: dict[str, Any], connection=None) -> dict[str, Any]:
         item = {
             "id": data["id"],
             "email": data["email"].strip().lower(),
@@ -558,6 +600,7 @@ class DentalStore:
                     "created_at",
                 )
             ),
+            connection=connection,
         )
         return item
 
@@ -593,6 +636,7 @@ class DentalStore:
         resource_type: str,
         resource_id: str | None = None,
         clinic_id: str | None = None,
+        connection=None,
     ) -> None:
         # Do not put patient names, phone numbers, clinical text, or AI prompts in audit metadata/logs.
         self._execute(
@@ -600,6 +644,7 @@ class DentalStore:
             if self.database_url
             else "INSERT INTO dental_audit_events(id,actor_id,action,resource_type,resource_id,clinic_id,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?)",
             (_id(), actor_id, action, resource_type, resource_id, clinic_id, "{}", _now()),
+            connection=connection,
         )
 
     def patient_by_user_id(self, user_id: str, patient_id: str | None = None):
