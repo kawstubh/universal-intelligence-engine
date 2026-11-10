@@ -813,3 +813,20 @@ def test_doctor_deactivation_rejects_corrupt_cross_organisation_membership(
     assert persisted["id"] == corrupt_membership["id"]
     assert persisted["active"] in (True, 1)
 
+def test_non_admin_cannot_list_organisation_workspaces(tenant_api):
+    client, store = tenant_api
+    store.create_doctor_membership("doctor-target", "clinic-a", "doctor")
+    login = client.post(
+        "/v1/dental/auth/password/login",
+        json={
+            "email": "target@example.test",
+            "password": "another correct horse battery",
+        },
+    )
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    response = client.get(
+        "/v1/dental/organisations/org-a/workspaces", headers=headers
+    )
+    assert response.status_code == 403
