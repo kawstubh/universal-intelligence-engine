@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import os
+import secrets
 from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .dental_auth import hash_password, login_password, logout_doctor, require_doctor
+from .dental_auth import (
+    hash_password,
+    login_password,
+    logout_doctor,
+    require_doctor,
+    switch_doctor_workspace,
+)
 from .dental_billing import create_order as create_membership_order_impl
 from .dental_billing import handle_webhook as handle_membership_webhook
 from .dental_billing import plans as membership_plans
@@ -23,6 +30,35 @@ router = APIRouter(prefix="/v1/dental", tags=["dental"])
 class DoctorPasswordLoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=256)
+
+
+
+class WorkspaceSwitchIn(BaseModel):
+    clinic_id: str = Field(min_length=1, max_length=128)
+
+
+class OrganisationCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    organisation_type: str = Field(pattern=r"^(clinic|hospital|group)$")
+    workspace_name: str | None = Field(default=None, min_length=1, max_length=200)
+    clinic_type: str = Field(
+        default="clinic", pattern=r"^(clinic|branch|hospital_department)$"
+    )
+
+
+class WorkspaceCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    clinic_type: str = Field(pattern=r"^(clinic|branch|hospital_department)$")
+    parent_clinic_id: str | None = Field(default=None, max_length=128)
+
+
+class DoctorMembershipCreateIn(BaseModel):
+    doctor_id: str = Field(min_length=1, max_length=64)
+    role: str = Field(pattern=r"^(owner|admin|doctor|dentist)$")
+
+
+class DoctorMembershipUpdateIn(BaseModel):
+    active: bool
 
 
 class DoctorAccountCreateIn(BaseModel):
@@ -162,11 +198,348 @@ async def doctor_password_login(body: DoctorPasswordLoginIn, request: Request):
     return await login_password(body.email, body.password, request)
 
 
+
+@router.post("/auth/workspace/switch")
+async def doctor_workspace_switch(
+    body: WorkspaceSwitchIn,
+    doctor: Annotated[dict, Depends(require_doctor)],
+    authorization: str | None = Header(default=None),
+):
+    return await switch_doctor_workspace(
+        authorization, body.clinic_id, current_user=doctor
+    )
+
+
+def _require_organisation_admin(store, actor: dict, organisation_id: str) -> dict:
+    if actor.get("role") not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ORGANISATION_ADMIN_REQUIRED",
+                "message": "An organisation owner or administrator is required",
+            },
+        )
+    authorised_organisations = {
+        str(item["id"]) for item in store.organisations_for_doctor(actor["id"])
+    }
+    if str(organisation_id) not in authorised_organisations:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ORGANISATION_ACCESS_DENIED",
+                "message": "You cannot administer a different organisation",
+            },
+        )
+    active_workspace = next(
+        (
+            workspace
+            for workspace in store.workspaces_for_doctor(actor["id"])
+            if str(workspace["id"]) == str(actor["clinic_id"])
+        ),
+        None,
+    )
+    if not active_workspace or active_workspace["organisation_id"] != organisation_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ORGANISATION_ACCESS_DENIED",
+                "message": "You cannot administer a different organisation",
+            },
+        )
+    return active_workspace
+
+
+def _get_workspace_record(store, clinic_id: str) -> dict | None:
+    sql = (
+        "SELECT id, organisation_id, name, clinic_type, parent_clinic_id, active, created_at "
+        "FROM dental_clinics WHERE id=%s"
+        if store.database_url
+        else "SELECT id, organisation_id, name, clinic_type, parent_clinic_id, active, created_at "
+        "FROM dental_clinics WHERE id=?"
+    )
+    rows = store._execute(sql, (clinic_id,))
+    return rows[0] if rows else None
+
+
+def _require_doctor_same_organisation(
+    store, doctor: dict, organisation_id: str
+) -> None:
+    # A doctor can be assigned within the organisation of their original
+    # workspace even before their first secondary membership exists. An
+    # organisation creator is the deliberate exception to that anchor: an
+    # active owner membership plus organisation.created audit provenance also
+    # authorises them in the organisation they created.
+    home_clinic_id = str(doctor.get("clinic_id") or "")
+    home_workspace = (
+        _get_workspace_record(store, home_clinic_id) if home_clinic_id else None
+    )
+    if home_workspace and str(home_workspace["organisation_id"]) == str(organisation_id):
+        return
+
+    authorised_organisations = {
+        str(item["id"]) for item in store.organisations_for_doctor(doctor["id"])
+    }
+    if str(organisation_id) not in authorised_organisations:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "DOCTOR_ORGANISATION_MISMATCH",
+                "message": "Doctors can only be assigned within their own organisation",
+            },
+        )
+
+
+@router.get("/auth/workspaces")
+async def list_doctor_workspaces(
+    doctor: Annotated[dict, Depends(require_doctor)],
+):
+    return {"workspaces": get_dental_store().workspaces_for_doctor(doctor["id"])}
+
+
+@router.post("/organisations", status_code=201)
+async def create_organisation(
+    body: OrganisationCreateIn,
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    if actor.get("role") not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ORGANISATION_ADMIN_REQUIRED",
+                "message": "An organisation owner or administrator is required",
+            },
+        )
+    store = get_dental_store()
+    organisation_id = secrets.token_hex(16)
+    clinic_id = secrets.token_hex(16)
+    with store.transaction() as connection:
+        organisation = store.create_organisation(
+            {
+                "id": organisation_id,
+                "name": body.name.strip(),
+                "organisation_type": body.organisation_type,
+            },
+            connection=connection,
+        )
+        workspace = store.create_clinic(
+            {
+                "id": clinic_id,
+                "organisation_id": organisation_id,
+                "name": (body.workspace_name or body.name).strip(),
+                "clinic_type": body.clinic_type,
+            },
+            connection=connection,
+        )
+        membership = store.create_doctor_membership(
+            actor["id"], clinic_id, "owner", connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "organisation.created",
+            "organisation",
+            organisation_id,
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
+        store.audit(
+            actor["id"],
+            "workspace.created",
+            "clinic",
+            clinic_id,
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
+    return {
+        "organisation": organisation,
+        "workspace": workspace,
+        "membership": membership,
+    }
+
+
+@router.post("/organisations/{organisation_id}/workspaces", status_code=201)
+async def create_organisation_workspace(
+    organisation_id: str,
+    body: WorkspaceCreateIn,
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    store = get_dental_store()
+    _require_organisation_admin(store, actor, organisation_id)
+    if body.parent_clinic_id:
+        parent = _get_workspace_record(store, body.parent_clinic_id)
+        if not parent or parent["organisation_id"] != organisation_id or not parent["active"]:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "PARENT_WORKSPACE_NOT_FOUND",
+                    "message": "Parent workspace not found in this organisation",
+                },
+            )
+    with store.transaction() as connection:
+        workspace = store.create_clinic(
+            {
+                "id": secrets.token_hex(16),
+                "organisation_id": organisation_id,
+                "name": body.name.strip(),
+                "clinic_type": body.clinic_type,
+                "parent_clinic_id": body.parent_clinic_id,
+            },
+            connection=connection,
+        )
+        # Keep the creating organisation administrator authorised in the new
+        # workspace so it can be selected and managed immediately.
+        membership = store.create_doctor_membership(
+            actor["id"], workspace["id"], actor["role"], connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "workspace.created",
+            "clinic",
+            workspace["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
+        store.audit(
+            actor["id"],
+            "membership.created",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
+    return workspace
+
+
+@router.get("/organisations/{organisation_id}/workspaces")
+async def list_organisation_workspaces(
+    organisation_id: str,
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    store = get_dental_store()
+    _require_organisation_admin(store, actor, organisation_id)
+    return {"workspaces": store.workspaces_for_organisation(organisation_id)}
+
+
+@router.post("/workspaces/{clinic_id}/memberships", status_code=201)
+async def create_workspace_membership(
+    clinic_id: str,
+    body: DoctorMembershipCreateIn,
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    store = get_dental_store()
+    target_workspace = _get_workspace_record(store, clinic_id)
+    if not target_workspace or not target_workspace["active"]:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "WORKSPACE_NOT_FOUND", "message": "Workspace not found"},
+        )
+    _require_organisation_admin(store, actor, target_workspace["organisation_id"])
+    target_doctor = store.doctor_by_id(body.doctor_id)
+    if not target_doctor:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "DOCTOR_NOT_FOUND", "message": "Doctor account not found"},
+        )
+    _require_doctor_same_organisation(
+        store, target_doctor, target_workspace["organisation_id"]
+    )
+    if body.role == "owner" and actor.get("role") != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "OWNER_ROLE_REQUIRED", "message": "Only an owner can assign an owner role"},
+        )
+    if store.doctor_membership(body.doctor_id, clinic_id):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MEMBERSHIP_EXISTS",
+                "message": "Doctor already has a membership in this workspace",
+            },
+        )
+    with store.transaction() as connection:
+        membership = store.create_doctor_membership(
+            body.doctor_id, clinic_id, body.role, connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "membership.created",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
+    return membership
+
+
+@router.patch("/workspaces/{clinic_id}/memberships/{doctor_id}")
+async def update_workspace_membership(
+    clinic_id: str,
+    doctor_id: str,
+    body: DoctorMembershipUpdateIn,
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    store = get_dental_store()
+    target_workspace = _get_workspace_record(store, clinic_id)
+    if not target_workspace or not target_workspace["active"]:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "WORKSPACE_NOT_FOUND", "message": "Workspace not found"},
+        )
+    _require_organisation_admin(store, actor, target_workspace["organisation_id"])
+    membership = store.doctor_membership(doctor_id, clinic_id)
+    if not membership:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "MEMBERSHIP_NOT_FOUND",
+                "message": "Doctor membership not found in this workspace",
+            },
+        )
+    target_doctor = store.doctor_by_id(doctor_id)
+    if not target_doctor:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "DOCTOR_NOT_FOUND", "message": "Doctor account not found"},
+        )
+    _require_doctor_same_organisation(
+        store, target_doctor, target_workspace["organisation_id"]
+    )
+    if doctor_id == actor["id"] and not body.active:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "CANNOT_DEACTIVATE_SELF",
+                "message": "You cannot deactivate your own workspace membership",
+            },
+        )
+    if membership["role"] == "owner" and actor.get("role") != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "OWNER_ROLE_REQUIRED", "message": "Only an owner can change an owner membership"},
+        )
+    with store.transaction() as connection:
+        store.set_doctor_membership_active(
+            doctor_id, clinic_id, body.active, connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "membership.activated" if body.active else "membership.deactivated",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
+    return {
+        "doctor_id": doctor_id,
+        "clinic_id": clinic_id,
+        "active": body.active,
+    }
+
+
 @router.post("/auth/doctors")
 async def create_doctor_account(
     body: DoctorAccountCreateIn, actor: Annotated[dict, Depends(require_doctor)]
 ):
-    if actor.get("role") != "admin":
+    if actor.get("role") not in {"owner", "admin"}:
         raise HTTPException(
             status_code=403,
             detail={
@@ -184,22 +557,33 @@ async def create_doctor_account(
                 "message": "An account already exists for this email",
             },
         )
-    import secrets
-
-    doctor = store.create_doctor(
-        {
-            "id": secrets.token_hex(16),
-            "email": email,
-            "password_hash": hash_password(body.password),
-            "role": body.role,
-            "clinic_id": actor["clinic_id"],
-        }
-    )
+    with store.transaction() as connection:
+        doctor = store.create_doctor(
+            {
+                "id": secrets.token_hex(16),
+                "email": email,
+                "password_hash": hash_password(body.password),
+                "role": body.role,
+                "clinic_id": actor["clinic_id"],
+            },
+            connection=connection,
+        )
+        membership = store.create_doctor_membership(
+            doctor["id"], actor["clinic_id"], body.role, connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "membership.created",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return {
         "id": doctor["id"],
         "email": doctor["email"],
-        "role": doctor["role"],
-        "clinic_id": doctor["clinic_id"],
+        "role": membership["role"],
+        "clinic_id": actor["clinic_id"],
         "active": True,
     }
 
@@ -208,7 +592,7 @@ async def create_doctor_account(
 async def deactivate_doctor_account(
     doctor_id: str, actor: Annotated[dict, Depends(require_doctor)]
 ):
-    if actor.get("role") != "admin":
+    if actor.get("role") not in {"owner", "admin"}:
         raise HTTPException(
             status_code=403,
             detail={
@@ -218,24 +602,58 @@ async def deactivate_doctor_account(
         )
     store = get_dental_store()
     target = store.doctor_by_id(doctor_id)
-    if not target or target.get("clinic_id") != actor.get("clinic_id"):
+    membership = store.doctor_membership(doctor_id, actor["clinic_id"])
+    if not target or not membership:
         raise HTTPException(
             status_code=404,
             detail={
                 "code": "ACCOUNT_NOT_FOUND",
-                "message": "Doctor account not found in this clinic",
+                "message": "Doctor account not found in this workspace",
             },
         )
-    if target.get("role") == "admin" and target.get("id") == actor.get("id"):
+    actor_workspace = _get_workspace_record(store, actor["clinic_id"])
+    if not actor_workspace or not actor_workspace["active"]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ORGANISATION_ACCESS_DENIED",
+                "message": "The active workspace is not available",
+            },
+        )
+    _require_doctor_same_organisation(
+        store, target, actor_workspace["organisation_id"]
+    )
+    if doctor_id == actor["id"]:
         raise HTTPException(
             status_code=400,
             detail={
                 "code": "CANNOT_DEACTIVATE_SELF",
-                "message": "You cannot deactivate your own account",
+                "message": "You cannot deactivate your own workspace membership",
             },
         )
-    store.set_doctor_active(doctor_id, False)
-    return {"ok": True, "id": doctor_id, "active": False}
+    if membership["role"] == "owner" and actor.get("role") != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "OWNER_ROLE_REQUIRED", "message": "Only an owner can deactivate an owner membership"},
+        )
+    with store.transaction() as connection:
+        store.set_doctor_membership_active(
+            doctor_id, actor["clinic_id"], False, connection=connection
+        )
+        store.audit(
+            actor["id"],
+            "membership.deactivated",
+            "doctor_membership",
+            membership["id"],
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
+    return {
+        "ok": True,
+        "id": doctor_id,
+        "clinic_id": actor["clinic_id"],
+        "active": False,
+    }
 
 
 @router.get("/auth/me")
@@ -294,7 +712,7 @@ async def create_patient(
 ):
     store = get_dental_store()
     item = store.create_patient(body.model_dump(), _clinic_id(actor))
-    store.audit(actor.get("user_id"), "create", "patient", item["id"])
+    store.audit(actor.get("user_id"), "create", "patient", item["id"], clinic_id=_clinic_id(actor))
     return item
 
 
@@ -321,7 +739,7 @@ async def create_public_appointment(body: PublicAppointmentIn):
         },
         master_clinic,
     )
-    store.audit("public-intake", "request", "appointment", appointment["id"])
+    store.audit("public-intake", "request", "appointment", appointment["id"], clinic_id=master_clinic)
     return {"status": "requested", "appointment": appointment}
 
 
@@ -329,6 +747,16 @@ async def create_public_appointment(body: PublicAppointmentIn):
 async def screen_scan(
     body: ScanScreenIn, actor: Annotated[dict, Depends(require_doctor)]
 ):
+    store = get_dental_store()
+    clinic_id = _clinic_id(actor)
+    if body.patient_id and not store.get_patient(body.patient_id, clinic_id):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Patient is not accessible from this clinic",
+                "code": "PATIENT_CLINIC_ACCESS_DENIED",
+            },
+        )
     adapter = get_scano_adapter()
     try:
         result = await adapter.screen(
@@ -343,7 +771,7 @@ async def screen_scan(
         raise HTTPException(
             status_code=503, detail="Scan screening is temporarily unavailable."
         ) from exc
-    get_dental_store().audit(actor.get("user_id"), "screen", "scan", body.patient_id)
+    store.audit(actor.get("user_id"), "screen", "scan", body.patient_id, clinic_id=clinic_id)
     return result
 
 
@@ -363,7 +791,7 @@ async def send_whatsapp_template(
         raise HTTPException(
             status_code=503, detail="WhatsApp delivery is temporarily unavailable."
         ) from exc
-    get_dental_store().audit(actor.get("user_id"), "send", "whatsapp", body.to.strip())
+    get_dental_store().audit(actor.get("user_id"), "send", "whatsapp", body.to.strip(), clinic_id=_clinic_id(actor))
     return result
 
 
@@ -399,7 +827,7 @@ async def update_appointment(
     item = store.update_appointment(appointment_id, changes, _clinic_id(actor))
     if not item:
         raise HTTPException(status_code=404, detail="Appointment not found")
-    store.audit(actor.get("user_id"), "update", "appointment", appointment_id)
+    store.audit(actor.get("user_id"), "update", "appointment", appointment_id, clinic_id=_clinic_id(actor))
     return item
 
 
@@ -408,8 +836,11 @@ async def create_appointment(
     body: AppointmentIn, actor: Annotated[dict, Depends(require_doctor)]
 ):
     store = get_dental_store()
-    item = store.create_appointment(body.model_dump(), _clinic_id(actor))
-    store.audit(actor.get("user_id"), "create", "appointment", item["id"])
+    clinic_id = _clinic_id(actor)
+    if not store.get_patient(body.patient_id, clinic_id):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    item = store.create_appointment(body.model_dump(), clinic_id)
+    store.audit(actor.get("user_id"), "create", "appointment", item["id"], clinic_id=clinic_id)
     return item
 
 
@@ -425,8 +856,11 @@ async def save_chart(
     if body.patient_id != patient_id:
         raise HTTPException(status_code=400, detail="patient_id mismatch")
     store = get_dental_store()
-    item = store.save_chart(body.model_dump(), _clinic_id(actor))
-    store.audit(actor.get("user_id"), "write", "dental_chart", item["id"])
+    clinic_id = _clinic_id(actor)
+    if not store.get_patient(patient_id, clinic_id):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    item = store.save_chart(body.model_dump(), clinic_id)
+    store.audit(actor.get("user_id"), "write", "dental_chart", item["id"], clinic_id=clinic_id)
     return item
 
 
@@ -445,9 +879,17 @@ async def save_periodontogram(
 ):
     if body.patient_id != patient_id:
         raise HTTPException(status_code=400, detail="patient_id mismatch")
-    item = get_dental_store().save_periodontogram(body.model_dump(), _clinic_id(actor))
-    get_dental_store().audit(
-        actor.get("user_id"), "write", "periodontogram", item["id"]
+    store = get_dental_store()
+    clinic_id = _clinic_id(actor)
+    if not store.get_patient(patient_id, clinic_id):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    item = store.save_periodontogram(body.model_dump(), clinic_id)
+    store.audit(
+        actor.get("user_id"),
+        "write",
+        "periodontogram",
+        item["id"],
+        clinic_id=clinic_id,
     )
     return item
 
@@ -574,5 +1016,5 @@ async def run_dental_intelligence(
     store = get_dental_store()
     if body.patient_id:
         store.record_ai(body.patient_id, body.goal, result, clinic_id)
-    store.audit(actor.get("id"), "run", "dental_intelligence", body.patient_id)
+    store.audit(actor.get("id"), "run", "dental_intelligence", body.patient_id, clinic_id=clinic_id)
     return result
