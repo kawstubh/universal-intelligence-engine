@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -61,6 +62,23 @@ app = FastAPI(
     description="Shared intelligence API for research, reasoning, applications, agents, and Dental Intelligence.",
 )
 service = build_service()
+
+# Explicit browser origins for the independently hosted Oralyn PWAs.
+# No wildcard origin is used; bearer-token authentication remains mandatory
+# for protected clinic and doctor endpoints.
+_dental_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("DENTAL_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if _dental_cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_dental_cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+    )
 
 
 # Launch policy: patient-facing AI is disabled at the API boundary, including
