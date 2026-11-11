@@ -8,7 +8,6 @@ this module never creates tables directly.
 from __future__ import annotations
 
 import hashlib
-from contextlib import contextmanager
 import json
 import os
 import secrets
@@ -16,6 +15,7 @@ import sqlite3
 import string
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock

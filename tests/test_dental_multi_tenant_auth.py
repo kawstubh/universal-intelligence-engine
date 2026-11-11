@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -68,7 +69,7 @@ def auth_environment(tmp_path: Path, monkeypatch):
     app.include_router(dental_api.router)
 
     @app.get("/_test/doctor-context")
-    async def doctor_context(doctor: dict = Depends(dental_auth.require_doctor)):
+    async def doctor_context(doctor: Annotated[dict, Depends(dental_auth.require_doctor)]):
         return doctor
 
     return TestClient(app), store

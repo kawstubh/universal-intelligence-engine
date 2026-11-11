@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
-from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy.engine import make_url
 
+from alembic import command
 from universal_intelligence_engine.dental_store import DentalStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -219,8 +219,10 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             for organisation in store.organisations_for_doctor("doctor-pg")
         }
 
-        with pytest.raises(RuntimeError, match="simulated PostgreSQL rollback"):
-            with store.transaction() as connection:
+        with (
+            pytest.raises(RuntimeError, match="simulated PostgreSQL rollback"),
+            store.transaction() as connection,
+        ):
                 store.create_organisation(
                     {
                         "id": "org-pg-rollback",
