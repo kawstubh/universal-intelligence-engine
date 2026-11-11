@@ -56,10 +56,11 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
     )
     assert chart.status_code == 200
 
-    # Patient AI, consent, linking, history, and AI-prefixed patient routes are
-    # disabled at the API boundary; doctor-facing clinical AI remains separate.
+    # Patient AI is disabled. Patient records/linking routes remain available
+    # only behind the separate Supabase patient-auth dependency.
     for method, path, payload in [
         ("POST", "/v1/dental/ai/patient/chat", {"message": "hello"}),
+        ("POST", "/v1/dental/ai/patient/triage", {"symptoms": "toothache"}),
         ("POST", "/v1/dental/ai/patient/consent", {"consent": True}),
         ("POST", "/v1/dental/ai/patient/link", {"invite_code": "ABCDEFGH"}),
         ("GET", "/v1/dental/ai/patient/appointments", None),
@@ -67,8 +68,11 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
         ("DELETE", "/v1/dental/ai/patient/history", None),
     ]:
         response = client.request(method, path, json=payload)
-        assert response.status_code == 404, (method, path, response.text)
-        assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
+        if path.endswith(("/chat", "/triage", "/treatment-explanation", "/aftercare")):
+            assert response.status_code == 404, (method, path, response.text)
+            assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
+        else:
+            assert response.status_code == 401, (method, path, response.text)
 
     app.dependency_overrides[dental_api.require_doctor] = lambda: {
         "id": "doctor-b",

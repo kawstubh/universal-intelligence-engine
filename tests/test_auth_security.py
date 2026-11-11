@@ -5,6 +5,8 @@ from universal_intelligence_engine.api import app
 PUBLIC_PATHS = {
     "/v1/dental/health",
     "/v1/dental/auth/google",
+    "/v1/dental/auth/password/login",
+    "/v1/dental/auth/password/login",
     "/v1/dental/public/appointments",
     "/v1/dental/billing/plans",
     "/v1/dental/billing/razorpay/webhook",
@@ -28,6 +30,9 @@ def test_no_demo_or_otp_release_auth_symbols():
     assert "otp/request" not in api.__dict__.get("router").routes.__repr__().lower()
 
 
+PATIENT_PATH_PREFIX = "/v1/dental/ai/patient/"
+DISABLED_PATIENT_AI = {"/v1/dental/ai/patient/chat", "/v1/dental/ai/patient/triage", "/v1/dental/ai/patient/treatment-explanation", "/v1/dental/ai/patient/aftercare"}
+
 def test_protected_dental_routes_require_auth_dependency():
 
     for route in app.routes:
@@ -39,7 +44,10 @@ def test_protected_dental_routes_require_auth_dependency():
             getattr(dep.call, "__name__", "")
             for dep in getattr(route, "dependant", None).dependencies
         }
-        assert "require_doctor" in dependency_calls, f"missing auth on {route.path}"
+        if route.path.startswith(PATIENT_PATH_PREFIX):
+            assert "require_patient" in dependency_calls, f"missing patient auth on {route.path}"
+        else:
+            assert "require_doctor" in dependency_calls, f"missing doctor auth on {route.path}"
 
 
 def test_protected_dental_requests_return_401_without_bearer():
@@ -48,7 +56,7 @@ def test_protected_dental_requests_return_401_without_bearer():
     for route in app.routes:
         if not getattr(route, "path", "").startswith("/v1/dental/"):
             continue
-        if route.path in PUBLIC_PATHS or route.path in seen:
+        if route.path in PUBLIC_PATHS or route.path in DISABLED_PATIENT_AI or route.path in seen:
             continue
         seen.add(route.path)
         method = next(iter(getattr(route, "methods", {"GET"})))
