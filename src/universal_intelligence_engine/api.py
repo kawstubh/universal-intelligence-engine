@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -59,6 +60,9 @@ app = FastAPI(
     version=__version__,
     description="Shared intelligence API for research, reasoning, applications, agents, and Dental Intelligence.",
 )
+origins = [origin.strip() for origin in os.getenv("DENTAL_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://192.168.0.106:5173").split(",") if origin.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type", "X-Requested-With"])
+
 service = build_service()
 
 
