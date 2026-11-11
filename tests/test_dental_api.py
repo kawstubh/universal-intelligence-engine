@@ -108,7 +108,7 @@ def test_intelligence_sends_minimum_patient_context(monkeypatch):
         def record_ai(self, *args):
             pass
 
-        def audit(self, *args):
+        def audit(self, *args, **kwargs):
             pass
 
     class FakeResponse:

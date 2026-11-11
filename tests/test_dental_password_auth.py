@@ -36,6 +36,18 @@ def test_password_login_issues_session_for_active_doctor(monkeypatch):
         def create_session(self, doctor_id, token_hash, expires_at):
             self.created = (doctor_id, token_hash, expires_at)
 
+        def workspaces_for_doctor(self, doctor_id):
+            return [
+                {
+                    "id": "clinic-a",
+                    "clinic_id": "clinic-a",
+                    "role": "doctor",
+                    "organisation_name": "Test Clinic",
+                    "organisation_type": "clinic",
+                    "name": "Test Clinic",
+                }
+            ]
+
     store = FakeStore()
     monkeypatch.setattr(dental_auth, "get_dental_store", lambda: store)
     monkeypatch.setattr(dental_auth, "_bootstrap_admin", lambda: None)
@@ -80,13 +92,6 @@ def test_password_login_rejects_wrong_password(monkeypatch):
     assert response.status_code == 401
     assert response.json()["detail"]["code"] == "INVALID_CREDENTIALS"
 
-
-def test_google_login_route_is_removed():
-    paths = set(app.openapi()["paths"])
-    assert "/v1/dental/auth/google" not in paths
-    assert "/v1/dental/auth/password/login" in paths
-
-
 def test_bootstrap_admin_does_not_recreate_existing_admin(monkeypatch):
     """First-run bootstrap is idempotent once the configured admin exists."""
     from universal_intelligence_engine import dental_auth
@@ -112,3 +117,9 @@ def test_bootstrap_admin_does_not_recreate_existing_admin(monkeypatch):
     monkeypatch.setattr(dental_auth, "get_dental_store", lambda: store)
     dental_auth._bootstrap_admin()
     assert store.created == []
+
+
+def test_only_clinic_password_login_route_is_exposed():
+    paths = set(app.openapi()["paths"])
+    assert "/v1/dental/auth/password/login" in paths
+    assert "/v1/dental/auth/google" not in paths
