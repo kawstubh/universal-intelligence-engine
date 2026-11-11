@@ -3,8 +3,8 @@ from fastapi.testclient import TestClient
 from universal_intelligence_engine.api import app
 
 
-def test_patient_ai_routes_are_disabled_server_side():
-    """Patient-facing AI/data routes must remain inaccessible at launch."""
+def test_patient_account_routes_require_patient_authentication():
+    """Patient account and records routes stay separate from doctor auth."""
     client = TestClient(app)
     cases = [
         ("get", "/v1/dental/ai/patient/appointments", None),
@@ -18,6 +18,6 @@ def test_patient_ai_routes_are_disabled_server_side():
             if payload is not None
             else getattr(client, method)(path)
         )
-        assert response.status_code == 404, (
-            f"{method.upper()} {path} should be disabled, got {response.status_code}"
+        assert response.status_code == 401, (
+            f"{method.upper()} {path} must require patient auth, got {response.status_code}"
         )
