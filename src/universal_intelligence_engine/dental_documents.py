@@ -141,17 +141,37 @@ def _patient_document(document: dict) -> dict:
     }
 
 
-def _patient_for_actor(actor: dict) -> dict:
-    patient = get_dental_store().patient_by_user_id(actor["user_id"])
-    if not patient:
+def _patient_for_actor(actor: dict, patient_id: str | None = None) -> dict:
+    store = get_dental_store()
+    if patient_id:
+        patient = store.patient_by_user_id(actor["user_id"], patient_id)
+        if not patient:
+            raise HTTPException(
+                403,
+                detail={
+                    "code": "PATIENT_IDENTITY_MISMATCH",
+                    "message": "The selected clinic record is not linked to this patient account.",
+                },
+            )
+        return patient
+    linked = store.patients_by_user_id(actor["user_id"])
+    if len(linked) > 1:
         raise HTTPException(
-            404,
+            409,
             detail={
-                "code": "PATIENT_RECORD_NOT_LINKED",
-                "message": "No clinic record is linked to this patient account.",
+                "code": "PATIENT_RECORD_SELECTION_REQUIRED",
+                "message": "Choose the clinic record you want to view.",
             },
         )
-    return patient
+    if linked:
+        return store.patient_by_user_id(actor["user_id"], linked[0]["patient_id"])
+    raise HTTPException(
+        404,
+        detail={
+            "code": "PATIENT_RECORD_NOT_LINKED",
+            "message": "No clinic record is linked to this patient account.",
+        },
+    )
 
 
 def _presigned_download(document: dict, config: dict, s3) -> dict:
@@ -339,8 +359,11 @@ def create_doctor_document_download_intent(
 
 
 @router.get("/patient/documents")
-def list_patient_documents(actor: Annotated[dict, Depends(require_patient)]):
-    patient = _patient_for_actor(actor)
+def list_patient_documents(
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = _patient_for_actor(actor, patient_id)
     documents = get_dental_store().documents(
         patient["clinic_id"], patient["id"], patient_visible_only=True
     )
@@ -351,9 +374,10 @@ def list_patient_documents(actor: Annotated[dict, Depends(require_patient)]):
 def create_patient_document_download_intent(
     document_id: str,
     actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
 ):
     config = _storage_config()
-    patient = _patient_for_actor(actor)
+    patient = _patient_for_actor(actor, patient_id)
     document = get_dental_store().get_document(
         document_id,
         patient["clinic_id"],
