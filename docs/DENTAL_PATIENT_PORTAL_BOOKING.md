@@ -21,6 +21,7 @@ optional `patient_id` query parameter.
 
 | Method | Route | Purpose |
 |---|---|---|
+| POST | `/v1/dental/doctor/patients/{patient_id}/invite` | Create a one-time invite for a patient in the doctor’s active clinic |
 | POST | `/v1/dental/patient/link` | Consume a one-time clinic invite and link the matching clinic record |
 | GET | `/v1/dental/patient/linked-records` | List only clinic records already linked to the authenticated user |
 | GET | `/v1/dental/patient/appointments?patient_id=...` | Read safe appointment fields for the selected linked record |
@@ -52,3 +53,6 @@ AI consent and AI history. The web portal uses the non-AI routes above.
 
 Public guest appointment intake remains a separate workflow and does not
 attach an unverified request to an existing patient record.
+
+
+Doctor invite creation is a clinic-management action, not an AI action. It is exposed under the authenticated `/v1/dental/doctor/*` namespace, checks the patient against the doctor's active clinic, and returns only the one-time code and its 24-hour expiry. The legacy `/v1/dental/ai/doctor/patients/{patient_id}/invite` route remains for compatibility; the Oralyn portal now uses the non-AI route.
