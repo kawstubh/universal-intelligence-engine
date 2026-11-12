@@ -353,5 +353,3 @@ def test_patient_appointments_and_chart_require_explicit_selection_for_multiple_
     assert chart.status_code == 200
     assert chart.json()["result"] == [{"tooth_fdi": "16", "status": "healthy"}]
     app.dependency_overrides.clear()
-
-

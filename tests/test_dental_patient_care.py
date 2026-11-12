@@ -425,5 +425,3 @@ def test_patient_with_multiple_clinic_links_must_select_the_record(care_api):
     )
     assert denied.status_code == 403
     assert denied.json()["detail"]["code"] == "PATIENT_IDENTITY_MISMATCH"
-
-
