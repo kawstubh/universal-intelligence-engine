@@ -22,9 +22,23 @@ DISABLED_PATIENT_AI = {
 
 
 def _is_patient_ai_route(path: str) -> bool:
-    # Only patient AI actions are disabled; account, appointment and chart routes
-    # remain available behind Supabase patient authentication.
     return path.rstrip("/") in DISABLED_PATIENT_AI
+
+
+def _is_patient_account_route(path: str) -> bool:
+    normalized = path.rstrip("/")
+    return (
+        normalized.startswith(PATIENT_PATH_PREFIX)
+        or normalized.startswith(PATIENT_DATA_PATH_PREFIX)
+        or (
+            normalized.startswith("/v1/dental/doctor/patients/")
+            and normalized.endswith("/invite")
+        )
+        or (
+            normalized.startswith("/v1/dental/ai/doctor/patients/")
+            and normalized.endswith("/invite")
+        )
+    )
 
 
 def _sample_path(path: str) -> str:
@@ -73,7 +87,12 @@ def test_protected_dental_requests_return_401_without_bearer():
         path = getattr(route, "path", "")
         if not path.startswith("/v1/dental/"):
             continue
-        if path in PUBLIC_PATHS or _is_patient_ai_route(path) or path in seen:
+        if (
+            path in PUBLIC_PATHS
+            or _is_patient_ai_route(path)
+            or _is_patient_account_route(path)
+            or path in seen
+        ):
             continue
         seen.add(path)
         method = next(iter(getattr(route, "methods", {"GET"})))
@@ -84,6 +103,22 @@ def test_protected_dental_requests_return_401_without_bearer():
             response.status_code,
             response.text,
         )
+
+
+def test_patient_account_routes_fail_closed_by_default(monkeypatch):
+    monkeypatch.setenv("DENTAL_PATIENT_ACCOUNT_PORTAL_ENABLED", "false")
+    client = TestClient(app)
+    cases = [
+        ("GET", "/v1/dental/ai/patient/profile"),
+        ("GET", "/v1/dental/ai/patient/appointments"),
+        ("GET", "/v1/dental/patient/linked-records"),
+        ("POST", "/v1/dental/patient/link"),
+        ("POST", "/v1/dental/doctor/patients/missing-patient/invite"),
+    ]
+    for method, path in cases:
+        response = client.request(method, path, json={"invite_code": "synthetic-code"})
+        assert response.status_code == 404, (method, path, response.text)
+        assert response.json()["detail"]["code"] == "PATIENT_ACCOUNT_PORTAL_DISABLED"
 
 
 def test_demo_bearer_never_authenticates(monkeypatch):
