@@ -34,6 +34,8 @@ def upgrade() -> None:
             sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
             sa.Column("created_at", sa.Text(), nullable=False),
             sa.Column("updated_at", sa.Text(), nullable=False),
+            sa.CheckConstraint("length(title) >= 2", name="ck_dental_clinical_notes_title"),
+            sa.CheckConstraint("length(content) > 0", name="ck_dental_clinical_notes_content"),
             sa.CheckConstraint("version >= 1", name="ck_dental_clinical_notes_version"),
         )
     _ensure_index(

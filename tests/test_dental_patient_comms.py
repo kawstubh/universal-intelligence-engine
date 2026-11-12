@@ -74,7 +74,7 @@ def test_clinical_notes_are_private_until_doctor_explicitly_shares(comms_api):
     assert client.get(f"/v1/dental/doctor/patients/{patient_a['id']}/clinical-notes").status_code == 404
     assert client.patch(
         f"/v1/dental/doctor/clinical-notes/{note['id']}",
-        json={"patient_visible": False},
+        json={"patient_visible": False, "expected_version": 2},
     ).status_code == 404
 
 

@@ -31,7 +31,7 @@ class ClinicalNoteUpdateIn(BaseModel):
     title: str | None = Field(default=None, min_length=2, max_length=160)
     content: str | None = Field(default=None, min_length=1, max_length=10000)
     patient_visible: bool | None = None
-    expected_version: int | None = Field(default=None, ge=1)
+    expected_version: int = Field(ge=1)
 
 
 class MessageCreateIn(BaseModel):
@@ -173,14 +173,18 @@ def create_doctor_clinical_note(
     store = get_dental_store()
     if not store.get_patient(patient_id, actor["clinic_id"]):
         raise HTTPException(404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found in this workspace."})
+    title = body.title.strip()
+    content = body.content.strip()
+    if len(title) < 2 or not content:
+        raise HTTPException(422, detail={"code": "CLINICAL_NOTE_INVALID", "message": "A note title and clinical content are required."})
     now = _now()
     item = {
         "id": _id(),
         "clinic_id": actor["clinic_id"],
         "patient_id": patient_id,
         "created_by_doctor_id": actor["id"],
-        "title": body.title.strip(),
-        "content": body.content.strip(),
+        "title": title,
+        "content": content,
         "patient_visible": False,
         "version": 1,
         "created_at": now,
@@ -205,9 +209,11 @@ def update_doctor_clinical_note(
     actor: Annotated[dict, Depends(require_doctor)],
 ):
     changes = body.model_dump(exclude_unset=True)
-    expected_version = changes.pop("expected_version", None)
+    expected_version = changes.pop("expected_version")
     if not changes:
         raise HTTPException(400, detail={"code": "CLINICAL_NOTE_NO_CHANGES", "message": "Provide at least one field to update."})
+    if any(value is None for value in changes.values()):
+        raise HTTPException(422, detail={"code": "CLINICAL_NOTE_INVALID", "message": "Note fields cannot be null."})
     store = get_dental_store()
     lock = " FOR UPDATE" if store.database_url else ""
     select_sql = (
@@ -220,13 +226,13 @@ def update_doctor_clinical_note(
         if not rows:
             raise HTTPException(404, detail={"code": "CLINICAL_NOTE_NOT_FOUND", "message": "Clinical note not found in this workspace."})
         current = rows[0]
-        if expected_version is not None and int(current["version"]) != expected_version:
+        if int(current["version"]) != expected_version:
             raise HTTPException(409, detail={"code": "CLINICAL_NOTE_VERSION_CONFLICT", "message": "This note changed elsewhere. Refresh before saving."})
         title = changes.get("title", current["title"])
         content = changes.get("content", current["content"])
         patient_visible = changes.get("patient_visible", current["patient_visible"])
-        if title is None or content is None or not str(title).strip() or not str(content).strip():
-            raise HTTPException(400, detail={"code": "CLINICAL_NOTE_INVALID", "message": "A note title and content are required."})
+        if title is None or content is None or len(str(title).strip()) < 2 or not str(content).strip():
+            raise HTTPException(422, detail={"code": "CLINICAL_NOTE_INVALID", "message": "A note title of at least two characters and non-empty content are required."})
         version = int(current["version"]) + 1
         now = _now()
         _query(
