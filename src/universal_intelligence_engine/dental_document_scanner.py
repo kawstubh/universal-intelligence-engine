@@ -1,8 +1,8 @@
 """Fail-closed private-network ClamAV scanning for dental document uploads.
 
 The scanner accepts bytes already bounded and checksum-verified by the document
-upload pipeline. It connects only to private, loopback or link-local addresses;
-it never sends clinical files to a public scanning service.
+upload pipeline. It connects only to private or loopback addresses; link-local,
+reserved, multicast, unspecified and public targets are rejected before connect.
 """
 
 from __future__ import annotations
@@ -80,7 +80,9 @@ def _private_target(host: str, port: int) -> tuple:
         if (
             address.is_multicast
             or address.is_unspecified
-            or not (address.is_private or address.is_loopback or address.is_link_local)
+            or address.is_link_local
+            or address.is_reserved
+            or not (address.is_private or address.is_loopback)
         ):
             raise DocumentScannerConfigurationError(
                 "Document scanner must resolve exclusively to private network addresses."

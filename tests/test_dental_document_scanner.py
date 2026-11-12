@@ -115,6 +115,37 @@ def test_public_scanner_address_is_rejected_before_connect(monkeypatch):
     assert connected == []
 
 
+@pytest.mark.parametrize(
+    ("family", "sockaddr"),
+    [
+        (socket.AF_INET, ("169.254.169.254", 3310)),
+        (socket.AF_INET6, ("fe80::1", 3310, 0, 0)),
+    ],
+)
+def test_link_local_scanner_addresses_are_rejected_before_connect(
+    monkeypatch, family, sockaddr
+):
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_HOST", "clamav.internal")
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_PRIVATE", "true")
+    monkeypatch.setattr(
+        scanner.socket,
+        "getaddrinfo",
+        lambda host, port, type: [
+            (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)
+        ],
+    )
+    connected = []
+    monkeypatch.setattr(
+        scanner.socket,
+        "create_connection",
+        lambda *args, **kwargs: connected.append(args),
+    )
+
+    with pytest.raises(scanner.DocumentScannerConfigurationError):
+        scanner.scan_document_bytes(b"safe test bytes")
+    assert connected == []
+
+
 def test_malware_signature_blocks_the_document(monkeypatch):
     fake_socket = FakeScannerSocket(b"stream: Eicar-Test-Signature FOUND\0")
     _configure_private_scanner(monkeypatch, fake_socket)
