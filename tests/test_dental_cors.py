@@ -71,6 +71,10 @@ def test_dental_api_responses_are_not_cached_and_use_nosniff():
     assert response.headers["pragma"] == "no-cache"
     assert response.headers["expires"] == "0"
     assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+    assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["permissions-policy"] == "camera=(), microphone=(), geolocation=()"
 
 
 def test_disabled_patient_ai_response_is_also_not_cacheable():
