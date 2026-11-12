@@ -18,7 +18,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from .dental_auth import hash_password, verify_password
+from .dental_auth import hash_password, require_doctor, verify_password
 from .dental_store import get_dental_store
 
 router = APIRouter(prefix="/v1/dental", tags=["dental-assistant"])
@@ -349,7 +349,7 @@ def assistant_logout(
 @router.post("/auth/assistants", status_code=201)
 def create_assistant_account(
     body: AssistantCreateIn,
-    actor: Annotated[dict, Depends(__import__("universal_intelligence_engine.dental_auth", fromlist=["require_doctor"]).require_doctor)],
+    actor: Annotated[dict, Depends(require_doctor)],
 ):
     _require_owner_or_admin(actor)
     store = get_dental_store()
