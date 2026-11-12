@@ -381,14 +381,18 @@ def test_patient_with_multiple_clinic_links_must_select_the_record(care_api):
         f"/v1/dental/doctor/patients/{patient_b['id']}/treatment-plans",
         json={"title": "Clinic B plan", "items": [{"description": "Review"}]},
     ).json()["result"]
-    client.patch(
+    actor["clinic_id"] = "clinic-a"
+    share_a = client.patch(
         f"/v1/dental/doctor/treatment-plans/{plan_a['id']}",
         json={"status": "proposed", "patient_visible": True},
     )
-    client.patch(
+    actor["clinic_id"] = "clinic-b"
+    share_b = client.patch(
         f"/v1/dental/doctor/treatment-plans/{plan_b['id']}",
         json={"status": "proposed", "patient_visible": True},
     )
+    assert share_a.status_code == 200
+    assert share_b.status_code == 200
 
     linked = client.get("/v1/dental/patient/linked-records")
     assert linked.status_code == 200
