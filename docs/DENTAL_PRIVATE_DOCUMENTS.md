@@ -9,15 +9,23 @@ The backend verifies the uploaded object before marking it available:
 2. The server generates a tenant-scoped object key and presigned PUT URL.
 3. The client uploads with the exact signed `Content-Type` and `x-amz-meta-sha256` headers.
 4. The doctor completes the upload.
-5. The server checks object size, content type and declared metadata, then streams the object in 64 KiB chunks in memory to verify the actual SHA-256 checksum. No persistent local file is created.
-6. Only a verified document can be shared with the patient.
-7. Patient download URLs are issued only for documents that are both available and explicitly shared.
+5. The server checks object size, content type and declared metadata, atomically claims the pending upload, then streams the object in 64 KiB chunks into a bounded in-memory buffer while verifying the actual SHA-256 checksum.
+6. The server writes those exact verified bytes to a separate `verified/` object key and confirms the final object's size, content type and checksum metadata. The database stores this final key only after verification succeeds.
+7. The original presigned PUT URL can be replayed until expiry, but it targets only the `pending/` quarantine key. Doctor and patient downloads always use the separate verified key, so replay cannot mutate a published document. No persistent local file is created.
+8. Only a verified document can be shared with the patient.
+9. Patient download URLs are issued only for documents that are both available and explicitly shared.
 
 ## Tenant isolation
 
-Object keys use this structure:
+Quarantine upload keys use:
 
-`organisations/{organisation_id}/clinics/{clinic_id}/patients/{patient_id}/{document_id}/{safe_file_name}`
+`pending/organisations/{organisation_id}/clinics/{clinic_id}/patients/{patient_id}/{document_id}/{safe_file_name}`
+
+Verified download keys use a separate prefix:
+
+`verified/organisations/{organisation_id}/clinics/{clinic_id}/patients/{patient_id}/{document_id}/{safe_file_name}`
+
+The upload key is never used for downloads. A database status transition (`pending_upload` → `verifying` → `available`) is claimed atomically so only one completion request can publish a verified object.
 
 The application derives organisation and clinic IDs from the authenticated doctor workspace. Patient APIs derive the patient record from the authenticated Supabase user; the client cannot choose a patient ID. Patient list/download operations require `status=available` and `patient_visible=true`. Object keys, checksums, organisation IDs and clinic IDs are not returned to patients.
 
@@ -42,7 +50,7 @@ Configure these values only in the **staging** backend environment after a dedic
 - `DENTAL_DOCUMENTS_STORAGE_PRIVATE=true`: explicit operator attestation that the bucket's public access is disabled.
 - Optional: `DENTAL_DOCUMENTS_UPLOAD_TTL_SECONDS`, `DENTAL_DOCUMENTS_DOWNLOAD_TTL_SECONDS`.
 
-Use a credential scoped to object read/write for the dedicated bucket/prefix. Do not grant bucket administration, public ACL changes or object deletion to the application credential. Verify private access independently before setting the attestation flag.
+Use a credential scoped to object read/write for the dedicated bucket/prefix. Do not grant bucket administration, public ACL changes or object deletion to the application credential. Configure a bucket lifecycle rule to expire objects under `pending/` after 24 hours; the application never downloads from that prefix after finalization. Verify private access independently before setting the attestation flag.
 
 When the configuration is absent or the private-bucket attestation is false, upload and download-intent endpoints return `503 DOCUMENT_STORAGE_NOT_CONFIGURED`. The application never falls back to Render's ephemeral filesystem.
 
