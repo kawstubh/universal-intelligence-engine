@@ -206,14 +206,9 @@ def _doctor_only_openapi():
     schema["paths"] = {
         path: operations
         for path, operations in schema.get("paths", {}).items()
-        if path.rstrip("/") not in {
-            "/v1/dental/ai/patient/chat",
-            "/v1/dental/ai/patient/triage",
-            "/v1/dental/ai/patient/treatment-explanation",
-            "/v1/dental/ai/patient/aftercare",
-            "/v1/dental/ai/patient/consent",
-            "/v1/dental/ai/patient/history",
-        }
+        if not path.rstrip("/").startswith(
+            ("/v1/dental/patient/", "/v1/dental/ai/patient/")
+        )
     }
     app.openapi_schema = schema
     return schema
