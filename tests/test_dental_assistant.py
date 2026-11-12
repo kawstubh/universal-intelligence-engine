@@ -127,6 +127,14 @@ def test_assistant_is_a_separate_principal_and_has_its_own_login(assistant_api):
     client, store = assistant_api
     created = _create_assistant(client)
 
+    listed = client.get(
+        "/v1/dental/auth/assistants", headers=_owner_headers(client)
+    )
+    assert listed.status_code == 200
+    assert len(listed.json()["assistants"]) == 1
+    assert listed.json()["assistants"][0]["role"] == "assistant"
+    assert "password_hash" not in listed.json()["assistants"][0]
+
     assert created["role"] == "assistant"
     assert store.doctor_by_email(ASSISTANT_EMAIL) is None
     assistant_rows = store._execute(
@@ -433,3 +441,5 @@ def test_non_admin_doctor_cannot_create_or_deactivate_assistant(assistant_api):
         json={"email": "not-admin@example.test", "password": "not-admin-password"},
     )
     assert denied.status_code == 403
+    denied_list = client.get("/v1/dental/auth/assistants", headers=headers)
+    assert denied_list.status_code == 403
