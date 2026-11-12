@@ -61,14 +61,14 @@ def _configuration(environ: Mapping[str, str] | None = None) -> tuple[str, int, 
     return host, port, timeout
 
 
-def _private_target(host: str, port: int) -> tuple:
+def _private_target(host: str, port: int) -> tuple[int, int, int, tuple]:
     """Resolve once and connect to the resolved address to prevent DNS rebinding."""
     try:
         addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError as exc:
         raise DocumentScannerUnavailable("Private document scanner could not be resolved.") from exc
 
-    targets: list[tuple] = []
+    targets: list[tuple[int, int, int, tuple]] = []
     for family, socktype, _protocol, _canonical_name, sockaddr in addresses:
         if socktype != socket.SOCK_STREAM or family not in (socket.AF_INET, socket.AF_INET6):
             continue
@@ -87,7 +87,7 @@ def _private_target(host: str, port: int) -> tuple:
             raise DocumentScannerConfigurationError(
                 "Document scanner must resolve exclusively to private network addresses."
             )
-        targets.append(sockaddr)
+        targets.append((family, socktype, _protocol, sockaddr))
 
     if not targets:
         raise DocumentScannerUnavailable("Private document scanner has no usable address.")
@@ -109,10 +109,14 @@ def scan_document_bytes(payload: bytes | bytearray | memoryview) -> dict[str, st
 
     host, port, timeout = _configuration()
     target = _private_target(host, port)
+    family, socktype, protocol, sockaddr = target
     connection = None
     try:
-        connection = socket.create_connection(target, timeout=timeout)
+        # Connect to the exact resolved address. create_connection() performs
+        # another DNS lookup and cannot preserve the full IPv6 sockaddr tuple.
+        connection = socket.socket(family, socktype, protocol)
         connection.settimeout(timeout)
+        connection.connect(sockaddr)
         connection.sendall(b"zINSTREAM\0")
         for offset in range(0, len(content), STREAM_CHUNK_BYTES):
             chunk = content[offset : offset + STREAM_CHUNK_BYTES]
