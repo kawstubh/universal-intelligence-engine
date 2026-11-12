@@ -192,7 +192,7 @@ def test_scanner_rejects_payload_above_the_document_limit(monkeypatch):
 
 
 def test_private_ipv6_ula_scanner_connects_using_the_full_sockaddr(monkeypatch):
-    fake_socket = FakeScannerSocket(b"stream: OK\\0")
+    fake_socket = FakeScannerSocket(b"stream: OK\0")
     monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_HOST", "clamav.internal")
     monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_PORT", "3310")
     monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_TIMEOUT_SECONDS", "20")
