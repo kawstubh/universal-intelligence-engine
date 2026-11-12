@@ -1,21 +1,22 @@
-"""Tenant-scoped dental treatment plans, invoices and receipts.
+"""Tenant-scoped dental care, billing, patient linking and appointment requests.
 
-This module stores clinic-owned records only. Patient routes are read-only and
-return only records explicitly shared by the treating clinic. No payment
-processor is invoked here; receipts record payments already received by the
-clinic and never store card credentials.
+Clinic-owned treatment plans, invoices and documents remain tenant-scoped.
+Patient billing and care reads expose only records explicitly shared by the
+treating clinic; patient writes are limited to one-time invite linking and
+appointment requests. No payment processor is invoked here; receipts record
+payments already received by the clinic and never store card credentials.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from .dental_ai import require_patient
+from .dental_ai import PatientLinkIn, require_patient
 from .dental_auth import require_doctor
 from .dental_store import get_dental_store
 
@@ -67,6 +68,22 @@ class ReceiptCreateIn(BaseModel):
     reference: str = Field(default="", max_length=128)
     idempotency_key: str = Field(min_length=16, max_length=128)
     paid_at: datetime | None = None
+
+
+class PatientAppointmentCreateIn(BaseModel):
+    starts_at: datetime
+    treatment_type: str = Field(min_length=1, max_length=120)
+    note: str = Field(default="", max_length=2000)
+
+    @field_validator("starts_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Appointment start time must include a timezone")
+        normalized = value.astimezone(UTC)
+        if normalized <= datetime.now(UTC):
+            raise ValueError("Appointment start time must be in the future")
+        return normalized
 
 
 def _envelope(result):
@@ -252,6 +269,95 @@ def list_patient_linked_records(actor: Annotated[dict, Depends(require_patient)]
             "organisation_name": item.get("organisation_name") or item["clinic_name"],
         }
         for item in records
+    ])
+
+
+@router.post("/patient/link")
+def link_patient_record(
+    body: PatientLinkIn,
+    actor: Annotated[dict, Depends(require_patient)],
+):
+    store = get_dental_store()
+    patient = store.consume_patient_invite(body.invite_code, actor["user_id"])
+    if not patient:
+        raise HTTPException(
+            403,
+            detail={
+                "code": "PATIENT_INVITE_INVALID",
+                "message": "Invalid, expired, already-used, or already-linked clinic invite code.",
+            },
+        )
+    store.audit(
+        actor["user_id"],
+        "patient.linked",
+        "patient",
+        patient["id"],
+        clinic_id=patient["clinic_id"],
+    )
+    return _envelope({"patient_id": patient["id"], "linked": True})
+
+
+@router.get("/patient/appointments")
+def list_patient_appointments(
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = _patient_for_actor(actor, patient_id)
+    rows = get_dental_store().appointments(patient["clinic_id"], patient["id"])
+    return _envelope([
+        {
+            "id": row["id"],
+            "starts_at": row["starts_at"],
+            "treatment_type": row["treatment_type"],
+            "status": row["status"],
+        }
+        for row in rows
+    ])
+
+
+@router.post("/patient/appointments", status_code=201)
+def request_patient_appointment(
+    body: PatientAppointmentCreateIn,
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = _patient_for_actor(actor, patient_id)
+    store = get_dental_store()
+    appointment = store.create_appointment(
+        {
+            "patient_id": patient["id"],
+            "starts_at": body.starts_at.isoformat(),
+            "treatment_type": body.treatment_type.strip(),
+            "note": body.note.strip(),
+            "status": "requested",
+        },
+        patient["clinic_id"],
+    )
+    store.audit(
+        actor["user_id"],
+        "request",
+        "appointment",
+        appointment["id"],
+        clinic_id=patient["clinic_id"],
+    )
+    return _envelope({
+        "id": appointment["id"],
+        "starts_at": appointment["starts_at"],
+        "treatment_type": appointment["treatment_type"],
+        "status": appointment["status"],
+    })
+
+
+@router.get("/patient/chart")
+def get_patient_chart(
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = _patient_for_actor(actor, patient_id)
+    rows = get_dental_store().chart(patient["id"], patient["clinic_id"])
+    return _envelope([
+        {"tooth_fdi": row["tooth_fdi"], "status": row["status"]}
+        for row in rows
     ])
 
 

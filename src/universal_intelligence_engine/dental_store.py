@@ -1531,39 +1531,79 @@ class DentalStore:
         return code
 
     def consume_patient_invite(self, code: str, user_id: str):
+        """Consume an invite and bind its patient record atomically to one account."""
         code_hash = hashlib.sha256(code.strip().upper().encode()).hexdigest()
-        sql = (
-            "SELECT * FROM dental_patient_invites WHERE code_hash=%s AND used_at IS NULL"
-            if self.database_url
-            else "SELECT * FROM dental_patient_invites WHERE code_hash=? AND used_at IS NULL"
-        )
-        rows = self._execute(sql, (code_hash,))
-        if not rows or int(float(rows[0]["expires_at"])) < int(time.time()):
-            return None
-        invite = rows[0]
-        patient = self.get_patient(invite["patient_id"], invite["clinic_id"])
-        if not patient:
-            return None
-        if patient.get("user_id") and patient["user_id"] != user_id:
-            return None
-        sql = (
-            "UPDATE dental_patient_invites SET used_at=%s,used_by=%s WHERE id=%s AND used_at IS NULL RETURNING id"
-            if self.database_url
-            else "UPDATE dental_patient_invites SET used_at=?,used_by=? WHERE id=? AND used_at IS NULL RETURNING id"
-        )
-        consumed = self._execute(sql, (_now(), user_id, invite["id"]))
-        if not consumed:
-            return None
-        self.link_patient_user(patient["id"], user_id)
-        return patient
+        lock = " FOR UPDATE" if self.database_url else ""
 
-    def link_patient_user(self, patient_id: str, user_id: str) -> None:
-        sql = (
-            "UPDATE dental_patients SET user_id=%s WHERE id=%s"
-            if self.database_url
-            else "UPDATE dental_patients SET user_id=? WHERE id=?"
-        )
-        self._execute(sql, (user_id, patient_id))
+        class InviteLinkConflict(Exception):
+            pass
+
+        try:
+            with self.transaction() as connection:
+                if not self.database_url:
+                    # Serialize SQLite invite linking before reading either row.
+                    connection.execute("BEGIN IMMEDIATE")
+
+                invite_sql = (
+                    "SELECT * FROM dental_patient_invites WHERE code_hash=%s AND used_at IS NULL" + lock
+                    if self.database_url
+                    else "SELECT * FROM dental_patient_invites WHERE code_hash=? AND used_at IS NULL"
+                )
+                invites = self._execute(invite_sql, (code_hash,), connection=connection)
+                if not invites or int(float(invites[0]["expires_at"])) < int(time.time()):
+                    return None
+
+                invite = invites[0]
+                patient_sql = (
+                    "SELECT * FROM dental_patients WHERE id=%s AND clinic_id=%s" + lock
+                    if self.database_url
+                    else "SELECT * FROM dental_patients WHERE id=? AND clinic_id=?"
+                )
+                patients = self._execute(
+                    patient_sql,
+                    (invite["patient_id"], invite["clinic_id"]),
+                    connection=connection,
+                )
+                if not patients:
+                    return None
+
+                patient = patients[0]
+                if patient.get("user_id") and patient["user_id"] != user_id:
+                    return None
+
+                consume_sql = (
+                    "UPDATE dental_patient_invites SET used_at=%s,used_by=%s "
+                    "WHERE id=%s AND used_at IS NULL RETURNING id"
+                    if self.database_url
+                    else "UPDATE dental_patient_invites SET used_at=?,used_by=? "
+                    "WHERE id=? AND used_at IS NULL RETURNING id"
+                )
+                consumed = self._execute(
+                    consume_sql, (_now(), user_id, invite["id"]), connection=connection
+                )
+                if not consumed:
+                    return None
+
+                link_sql = (
+                    "UPDATE dental_patients SET user_id=%s "
+                    "WHERE id=%s AND clinic_id=%s AND (user_id IS NULL OR user_id=%s) RETURNING id"
+                    if self.database_url
+                    else "UPDATE dental_patients SET user_id=? "
+                    "WHERE id=? AND clinic_id=? AND (user_id IS NULL OR user_id=?) RETURNING id"
+                )
+                linked = self._execute(
+                    link_sql,
+                    (user_id, invite["patient_id"], invite["clinic_id"], user_id),
+                    connection=connection,
+                )
+                if not linked:
+                    # Roll back invite consumption as well as the attempted link.
+                    raise InviteLinkConflict
+
+                patient["user_id"] = user_id
+                return patient
+        except InviteLinkConflict:
+            return None
 
     def ai_usage_count(
         self, actor_id: str | None, since_epoch: int, clinic_id: str | None = None
