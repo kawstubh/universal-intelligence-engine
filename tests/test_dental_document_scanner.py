@@ -14,6 +14,10 @@ class FakeScannerSocket:
         self.sent = bytearray()
         self.timeout = None
         self.closed = False
+        self.address = None
+
+    def connect(self, address) -> None:
+        self.address = address
 
     def settimeout(self, timeout: float) -> None:
         self.timeout = timeout
@@ -45,12 +49,11 @@ def _configure_private_scanner(monkeypatch, fake_socket: FakeScannerSocket):
     )
     connected = {}
 
-    def connect(address, timeout=None):
-        connected["address"] = address
-        connected["timeout"] = timeout
+    def make_socket(family, socktype, protocol):
+        connected["socket_args"] = (family, socktype, protocol)
         return fake_socket
 
-    monkeypatch.setattr(scanner.socket, "create_connection", connect)
+    monkeypatch.setattr(scanner.socket, "socket", make_socket)
     return connected
 
 
@@ -71,8 +74,8 @@ def test_clamav_instream_sends_bounded_chunks_to_a_private_address(monkeypatch):
     )
     assert result == {"engine": "clamav", "status": "clean"}
     assert bytes(fake_socket.sent) == expected
-    assert connected["address"] == ("10.20.30.40", 3310)
-    assert connected["timeout"] == 20
+    assert connected["socket_args"] == (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
+    assert fake_socket.address == ("10.20.30.40", 3310)
     assert fake_socket.timeout == 20
     assert fake_socket.closed is True
 
@@ -106,7 +109,7 @@ def test_public_scanner_address_is_rejected_before_connect(monkeypatch):
     connected = []
     monkeypatch.setattr(
         scanner.socket,
-        "create_connection",
+        "socket",
         lambda *args, **kwargs: connected.append(args),
     )
 
@@ -137,7 +140,7 @@ def test_link_local_scanner_addresses_are_rejected_before_connect(
     connected = []
     monkeypatch.setattr(
         scanner.socket,
-        "create_connection",
+        "socket",
         lambda *args, **kwargs: connected.append(args),
     )
 
@@ -186,3 +189,34 @@ def test_scanner_timeout_fails_closed(monkeypatch):
 def test_scanner_rejects_payload_above_the_document_limit(monkeypatch):
     with pytest.raises(scanner.DocumentScannerConfigurationError):
         scanner.scan_document_bytes(b"A" * (scanner.MAX_SCAN_BYTES + 1))
+
+
+def test_private_ipv6_ula_scanner_connects_using_the_full_sockaddr(monkeypatch):
+    fake_socket = FakeScannerSocket(b"stream: OK\\0")
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_HOST", "clamav.internal")
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_PORT", "3310")
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_TIMEOUT_SECONDS", "20")
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_PRIVATE", "true")
+    sockaddr = ("fd12:3456:789a::10", 3310, 0, 0)
+    monkeypatch.setattr(
+        scanner.socket,
+        "getaddrinfo",
+        lambda host, port, type: [
+            (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)
+        ],
+    )
+    socket_args = {}
+
+    def make_socket(family, socktype, protocol):
+        socket_args["value"] = (family, socktype, protocol)
+        return fake_socket
+
+    monkeypatch.setattr(scanner.socket, "socket", make_socket)
+
+    result = scanner.scan_document_bytes(b"synthetic IPv6 test bytes")
+
+    assert result == {"engine": "clamav", "status": "clean"}
+    assert socket_args["value"] == (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP)
+    assert fake_socket.address == sockaddr
+    assert fake_socket.timeout == 20
+    assert fake_socket.closed is True
