@@ -48,6 +48,9 @@ def test_local_oralyn_preflight_allows_explicit_test_origin():
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
     assert "POST" in response.headers["access-control-allow-methods"]
     assert response.headers["access-control-allow-credentials"] == "true"
+    exposed = response.headers["access-control-expose-headers"].lower()
+    assert "strict-transport-security" in exposed
+    assert "x-content-type-options" in exposed
 
 
 def test_unlisted_browser_origin_is_not_reflected():
