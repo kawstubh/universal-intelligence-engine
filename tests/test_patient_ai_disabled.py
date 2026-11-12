@@ -9,26 +9,39 @@ DISABLED_AI_PATHS = [
     "/v1/dental/ai/patient/triage",
     "/v1/dental/ai/patient/treatment-explanation",
     "/v1/dental/ai/patient/aftercare",
+    "/v1/dental/ai/patient/consent",
+    "/v1/dental/ai/patient/history",
+]
+
+DISABLED_AI_METHODS = [
+    ("POST", "/v1/dental/ai/patient/chat"),
+    ("POST", "/v1/dental/ai/patient/triage"),
+    ("POST", "/v1/dental/ai/patient/treatment-explanation"),
+    ("POST", "/v1/dental/ai/patient/aftercare"),
+    ("POST", "/v1/dental/ai/patient/consent"),
+    ("GET", "/v1/dental/ai/patient/history"),
+    ("DELETE", "/v1/dental/ai/patient/history"),
 ]
 
 
-def test_patient_ai_routes_are_server_disabled():
-    for path in DISABLED_AI_PATHS:
-        response = client.post(path, json={})
-        assert response.status_code == 404, (path, response.text)
+def test_patient_ai_routes_are_server_disabled_for_every_method():
+    for method, path in DISABLED_AI_METHODS:
+        response = client.request(method, path, json={} if method == "POST" else None)
+        assert response.status_code == 404, (method, path, response.status_code, response.text)
         assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
 
 
 def test_patient_account_data_routes_remain_available_behind_patient_auth():
-    for path in [
-        "/v1/dental/ai/patient/link",
-        "/v1/dental/ai/patient/consent",
-        "/v1/dental/ai/patient/history",
-        "/v1/dental/ai/patient/appointments",
-        "/v1/dental/ai/patient/chart",
-    ]:
-        response = client.get(path) if path.endswith(("history", "appointments", "chart")) else client.post(path, json={})
-        assert response.status_code == 401, (path, response.status_code, response.text)
+    routes = [
+        ("POST", "/v1/dental/ai/patient/link"),
+        ("GET", "/v1/dental/ai/patient/appointments"),
+        ("GET", "/v1/dental/ai/patient/chart"),
+        ("POST", "/v1/dental/ai/patient/device"),
+        ("GET", "/v1/dental/ai/patient/recall"),
+    ]
+    for method, path in routes:
+        response = client.request(method, path, json={} if method == "POST" else None)
+        assert response.status_code == 401, (method, path, response.status_code, response.text)
 
 
 def test_openapi_hides_patient_ai_and_keeps_doctor_ai_and_patient_records():
