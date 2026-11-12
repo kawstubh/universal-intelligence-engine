@@ -76,6 +76,9 @@ async def disable_patient_ai(request: Request, call_next):
         "/v1/dental/ai/patient/triage",
         "/v1/dental/ai/patient/treatment-explanation",
         "/v1/dental/ai/patient/aftercare",
+        # Consent and stored AI history are part of the patient AI surface too.
+        "/v1/dental/ai/patient/consent",
+        "/v1/dental/ai/patient/history",
     }
     if path in disabled_patient_ai:
         return JSONResponse(
@@ -111,6 +114,8 @@ def _doctor_only_openapi():
             "/v1/dental/ai/patient/triage",
             "/v1/dental/ai/patient/treatment-explanation",
             "/v1/dental/ai/patient/aftercare",
+            "/v1/dental/ai/patient/consent",
+            "/v1/dental/ai/patient/history",
         }
     }
     app.openapi_schema = schema
