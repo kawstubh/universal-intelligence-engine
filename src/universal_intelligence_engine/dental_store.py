@@ -8,7 +8,6 @@ this module never creates tables directly.
 from __future__ import annotations
 
 import hashlib
-from contextlib import contextmanager
 import json
 import os
 import secrets
@@ -16,6 +15,7 @@ import sqlite3
 import string
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -680,6 +680,532 @@ class DentalStore:
             (_id(), actor_id, action, resource_type, resource_id, clinic_id, "{}", _now()),
             connection=connection,
         )
+
+
+    def _treatment_plan_items(self, plan_id: str, clinic_id: str, connection=None):
+        sql = (
+            "SELECT id,service_code,description,tooth_fdi,status,sort_order,created_at,updated_at "
+            "FROM dental_treatment_plan_items WHERE clinic_id=%s AND plan_id=%s ORDER BY sort_order,id"
+            if self.database_url
+            else "SELECT id,service_code,description,tooth_fdi,status,sort_order,created_at,updated_at "
+            "FROM dental_treatment_plan_items WHERE clinic_id=? AND plan_id=? ORDER BY sort_order,id"
+        )
+        return self._execute(sql, (clinic_id, plan_id), connection=connection)
+
+    def treatment_plans(
+        self, clinic_id: str, patient_id: str, patient_visible_only: bool = False
+    ) -> list[dict[str, Any]]:
+        visibility = (
+            " AND patient_visible=true AND status <> 'draft' AND status <> 'cancelled'"
+            if self.database_url
+            else " AND patient_visible=1 AND status NOT IN ('draft','cancelled')"
+        ) if patient_visible_only else ""
+        sql = (
+            "SELECT * FROM dental_treatment_plans WHERE clinic_id=%s AND patient_id=%s"
+            + visibility + " ORDER BY created_at DESC"
+            if self.database_url
+            else "SELECT * FROM dental_treatment_plans WHERE clinic_id=? AND patient_id=?"
+            + visibility + " ORDER BY created_at DESC"
+        )
+        plans = self._execute(sql, (clinic_id, patient_id))
+        for plan in plans:
+            plan["items"] = self._treatment_plan_items(plan["id"], clinic_id)
+        return plans
+
+    def create_treatment_plan(
+        self, data: dict[str, Any], clinic_id: str, doctor_id: str
+    ) -> dict[str, Any]:
+        plan_id = _id()
+        now = _now()
+        with self.transaction() as connection:
+            patient_sql = (
+                "SELECT id FROM dental_patients WHERE id=%s AND clinic_id=%s"
+                if self.database_url
+                else "SELECT id FROM dental_patients WHERE id=? AND clinic_id=?"
+            )
+            if not self._execute(patient_sql, (data["patient_id"], clinic_id), connection=connection):
+                raise ValueError("Patient not found in this workspace")
+            plan = {
+                "id": plan_id,
+                "clinic_id": clinic_id,
+                "patient_id": data["patient_id"],
+                "created_by_doctor_id": doctor_id,
+                "title": data["title"].strip(),
+                "summary": data.get("summary", "").strip(),
+                "status": "draft",
+                "patient_visible": False,
+                "version": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+            sql = (
+                "INSERT INTO dental_treatment_plans(id,clinic_id,patient_id,created_by_doctor_id,title,summary,status,patient_visible,version,created_at,updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                if self.database_url
+                else "INSERT INTO dental_treatment_plans(id,clinic_id,patient_id,created_by_doctor_id,title,summary,status,patient_visible,version,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+            )
+            self._execute(sql, tuple(plan[key] for key in (
+                "id","clinic_id","patient_id","created_by_doctor_id","title","summary",
+                "status","patient_visible","version","created_at","updated_at"
+            )), connection=connection)
+            for index, item in enumerate(data.get("items", [])):
+                item_row = {
+                    "id": _id(),
+                    "clinic_id": clinic_id,
+                    "plan_id": plan_id,
+                    "service_code": item.get("service_code", "").strip(),
+                    "description": item["description"].strip(),
+                    "tooth_fdi": item.get("tooth_fdi"),
+                    "status": "planned",
+                    "sort_order": index,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                item_sql = (
+                    "INSERT INTO dental_treatment_plan_items(id,clinic_id,plan_id,service_code,description,tooth_fdi,status,sort_order,created_at,updated_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                    if self.database_url
+                    else "INSERT INTO dental_treatment_plan_items(id,clinic_id,plan_id,service_code,description,tooth_fdi,status,sort_order,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)"
+                )
+                self._execute(item_sql, tuple(item_row[key] for key in (
+                    "id","clinic_id","plan_id","service_code","description","tooth_fdi",
+                    "status","sort_order","created_at","updated_at"
+                )), connection=connection)
+            self.audit(doctor_id, "treatment_plan.created", "treatment_plan", plan_id, clinic_id, connection)
+            plan["items"] = self._treatment_plan_items(plan_id, clinic_id, connection)
+        return plan
+
+    def update_treatment_plan(
+        self, plan_id: str, clinic_id: str, doctor_id: str, changes: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        allowed = {"title", "summary", "status", "patient_visible", "items"}
+        expected_version = changes.pop("expected_version", None)
+        changes = {key: value for key, value in changes.items() if key in allowed}
+        if not changes:
+            return None
+        with self.transaction() as connection:
+            lock = " FOR UPDATE" if self.database_url else ""
+            sql = (
+                "SELECT * FROM dental_treatment_plans WHERE id=%s AND clinic_id=%s" + lock
+                if self.database_url
+                else "SELECT * FROM dental_treatment_plans WHERE id=? AND clinic_id=?"
+            )
+            rows = self._execute(sql, (plan_id, clinic_id), connection=connection)
+            if not rows:
+                return None
+            current = rows[0]
+            if expected_version is not None and int(current["version"]) != int(expected_version):
+                raise ValueError("Treatment plan version conflict; reload before saving")
+            next_status = changes.get("status", current["status"])
+            transitions = {
+                "draft": {"proposed", "cancelled"},
+                "proposed": {"accepted", "cancelled"},
+                "accepted": {"in_progress", "cancelled"},
+                "in_progress": {"completed", "cancelled"},
+                "completed": set(),
+                "cancelled": set(),
+            }
+            if next_status != current["status"] and next_status not in transitions.get(current["status"], set()):
+                raise ValueError(f"Treatment plan cannot transition from {current['status']} to {next_status}")
+            if changes.get("patient_visible") is True and next_status in {"draft", "cancelled"}:
+                raise ValueError("A treatment plan must be proposed before it can be shared")
+            items = changes.pop("items", None)
+            if items is not None and current["status"] != "draft":
+                raise ValueError("Treatment plan items can only be edited while the plan is a draft")
+            set_parts, params = [], []
+            for key, value in changes.items():
+                set_parts.append(f"{key}=" + ("%s" if self.database_url else "?"))
+                params.append(value)
+            set_parts.extend([
+                "version=version+1",
+                "updated_at=" + ("%s" if self.database_url else "?"),
+            ])
+            params.append(_now())
+            params.extend([plan_id, clinic_id])
+            update_sql = (
+                "UPDATE dental_treatment_plans SET " + ",".join(set_parts) + " WHERE id=%s AND clinic_id=%s"
+                if self.database_url
+                else "UPDATE dental_treatment_plans SET " + ",".join(set_parts) + " WHERE id=? AND clinic_id=?"
+            )
+            self._execute(update_sql, tuple(params), connection=connection)
+            if items is not None:
+                delete_sql = (
+                    "DELETE FROM dental_treatment_plan_items WHERE clinic_id=%s AND plan_id=%s"
+                    if self.database_url
+                    else "DELETE FROM dental_treatment_plan_items WHERE clinic_id=? AND plan_id=?"
+                )
+                self._execute(delete_sql, (clinic_id, plan_id), connection=connection)
+                now = _now()
+                for index, item in enumerate(items):
+                    item_row = {
+                        "id": _id(), "clinic_id": clinic_id, "plan_id": plan_id,
+                        "service_code": item.get("service_code", "").strip(),
+                        "description": item["description"].strip(), "tooth_fdi": item.get("tooth_fdi"),
+                        "status": "planned", "sort_order": index, "created_at": now, "updated_at": now,
+                    }
+                    item_sql = (
+                        "INSERT INTO dental_treatment_plan_items(id,clinic_id,plan_id,service_code,description,tooth_fdi,status,sort_order,created_at,updated_at) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                        if self.database_url
+                        else "INSERT INTO dental_treatment_plan_items(id,clinic_id,plan_id,service_code,description,tooth_fdi,status,sort_order,created_at,updated_at) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)"
+                    )
+                    self._execute(item_sql, tuple(item_row[key] for key in (
+                        "id","clinic_id","plan_id","service_code","description","tooth_fdi",
+                        "status","sort_order","created_at","updated_at"
+                    )), connection=connection)
+            self.audit(doctor_id, "treatment_plan.updated", "treatment_plan", plan_id, clinic_id, connection)
+            rows = self._execute(sql, (plan_id, clinic_id), connection=connection)
+            plan = rows[0] if rows else None
+            if plan:
+                plan["items"] = self._treatment_plan_items(plan_id, clinic_id, connection)
+            return plan
+
+    def _invoice_items(self, invoice_id: str, clinic_id: str, connection=None):
+        sql = (
+            "SELECT id,description,quantity_milli,unit_price_paise,tax_rate_bps,subtotal_paise,discount_paise,tax_paise,total_paise,sort_order,created_at "
+            "FROM dental_invoice_items WHERE clinic_id=%s AND invoice_id=%s ORDER BY sort_order,id"
+            if self.database_url
+            else "SELECT id,description,quantity_milli,unit_price_paise,tax_rate_bps,subtotal_paise,discount_paise,tax_paise,total_paise,sort_order,created_at "
+            "FROM dental_invoice_items WHERE clinic_id=? AND invoice_id=? ORDER BY sort_order,id"
+        )
+        return self._execute(sql, (clinic_id, invoice_id), connection=connection)
+
+    def _invoice_receipts(self, invoice_id: str, clinic_id: str, connection=None):
+        sql = (
+            "SELECT id,receipt_number,invoice_id,patient_id,amount_paise,method,reference,idempotency_key,paid_at,created_at "
+            "FROM dental_receipts WHERE clinic_id=%s AND invoice_id=%s ORDER BY paid_at,id"
+            if self.database_url
+            else "SELECT id,receipt_number,invoice_id,patient_id,amount_paise,method,reference,idempotency_key,paid_at,created_at "
+            "FROM dental_receipts WHERE clinic_id=? AND invoice_id=? ORDER BY paid_at,id"
+        )
+        return self._execute(sql, (clinic_id, invoice_id), connection=connection)
+
+    def get_invoice(self, invoice_id: str, clinic_id: str, connection=None):
+        sql = (
+            "SELECT * FROM dental_invoices WHERE id=%s AND clinic_id=%s"
+            if self.database_url
+            else "SELECT * FROM dental_invoices WHERE id=? AND clinic_id=?"
+        )
+        rows = self._execute(sql, (invoice_id, clinic_id), connection=connection)
+        if not rows:
+            return None
+        invoice = rows[0]
+        invoice["items"] = self._invoice_items(invoice_id, clinic_id, connection)
+        invoice["receipts"] = self._invoice_receipts(invoice_id, clinic_id, connection)
+        invoice["balance_paise"] = int(invoice["total_paise"]) - int(invoice["paid_paise"])
+        return invoice
+
+    def invoices(
+        self, clinic_id: str, patient_id: str, patient_visible_only: bool = False
+    ) -> list[dict[str, Any]]:
+        visibility = (
+            " AND patient_visible=true AND status NOT IN ('draft','void')"
+            if self.database_url
+            else " AND patient_visible=1 AND status NOT IN ('draft','void')"
+        ) if patient_visible_only else ""
+        sql = (
+            "SELECT id,clinic_id,patient_id,created_by_doctor_id,invoice_number,idempotency_key,currency,status,subtotal_paise,discount_paise,tax_paise,total_paise,paid_paise,patient_visible,patient_note,due_date,issued_at,voided_at,created_at,updated_at "
+            "FROM dental_invoices WHERE clinic_id=%s AND patient_id=%s" + visibility + " ORDER BY created_at DESC"
+            if self.database_url
+            else "SELECT id,clinic_id,patient_id,created_by_doctor_id,invoice_number,idempotency_key,currency,status,subtotal_paise,discount_paise,tax_paise,total_paise,paid_paise,patient_visible,patient_note,due_date,issued_at,voided_at,created_at,updated_at "
+            "FROM dental_invoices WHERE clinic_id=? AND patient_id=?" + visibility + " ORDER BY created_at DESC"
+        )
+        rows = self._execute(sql, (clinic_id, patient_id))
+        result = []
+        for row in rows:
+            row["items"] = self._invoice_items(row["id"], clinic_id)
+            row["receipts"] = self._invoice_receipts(row["id"], clinic_id)
+            row["balance_paise"] = int(row["total_paise"]) - int(row["paid_paise"])
+            result.append(row)
+        return result
+
+    @staticmethod
+    def _invoice_request_matches(existing: dict[str, Any] | None, requested: dict[str, Any], items: list[dict[str, Any]]) -> bool:
+        if not existing:
+            return False
+        keys = ("patient_id", "subtotal_paise", "discount_paise", "tax_paise", "total_paise", "patient_note")
+        if any(str(existing.get(key, "")) != str(requested.get(key, "")) for key in keys):
+            return False
+        fields = ("description", "quantity_milli", "unit_price_paise", "tax_rate_bps", "subtotal_paise", "discount_paise", "tax_paise", "total_paise")
+        existing_items = existing.get("items", [])
+        if len(existing_items) != len(items):
+            return False
+        return all(
+            all(str(left.get(field, "")) == str(right.get(field, "")) for field in fields)
+            for left, right in zip(existing_items, items)
+        )
+
+    def create_invoice(
+        self, data: dict[str, Any], clinic_id: str, doctor_id: str
+    ) -> dict[str, Any]:
+        items = data.get("items") or []
+        if not items:
+            raise ValueError("An invoice must contain at least one line item")
+        subtotal = 0
+        tax_total = 0
+        calculated_items = []
+        now = _now()
+        for index, item in enumerate(items):
+            quantity = int(item["quantity_milli"])
+            unit_price = int(item["unit_price_paise"])
+            tax_rate = int(item.get("tax_rate_bps", 0))
+            if quantity <= 0 or unit_price < 0 or tax_rate < 0 or tax_rate > 2800:
+                raise ValueError("Invoice line item amount is invalid")
+            line_subtotal = (quantity * unit_price + 500) // 1000
+            subtotal += line_subtotal
+            calculated_items.append({
+                "id": _id(), "clinic_id": clinic_id, "description": item["description"].strip(),
+                "quantity_milli": quantity, "unit_price_paise": unit_price,
+                "tax_rate_bps": tax_rate, "subtotal_paise": line_subtotal,
+                "discount_paise": 0, "tax_paise": 0, "total_paise": 0,
+                "sort_order": index, "created_at": now,
+            })
+        discount = int(data.get("discount_paise", 0))
+        if discount < 0 or discount > subtotal:
+            raise ValueError("Invoice discount must not exceed the pre-tax subtotal")
+        remaining_discount = discount
+        for index, item in enumerate(calculated_items):
+            if index == len(calculated_items) - 1:
+                line_discount = remaining_discount
+            elif subtotal:
+                line_discount = (discount * int(item["subtotal_paise"])) // subtotal
+                remaining_discount -= line_discount
+            else:
+                line_discount = 0
+            taxable = int(item["subtotal_paise"]) - line_discount
+            line_tax = (taxable * int(item["tax_rate_bps"]) + 5000) // 10000
+            item["discount_paise"] = line_discount
+            item["tax_paise"] = line_tax
+            item["total_paise"] = taxable + line_tax
+            tax_total += line_tax
+        total = subtotal - discount + tax_total
+        if total <= 0:
+            raise ValueError("Invoice total must be greater than zero")
+        invoice_id = _id()
+        invoice_number = "INV-" + datetime.now(UTC).strftime("%Y%m") + "-" + uuid.uuid4().hex[:8].upper()
+        idempotency_key = str(data["idempotency_key"]).strip()
+        if len(idempotency_key) < 16 or len(idempotency_key) > 128:
+            raise ValueError("Invoice idempotency key must be 16-128 characters")
+        invoice = {
+            "id": invoice_id, "clinic_id": clinic_id, "patient_id": data["patient_id"],
+            "created_by_doctor_id": doctor_id, "invoice_number": invoice_number,
+            "idempotency_key": idempotency_key, "currency": "INR", "status": "draft", "subtotal_paise": subtotal,
+            "discount_paise": discount, "tax_paise": tax_total, "total_paise": total,
+            "paid_paise": 0, "patient_visible": False, "patient_note": data.get("patient_note", "").strip(),
+            "due_date": None, "issued_at": None, "voided_at": None,
+            "created_at": now, "updated_at": now,
+        }
+        with self.transaction() as connection:
+            patient_sql = (
+                "SELECT id FROM dental_patients WHERE id=%s AND clinic_id=%s"
+                if self.database_url
+                else "SELECT id FROM dental_patients WHERE id=? AND clinic_id=?"
+            )
+            if not self._execute(patient_sql, (data["patient_id"], clinic_id), connection=connection):
+                raise ValueError("Patient not found in this workspace")
+            existing_sql = (
+                "SELECT id FROM dental_invoices WHERE clinic_id=%s AND idempotency_key=%s"
+                if self.database_url
+                else "SELECT id FROM dental_invoices WHERE clinic_id=? AND idempotency_key=?"
+            )
+            existing = self._execute(existing_sql, (clinic_id, idempotency_key), connection=connection)
+            if existing:
+                existing_invoice = self.get_invoice(existing[0]["id"], clinic_id, connection=connection)
+                if not self._invoice_request_matches(existing_invoice, invoice, calculated_items):
+                    raise ValueError("Invoice idempotency key was already used for a different invoice")
+                return existing_invoice
+            invoice_sql = (
+                "INSERT INTO dental_invoices(id,clinic_id,patient_id,created_by_doctor_id,invoice_number,idempotency_key,currency,status,subtotal_paise,discount_paise,tax_paise,total_paise,paid_paise,patient_visible,patient_note,due_date,issued_at,voided_at,created_at,updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (clinic_id,idempotency_key) DO NOTHING RETURNING id"
+                if self.database_url
+                else "INSERT INTO dental_invoices(id,clinic_id,patient_id,created_by_doctor_id,invoice_number,idempotency_key,currency,status,subtotal_paise,discount_paise,tax_paise,total_paise,paid_paise,patient_visible,patient_note,due_date,issued_at,voided_at,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(clinic_id,idempotency_key) DO NOTHING RETURNING id"
+            )
+            inserted = self._execute(invoice_sql, tuple(invoice[key] for key in (
+                "id","clinic_id","patient_id","created_by_doctor_id","invoice_number","idempotency_key","currency",
+                "status","subtotal_paise","discount_paise","tax_paise","total_paise","paid_paise",
+                "patient_visible","patient_note","due_date","issued_at","voided_at","created_at","updated_at"
+            )), connection=connection)
+            if not inserted:
+                existing = self._execute(existing_sql, (clinic_id, idempotency_key), connection=connection)
+                if not existing:
+                    raise ValueError("Invoice idempotency conflict could not be reconciled")
+                existing_invoice = self.get_invoice(existing[0]["id"], clinic_id, connection=connection)
+                if not self._invoice_request_matches(existing_invoice, invoice, calculated_items):
+                    raise ValueError("Invoice idempotency key was already used for a different invoice")
+                return existing_invoice
+            for item in calculated_items:
+                item["invoice_id"] = invoice_id
+                item_sql = (
+                    "INSERT INTO dental_invoice_items(id,clinic_id,invoice_id,description,quantity_milli,unit_price_paise,tax_rate_bps,subtotal_paise,discount_paise,tax_paise,total_paise,sort_order,created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                    if self.database_url
+                    else "INSERT INTO dental_invoice_items(id,clinic_id,invoice_id,description,quantity_milli,unit_price_paise,tax_rate_bps,subtotal_paise,discount_paise,tax_paise,total_paise,sort_order,created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                )
+                self._execute(item_sql, tuple(item[key] for key in (
+                    "id","clinic_id","invoice_id","description","quantity_milli","unit_price_paise",
+                    "tax_rate_bps","subtotal_paise","discount_paise","tax_paise","total_paise","sort_order","created_at"
+                )), connection=connection)
+            self.audit(doctor_id, "invoice.created", "invoice", invoice_id, clinic_id, connection)
+        return self.get_invoice(invoice_id, clinic_id)
+
+    def issue_invoice(
+        self, invoice_id: str, clinic_id: str, doctor_id: str, due_date: str | None = None
+    ) -> dict[str, Any] | None:
+        now = _now()
+        with self.transaction() as connection:
+            lock = " FOR UPDATE" if self.database_url else ""
+            sql = (
+                "SELECT status FROM dental_invoices WHERE id=%s AND clinic_id=%s" + lock
+                if self.database_url
+                else "SELECT status FROM dental_invoices WHERE id=? AND clinic_id=?"
+            )
+            rows = self._execute(sql, (invoice_id, clinic_id), connection=connection)
+            if not rows:
+                return None
+            if rows[0]["status"] != "draft":
+                raise ValueError("Only a draft invoice can be issued")
+            update_sql = (
+                "UPDATE dental_invoices SET status='issued',patient_visible=true,due_date=%s,issued_at=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
+                if self.database_url
+                else "UPDATE dental_invoices SET status='issued',patient_visible=1,due_date=?,issued_at=?,updated_at=? WHERE id=? AND clinic_id=?"
+            )
+            self._execute(update_sql, (due_date, now, now, invoice_id, clinic_id), connection=connection)
+            self.audit(doctor_id, "invoice.issued", "invoice", invoice_id, clinic_id, connection)
+        return self.get_invoice(invoice_id, clinic_id)
+
+    def record_invoice_receipt(
+        self, invoice_id: str, clinic_id: str, doctor_id: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        idempotency_key = data["idempotency_key"].strip()
+        amount = int(data["amount_paise"])
+        if amount <= 0:
+            raise ValueError("Receipt amount must be greater than zero")
+        with self.transaction() as connection:
+            existing_sql = (
+                "SELECT * FROM dental_receipts WHERE clinic_id=%s AND idempotency_key=%s"
+                if self.database_url
+                else "SELECT * FROM dental_receipts WHERE clinic_id=? AND idempotency_key=?"
+            )
+            existing = self._execute(existing_sql, (clinic_id, idempotency_key), connection=connection)
+            if existing:
+                receipt = existing[0]
+                if (
+                    receipt["invoice_id"] != invoice_id
+                    or int(receipt["amount_paise"]) != amount
+                    or receipt["method"] != data["method"]
+                ):
+                    raise ValueError("Idempotency key was already used for a different receipt")
+                return receipt
+            lock = " FOR UPDATE" if self.database_url else ""
+            invoice_sql = (
+                "SELECT * FROM dental_invoices WHERE id=%s AND clinic_id=%s" + lock
+                if self.database_url
+                else "SELECT * FROM dental_invoices WHERE id=? AND clinic_id=?"
+            )
+            rows = self._execute(invoice_sql, (invoice_id, clinic_id), connection=connection)
+            if not rows:
+                raise ValueError("Invoice not found in this workspace")
+            invoice = rows[0]
+            if invoice["status"] not in ("issued", "partially_paid", "overdue"):
+                raise ValueError("Receipts can only be recorded against an issued invoice")
+            balance = int(invoice["total_paise"]) - int(invoice["paid_paise"])
+            if amount > balance:
+                raise ValueError("Receipt amount exceeds the outstanding invoice balance")
+            now = _now()
+            receipt = {
+                "id": _id(), "clinic_id": clinic_id, "invoice_id": invoice_id,
+                "patient_id": invoice["patient_id"],
+                "receipt_number": "RCPT-" + datetime.now(UTC).strftime("%Y%m") + "-" + uuid.uuid4().hex[:8].upper(),
+                "amount_paise": amount, "method": data["method"],
+                "reference": data.get("reference", "").strip(),
+                "idempotency_key": idempotency_key, "paid_at": data.get("paid_at") or now,
+                "created_by_doctor_id": doctor_id, "created_at": now,
+            }
+            receipt_sql = (
+                "INSERT INTO dental_receipts(id,clinic_id,invoice_id,patient_id,receipt_number,amount_paise,method,reference,idempotency_key,paid_at,created_by_doctor_id,created_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (clinic_id,idempotency_key) DO NOTHING RETURNING id"
+                if self.database_url
+                else "INSERT INTO dental_receipts(id,clinic_id,invoice_id,patient_id,receipt_number,amount_paise,method,reference,idempotency_key,paid_at,created_by_doctor_id,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(clinic_id,idempotency_key) DO NOTHING RETURNING id"
+            )
+            inserted = self._execute(receipt_sql, tuple(receipt[key] for key in (
+                "id","clinic_id","invoice_id","patient_id","receipt_number","amount_paise",
+                "method","reference","idempotency_key","paid_at","created_by_doctor_id","created_at"
+            )), connection=connection)
+            if not inserted:
+                duplicate = self._execute(existing_sql, (clinic_id, idempotency_key), connection=connection)
+                if duplicate and duplicate[0]["invoice_id"] == invoice_id and int(duplicate[0]["amount_paise"]) == amount and duplicate[0]["method"] == data["method"]:
+                    return duplicate[0]
+                raise ValueError("Idempotency key was already used for a different receipt")
+            paid = int(invoice["paid_paise"]) + amount
+            status = "paid" if paid == int(invoice["total_paise"]) else "partially_paid"
+            update_sql = (
+                "UPDATE dental_invoices SET paid_paise=%s,status=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
+                if self.database_url
+                else "UPDATE dental_invoices SET paid_paise=?,status=?,updated_at=? WHERE id=? AND clinic_id=?"
+            )
+            self._execute(update_sql, (paid, status, now, invoice_id, clinic_id), connection=connection)
+            self.audit(doctor_id, "invoice.receipt_recorded", "receipt", receipt["id"], clinic_id, connection)
+        return receipt
+
+    def void_invoice(self, invoice_id: str, clinic_id: str, doctor_id: str):
+        with self.transaction() as connection:
+            lock = " FOR UPDATE" if self.database_url else ""
+            sql = (
+                "SELECT status FROM dental_invoices WHERE id=%s AND clinic_id=%s" + lock
+                if self.database_url
+                else "SELECT status FROM dental_invoices WHERE id=? AND clinic_id=?"
+            )
+            rows = self._execute(sql, (invoice_id, clinic_id), connection=connection)
+            if not rows:
+                return None
+            if rows[0]["status"] not in ("draft", "issued", "overdue"):
+                raise ValueError("Only an unpaid invoice can be voided")
+            count_sql = (
+                "SELECT COUNT(*) AS n FROM dental_receipts WHERE clinic_id=%s AND invoice_id=%s"
+                if self.database_url
+                else "SELECT COUNT(*) AS n FROM dental_receipts WHERE clinic_id=? AND invoice_id=?"
+            )
+            count = self._execute(count_sql, (clinic_id, invoice_id), connection=connection)
+            if count and int(count[0]["n"]) > 0:
+                raise ValueError("An invoice with receipts cannot be voided")
+            now = _now()
+            update_sql = (
+                "UPDATE dental_invoices SET status='void',patient_visible=false,voided_at=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
+                if self.database_url
+                else "UPDATE dental_invoices SET status='void',patient_visible=0,voided_at=?,updated_at=? WHERE id=? AND clinic_id=?"
+            )
+            self._execute(update_sql, (now, now, invoice_id, clinic_id), connection=connection)
+            self.audit(doctor_id, "invoice.voided", "invoice", invoice_id, clinic_id, connection)
+        return self.get_invoice(invoice_id, clinic_id)
+
+    def receipts(
+        self, clinic_id: str, patient_id: str, patient_visible_only: bool = False
+    ) -> list[dict[str, Any]]:
+        visibility = (
+            " AND i.patient_visible=true AND i.status <> 'void'"
+            if self.database_url
+            else " AND i.patient_visible=1 AND i.status <> 'void'"
+        ) if patient_visible_only else ""
+        sql = (
+            "SELECT r.id,r.clinic_id,r.invoice_id,r.patient_id,r.receipt_number,r.amount_paise,r.method,r.reference,r.paid_at,r.created_at "
+            "FROM dental_receipts r JOIN dental_invoices i ON i.id=r.invoice_id AND i.clinic_id=r.clinic_id "
+            "WHERE r.clinic_id=%s AND r.patient_id=%s" + visibility + " ORDER BY r.paid_at DESC"
+            if self.database_url
+            else "SELECT r.id,r.clinic_id,r.invoice_id,r.patient_id,r.receipt_number,r.amount_paise,r.method,r.reference,r.paid_at,r.created_at "
+            "FROM dental_receipts r JOIN dental_invoices i ON i.id=r.invoice_id AND i.clinic_id=r.clinic_id "
+            "WHERE r.clinic_id=? AND r.patient_id=?" + visibility + " ORDER BY r.paid_at DESC"
+        )
+        return self._execute(sql, (clinic_id, patient_id))
 
     def patient_by_user_id(self, user_id: str, patient_id: str | None = None):
         if patient_id:

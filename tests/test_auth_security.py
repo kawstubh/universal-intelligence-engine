@@ -10,6 +10,14 @@ PUBLIC_PATHS = {
     "/v1/dental/billing/razorpay/webhook",
 }
 PATIENT_PATH_PREFIX = "/v1/dental/ai/patient/"
+PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
+PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
+PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
+PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
+PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
+PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
+PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
+PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
 DISABLED_PATIENT_AI = {
     "/v1/dental/ai/patient/chat",
     "/v1/dental/ai/patient/triage",
@@ -59,7 +67,7 @@ def test_protected_dental_routes_require_the_correct_auth_dependency():
             getattr(dep.call, "__name__", "")
             for dep in getattr(route, "dependant", None).dependencies
         }
-        if path.startswith(PATIENT_PATH_PREFIX):
+        if path.startswith((PATIENT_PATH_PREFIX, PATIENT_DATA_PATH_PREFIX)):
             assert "require_patient" in dependency_calls, f"missing patient auth on {path}"
         else:
             assert "require_doctor" in dependency_calls, f"missing doctor auth on {path}"
