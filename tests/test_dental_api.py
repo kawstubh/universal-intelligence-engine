@@ -53,6 +53,7 @@ def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch):
             }
 
     monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", lambda _ip: None)
     monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "clinic-a")
     client = TestClient(app)
     response = client.post(
