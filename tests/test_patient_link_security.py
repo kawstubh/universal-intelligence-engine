@@ -21,9 +21,10 @@ def test_patient_account_routes_require_patient_authentication():
             if payload is not None
             else getattr(client, method)(path)
         )
-        assert response.status_code == 401, (
-            f"{method.upper()} {path} must require patient auth, got {response.status_code}"
+        assert response.status_code == 403, (
+            f"{method.upper()} {path} must remain disabled, got {response.status_code}"
         )
+        assert response.json()["detail"]["code"] == "PATIENT_ACCOUNTS_DISABLED"
 
 
 
