@@ -66,6 +66,7 @@ def test_openapi_hides_patient_ai_and_keeps_doctor_ai_and_patient_records():
     assert "/v1/dental/patient/link" in paths
     assert "/v1/dental/patient/appointments" in paths
     assert "/v1/dental/patient/chart" in paths
+    assert "/v1/dental/doctor/patients/{patient_id}/invite" in paths
     assert "/v1/dental/ai/doctor/patient-summary" in paths
     assert "/v1/dental/intelligence/run" in paths
 
