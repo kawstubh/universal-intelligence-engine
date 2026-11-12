@@ -274,7 +274,9 @@ def test_doctor_and_patient_routes_remain_auth_protected():
     app = FastAPI()
     app.include_router(dental_patient_care.router)
     client = TestClient(app)
-    assert client.get("/v1/dental/patient/invoices").status_code == 401
+    patient_response = client.get("/v1/dental/patient/invoices")
+    assert patient_response.status_code == 403
+    assert patient_response.json()["detail"]["code"] == "PATIENT_ACCOUNTS_DISABLED"
     assert client.get("/v1/dental/doctor/patients/missing/invoices").status_code == 401
 
 
