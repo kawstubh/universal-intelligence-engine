@@ -1207,6 +1207,183 @@ class DentalStore:
         )
         return self._execute(sql, (clinic_id, patient_id))
 
+
+    def get_clinic(self, clinic_id: str) -> dict[str, Any] | None:
+        rows = self._execute(
+            "SELECT id,organisation_id,name FROM dental_clinics WHERE id=%s"
+            if self.database_url
+            else "SELECT id,organisation_id,name FROM dental_clinics WHERE id=?",
+            (clinic_id,),
+        )
+        return rows[0] if rows else None
+
+    def create_document(
+        self, data: dict[str, Any], clinic_id: str, doctor_id: str
+    ) -> dict[str, Any]:
+        now = _now()
+        size_bytes = int(data["size_bytes"])
+        checksum_sha256 = str(data["checksum_sha256"]).lower()
+        if size_bytes <= 0 or size_bytes > 10 * 1024 * 1024:
+            raise ValueError("Document size is outside the allowed range")
+        if len(checksum_sha256) != 64 or any(char not in "0123456789abcdef" for char in checksum_sha256):
+            raise ValueError("Document SHA-256 checksum is invalid")
+        object_key = str(data["object_key"])
+        if not object_key or len(object_key) > 1024:
+            raise ValueError("Document object key is invalid")
+        document = {
+            "id": data["id"],
+            "organisation_id": data["organisation_id"],
+            "clinic_id": clinic_id,
+            "patient_id": data["patient_id"],
+            "uploaded_by_doctor_id": doctor_id,
+            "file_name": data["file_name"],
+            "content_type": data["content_type"],
+            "size_bytes": size_bytes,
+            "checksum_sha256": checksum_sha256,
+            "object_key": object_key,
+            "status": "pending_upload",
+            "patient_visible": False,
+            "created_at": now,
+            "uploaded_at": None,
+            "updated_at": now,
+        }
+        with self.transaction() as connection:
+            patient_sql = (
+                "SELECT id FROM dental_patients WHERE id=%s AND clinic_id=%s"
+                if self.database_url
+                else "SELECT id FROM dental_patients WHERE id=? AND clinic_id=?"
+            )
+            if not self._execute(patient_sql, (document["patient_id"], clinic_id), connection=connection):
+                raise ValueError("Patient not found in this workspace")
+            clinic_sql = (
+                "SELECT organisation_id FROM dental_clinics WHERE id=%s"
+                if self.database_url
+                else "SELECT organisation_id FROM dental_clinics WHERE id=?"
+            )
+            clinic = self._execute(clinic_sql, (clinic_id,), connection=connection)
+            if not clinic or clinic[0]["organisation_id"] != document["organisation_id"]:
+                raise ValueError("Clinic organisation does not match the active workspace")
+            insert_sql = (
+                "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,object_key,status,patient_visible,created_at,uploaded_at,updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                if self.database_url
+                else "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,object_key,status,patient_visible,created_at,uploaded_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            )
+            self._execute(insert_sql, tuple(document[key] for key in (
+                "id","organisation_id","clinic_id","patient_id","uploaded_by_doctor_id","file_name",
+                "content_type","size_bytes","checksum_sha256","object_key","status","patient_visible",
+                "created_at","uploaded_at","updated_at"
+            )), connection=connection)
+            self.audit(doctor_id, "document.upload_intent_created", "document", document["id"], clinic_id, connection)
+        return document
+
+    def get_document(
+        self, document_id: str, clinic_id: str, patient_id: str | None = None,
+        patient_visible_only: bool = False,
+    ) -> dict[str, Any] | None:
+        clauses = ["id=%s", "clinic_id=%s"] if self.database_url else ["id=?", "clinic_id=?"]
+        params: list[Any] = [document_id, clinic_id]
+        if patient_id is not None:
+            clauses.append("patient_id=" + ("%s" if self.database_url else "?"))
+            params.append(patient_id)
+        if patient_visible_only:
+            clauses.extend([
+                "patient_visible=true" if self.database_url else "patient_visible=1",
+                "status='available'",
+            ])
+        rows = self._execute(
+            "SELECT * FROM dental_documents WHERE " + " AND ".join(clauses),
+            tuple(params),
+        )
+        return rows[0] if rows else None
+
+    def documents(
+        self, clinic_id: str, patient_id: str, patient_visible_only: bool = False
+    ) -> list[dict[str, Any]]:
+        visibility = (
+            " AND patient_visible=true AND status='available'"
+            if self.database_url
+            else " AND patient_visible=1 AND status='available'"
+        ) if patient_visible_only else ""
+        sql = (
+            "SELECT * FROM dental_documents WHERE clinic_id=%s AND patient_id=%s"
+            + visibility + " ORDER BY created_at DESC"
+            if self.database_url
+            else "SELECT * FROM dental_documents WHERE clinic_id=? AND patient_id=?"
+            + visibility + " ORDER BY created_at DESC"
+        )
+        return self._execute(sql, (clinic_id, patient_id))
+
+    def mark_document_uploaded(self, document_id: str, clinic_id: str, doctor_id: str):
+        now = _now()
+        with self.transaction() as connection:
+            lock = " FOR UPDATE" if self.database_url else ""
+            sql = (
+                "SELECT status FROM dental_documents WHERE id=%s AND clinic_id=%s" + lock
+                if self.database_url
+                else "SELECT status FROM dental_documents WHERE id=? AND clinic_id=?"
+            )
+            rows = self._execute(sql, (document_id, clinic_id), connection=connection)
+            if not rows:
+                return None
+            if rows[0]["status"] != "pending_upload":
+                raise ValueError("Only a pending document upload can be completed")
+            update_sql = (
+                "UPDATE dental_documents SET status='available',uploaded_at=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
+                if self.database_url
+                else "UPDATE dental_documents SET status='available',uploaded_at=?,updated_at=? WHERE id=? AND clinic_id=?"
+            )
+            self._execute(update_sql, (now, now, document_id, clinic_id), connection=connection)
+            self.audit(doctor_id, "document.upload_completed", "document", document_id, clinic_id, connection)
+        return self.get_document(document_id, clinic_id)
+
+    def mark_document_rejected(
+        self, document_id: str, clinic_id: str, doctor_id: str
+    ):
+        now = _now()
+        with self.transaction() as connection:
+            update_sql = (
+                "UPDATE dental_documents SET status='rejected',updated_at=%s WHERE id=%s AND clinic_id=%s AND status='pending_upload'"
+                if self.database_url
+                else "UPDATE dental_documents SET status='rejected',updated_at=? WHERE id=? AND clinic_id=? AND status='pending_upload'"
+            )
+            self._execute(update_sql, (now, document_id, clinic_id), connection=connection)
+            self.audit(doctor_id, "document.upload_rejected", "document", document_id, clinic_id, connection)
+        return self.get_document(document_id, clinic_id)
+
+    def set_document_visibility(
+        self, document_id: str, clinic_id: str, doctor_id: str, visible: bool
+    ):
+        now = _now()
+        with self.transaction() as connection:
+            lock = " FOR UPDATE" if self.database_url else ""
+            sql = (
+                "SELECT status FROM dental_documents WHERE id=%s AND clinic_id=%s" + lock
+                if self.database_url
+                else "SELECT status FROM dental_documents WHERE id=? AND clinic_id=?"
+            )
+            rows = self._execute(sql, (document_id, clinic_id), connection=connection)
+            if not rows:
+                return None
+            if rows[0]["status"] != "available":
+                raise ValueError("Only an available document can be shared with the patient")
+            update_sql = (
+                "UPDATE dental_documents SET patient_visible=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
+                if self.database_url
+                else "UPDATE dental_documents SET patient_visible=?,updated_at=? WHERE id=? AND clinic_id=?"
+            )
+            self._execute(update_sql, (visible, now, document_id, clinic_id), connection=connection)
+            self.audit(
+                doctor_id,
+                "document.shared" if visible else "document.unshared",
+                "document",
+                document_id,
+                clinic_id,
+                connection,
+            )
+        return self.get_document(document_id, clinic_id)
+
     def patient_by_user_id(self, user_id: str, patient_id: str | None = None):
         if patient_id:
             sql = (
