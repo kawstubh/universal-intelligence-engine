@@ -18,6 +18,7 @@ from .dental_ai import router as dental_ai_router
 from .dental_api import router as dental_router
 from .dental_documents import router as dental_documents_router
 from .dental_patient_care import router as dental_patient_care_router
+from .dental_patient_comms import router as dental_patient_comms_router
 from .dental_store import get_dental_store
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
@@ -100,6 +101,7 @@ app.include_router(dental_router)
 app.include_router(dental_ai_router)
 app.include_router(dental_patient_care_router)
 app.include_router(dental_documents_router)
+app.include_router(dental_patient_comms_router)
 
 
 def _doctor_only_openapi():
