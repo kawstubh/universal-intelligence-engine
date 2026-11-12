@@ -10,6 +10,14 @@ The Clinic Assistant is a separate staff principal, not a Doctor account and not
 - Only a clinic \`owner\` or \`admin\` may create or deactivate an Assistant.
 - Deactivation revokes active Assistant sessions. Clinic and organisation status are rechecked on each request.
 
+## Patient account-free boundary
+
+- The public patient journey is clinic information and guest appointment requests only.
+- Patient accounts, passwords, OTP, signup/login and Supabase patient authentication are disabled.
+- Legacy patient-specific API routes return HTTP 403 with `PATIENT_ACCOUNTS_DISABLED` before any Supabase lookup and are omitted from OpenAPI.
+- Clinical records, notes, charts, prescriptions, invoices and private documents are not available through public patient routes.
+- Patient-specific sharing is deferred until random, scoped, expiring and revocable links have server-side authorization and audit logging.
+
 ## Allowed Assistant operations
 
 | Capability | API | Scope |
