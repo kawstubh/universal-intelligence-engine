@@ -24,6 +24,7 @@ DISABLED_AI_METHODS = [
 ]
 
 PATIENT_ACCOUNT_METHODS = [
+    ("GET", "/v1/dental/ai/patient/profile"),
     ("POST", "/v1/dental/ai/patient/link"),
     ("GET", "/v1/dental/ai/patient/appointments"),
     ("GET", "/v1/dental/ai/patient/chart"),
