@@ -1270,9 +1270,9 @@ class DentalStore:
             raise ValueError("Document size is outside the allowed range")
         if len(checksum_sha256) != 64 or any(char not in "0123456789abcdef" for char in checksum_sha256):
             raise ValueError("Document SHA-256 checksum is invalid")
-        object_key = str(data["object_key"])
-        if not object_key or len(object_key) > 1024:
-            raise ValueError("Document object key is invalid")
+        upload_object_key = str(data["upload_object_key"])
+        if not upload_object_key or len(upload_object_key) > 1024:
+            raise ValueError("Document upload object key is invalid")
         document = {
             "id": data["id"],
             "organisation_id": data["organisation_id"],
@@ -1283,7 +1283,8 @@ class DentalStore:
             "content_type": data["content_type"],
             "size_bytes": size_bytes,
             "checksum_sha256": checksum_sha256,
-            "object_key": object_key,
+            "upload_object_key": upload_object_key,
+            "object_key": None,
             "status": "pending_upload",
             "patient_visible": False,
             "created_at": now,
@@ -1307,15 +1308,15 @@ class DentalStore:
             if not clinic or clinic[0]["organisation_id"] != document["organisation_id"]:
                 raise ValueError("Clinic organisation does not match the active workspace")
             insert_sql = (
-                "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,object_key,status,patient_visible,created_at,uploaded_at,updated_at) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,upload_object_key,object_key,status,patient_visible,created_at,uploaded_at,updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
                 if self.database_url
-                else "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,object_key,status,patient_visible,created_at,uploaded_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                else "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,upload_object_key,object_key,status,patient_visible,created_at,uploaded_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             )
             self._execute(insert_sql, tuple(document[key] for key in (
                 "id","organisation_id","clinic_id","patient_id","uploaded_by_doctor_id","file_name",
-                "content_type","size_bytes","checksum_sha256","object_key","status","patient_visible",
+                "content_type","size_bytes","checksum_sha256","upload_object_key","object_key","status","patient_visible",
                 "created_at","uploaded_at","updated_at"
             )), connection=connection)
             self.audit(doctor_id, "document.upload_intent_created", "document", document["id"], clinic_id, connection)
@@ -1358,8 +1359,39 @@ class DentalStore:
         )
         return self._execute(sql, (clinic_id, patient_id))
 
-    def mark_document_uploaded(self, document_id: str, clinic_id: str, doctor_id: str):
+    def claim_document_upload(
+        self, document_id: str, clinic_id: str, doctor_id: str
+    ) -> bool:
+        """Atomically allow only one request to finalize a pending upload."""
         now = _now()
+        with self.transaction() as connection:
+            claim_sql = (
+                "UPDATE dental_documents SET status='verifying',updated_at=%s "
+                "WHERE id=%s AND clinic_id=%s AND status='pending_upload' RETURNING id"
+                if self.database_url
+                else "UPDATE dental_documents SET status='verifying',updated_at=? "
+                "WHERE id=? AND clinic_id=? AND status='pending_upload' RETURNING id"
+            )
+            rows = self._execute(
+                claim_sql, (now, document_id, clinic_id), connection=connection
+            )
+            if rows:
+                self.audit(
+                    doctor_id,
+                    "document.upload_verification_started",
+                    "document",
+                    document_id,
+                    clinic_id,
+                    connection,
+                )
+            return bool(rows)
+
+    def mark_document_uploaded(
+        self, document_id: str, clinic_id: str, doctor_id: str, final_object_key: str
+    ):
+        now = _now()
+        if not final_object_key or len(final_object_key) > 1024:
+            raise ValueError("Verified document object key is invalid")
         with self.transaction() as connection:
             lock = " FOR UPDATE" if self.database_url else ""
             sql = (
@@ -1370,14 +1402,20 @@ class DentalStore:
             rows = self._execute(sql, (document_id, clinic_id), connection=connection)
             if not rows:
                 return None
-            if rows[0]["status"] != "pending_upload":
-                raise ValueError("Only a pending document upload can be completed")
+            if rows[0]["status"] != "verifying":
+                raise ValueError("Only a claimed document upload can be completed")
             update_sql = (
-                "UPDATE dental_documents SET status='available',uploaded_at=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
+                "UPDATE dental_documents SET object_key=%s,status='available',uploaded_at=%s,updated_at=%s "
+                "WHERE id=%s AND clinic_id=%s AND status='verifying'"
                 if self.database_url
-                else "UPDATE dental_documents SET status='available',uploaded_at=?,updated_at=? WHERE id=? AND clinic_id=?"
+                else "UPDATE dental_documents SET object_key=?,status='available',uploaded_at=?,updated_at=? "
+                "WHERE id=? AND clinic_id=? AND status='verifying'"
             )
-            self._execute(update_sql, (now, now, document_id, clinic_id), connection=connection)
+            self._execute(
+                update_sql,
+                (final_object_key, now, now, document_id, clinic_id),
+                connection=connection,
+            )
             self.audit(doctor_id, "document.upload_completed", "document", document_id, clinic_id, connection)
         return self.get_document(document_id, clinic_id)
 
@@ -1387,12 +1425,17 @@ class DentalStore:
         now = _now()
         with self.transaction() as connection:
             update_sql = (
-                "UPDATE dental_documents SET status='rejected',updated_at=%s WHERE id=%s AND clinic_id=%s AND status='pending_upload'"
+                "UPDATE dental_documents SET status='rejected',updated_at=%s "
+                "WHERE id=%s AND clinic_id=%s AND status IN ('pending_upload','verifying') RETURNING id"
                 if self.database_url
-                else "UPDATE dental_documents SET status='rejected',updated_at=? WHERE id=? AND clinic_id=? AND status='pending_upload'"
+                else "UPDATE dental_documents SET status='rejected',updated_at=? "
+                "WHERE id=? AND clinic_id=? AND status IN ('pending_upload','verifying') RETURNING id"
             )
-            self._execute(update_sql, (now, document_id, clinic_id), connection=connection)
-            self.audit(doctor_id, "document.upload_rejected", "document", document_id, clinic_id, connection)
+            rows = self._execute(
+                update_sql, (now, document_id, clinic_id), connection=connection
+            )
+            if rows:
+                self.audit(doctor_id, "document.upload_rejected", "document", document_id, clinic_id, connection)
         return self.get_document(document_id, clinic_id)
 
     def set_document_visibility(

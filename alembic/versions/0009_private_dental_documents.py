@@ -32,14 +32,15 @@ def upgrade() -> None:
             sa.Column("content_type", sa.String(100), nullable=False),
             sa.Column("size_bytes", sa.BigInteger(), nullable=False),
             sa.Column("checksum_sha256", sa.String(64), nullable=False),
-            sa.Column("object_key", sa.String(1024), nullable=False),
+            sa.Column("upload_object_key", sa.String(1024), nullable=False),
+            sa.Column("object_key", sa.String(1024), nullable=True),
             sa.Column("status", sa.String(24), nullable=False, server_default="pending_upload"),
             sa.Column("patient_visible", sa.Boolean(), nullable=False, server_default=sa.false()),
             sa.Column("created_at", sa.Text(), nullable=False),
             sa.Column("uploaded_at", sa.Text(), nullable=True),
             sa.Column("updated_at", sa.Text(), nullable=False),
             sa.CheckConstraint(
-                "status IN ('pending_upload','available','rejected')",
+                "status IN ('pending_upload','verifying','available','rejected')",
                 name="ck_dental_documents_status",
             ),
             sa.CheckConstraint(
@@ -57,6 +58,13 @@ def upgrade() -> None:
             "uq_dental_documents_object_key",
             "dental_documents",
             ["object_key"],
+            unique=True,
+        )
+    if "uq_dental_documents_upload_object_key" not in indexes:
+        op.create_index(
+            "uq_dental_documents_upload_object_key",
+            "dental_documents",
+            ["upload_object_key"],
             unique=True,
         )
     if "idx_dental_documents_clinic_patient_created" not in indexes:
