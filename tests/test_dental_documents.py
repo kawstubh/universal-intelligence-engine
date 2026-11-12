@@ -45,6 +45,10 @@ class FakeS3Client:
         }
         return {"ETag": '"verified-test-object"'}
 
+    def delete_object(self, Bucket, Key):
+        self.objects.pop(Key, None)
+        return {"DeleteMarker": True}
+
 
 @pytest.fixture
 def document_api(tmp_path: Path, monkeypatch):
@@ -89,7 +93,11 @@ def document_api(tmp_path: Path, monkeypatch):
     return client, store, actor, patient_actor, patient_a, patient_b, fake_s3
 
 
-def _upload_intent(client: TestClient, patient_id: str, content: bytes = b"synthetic dental document"):
+def _upload_intent(
+    client: TestClient,
+    patient_id: str,
+    content: bytes = b"%PDF-1.4\n% synthetic dental document\n%%EOF\n",
+):
     checksum = hashlib.sha256(content).hexdigest()
     response = client.post(
         f"/v1/dental/doctor/patients/{patient_id}/documents/upload-intent",
@@ -137,6 +145,7 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
     assert verified["object_key"].startswith("verified/organisations/org-a/clinics/clinic-a/patients/")
     assert verified["object_key"] != verified["upload_object_key"]
     assert fake_s3.objects[verified["object_key"]]["Body"] == content
+    assert verified["upload_object_key"] not in fake_s3.objects
 
     assert client.get("/v1/dental/patient/documents").json()["result"] == []
     shared = client.patch(
@@ -233,6 +242,7 @@ def test_mismatched_upload_is_rejected_and_never_patient_visible(document_api):
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "DOCUMENT_UPLOAD_VERIFICATION_FAILED"
     assert store.get_document(document_id, "clinic-a")["status"] == "rejected"
+    assert stored["upload_object_key"] not in fake_s3.objects
     assert client.get("/v1/dental/patient/documents").json()["result"] == []
 
 
@@ -292,6 +302,7 @@ def test_document_checksum_is_verified_against_actual_object_bytes(document_api)
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "DOCUMENT_UPLOAD_VERIFICATION_FAILED"
     assert store.get_document(document_id, "clinic-a")["status"] == "rejected"
+    assert stored["upload_object_key"] not in fake_s3.objects
 
 
 def test_replayed_upload_url_cannot_mutate_verified_patient_document(document_api):
@@ -309,6 +320,7 @@ def test_replayed_upload_url_cannot_mutate_verified_patient_document(document_ap
 
     completed = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
     assert completed.status_code == 200, completed.text
+    assert upload_key not in fake_s3.objects
     verified = store.get_document(document_id, "clinic-a")
     final_key = verified["object_key"]
     assert final_key and final_key != upload_key
@@ -449,3 +461,37 @@ def test_patient_with_multiple_clinic_links_selects_only_the_requested_record(do
     assert denied.json()["detail"]["code"] == "PATIENT_IDENTITY_MISMATCH"
 
 
+
+
+def test_declared_pdf_with_non_pdf_bytes_is_rejected_and_quarantined(document_api):
+    client, store, _actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
+    content = b"<html><script>not a PDF</script></html>"
+    intent, _content, checksum = _upload_intent(client, patient_a["id"], content=content)
+    document_id = intent.json()["result"]["document"]["id"]
+    pending = store.get_document(document_id, "clinic-a")
+    upload_key = pending["upload_object_key"]
+    fake_s3.objects[upload_key] = {
+        "ContentLength": len(content),
+        "ContentType": "application/pdf",
+        "Metadata": {"sha256": checksum},
+        "Body": content,
+    }
+
+    response = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "DOCUMENT_CONTENT_TYPE_MISMATCH"
+    assert store.get_document(document_id, "clinic-a")["status"] == "rejected"
+    assert upload_key not in fake_s3.objects
+    assert not any(key.startswith("verified/") for key in fake_s3.objects)
+
+
+def test_supported_document_signatures_match_the_declared_media_type():
+    assert dental_documents._file_signature_matches("application/pdf", b"%PDF-1.7")
+    assert dental_documents._file_signature_matches("image/jpeg", b"\xff\xd8\xff\xe0")
+    assert dental_documents._file_signature_matches("image/png", b"\x89PNG\r\n\x1a\n")
+    assert dental_documents._file_signature_matches("image/webp", b"RIFF\x00\x00\x00\x00WEBP")
+
+    assert not dental_documents._file_signature_matches("application/pdf", b"<html>")
+    assert not dental_documents._file_signature_matches("image/jpeg", b"\x89PNG\r\n\x1a\n")
+    assert not dental_documents._file_signature_matches("image/png", b"\xff\xd8\xff\xe0")
+    assert not dental_documents._file_signature_matches("image/webp", b"RIFF\x00\x00\x00\x00PNG ")

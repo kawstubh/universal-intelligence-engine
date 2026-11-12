@@ -120,6 +120,19 @@ def _safe_file_name(file_name: str) -> str:
     return name[:180]
 
 
+def _file_signature_matches(content_type: str, prefix: bytes) -> bool:
+    """Reject a declared media type that does not match the uploaded file header."""
+    if content_type == "application/pdf":
+        return prefix.startswith(b"%PDF-")
+    if content_type == "image/jpeg":
+        return prefix.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return prefix.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/webp":
+        return len(prefix) >= 12 and prefix[:4] == b"RIFF" and prefix[8:12] == b"WEBP"
+    return False
+
+
 def _doctor_document(document: dict) -> dict:
     return {
         "id": document["id"],
@@ -268,6 +281,18 @@ def _reject_pending_upload_safely(store, document_id: str, actor: dict) -> None:
         logger.exception("Could not reject pending dental document upload %s", document_id)
 
 
+def _delete_object_safely(s3, bucket: str, key: str) -> None:
+    """Remove quarantine/orphan bytes without masking the primary API result."""
+    try:
+        s3.delete_object(Bucket=bucket, Key=key)
+    except Exception:
+        key_fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+        logger.exception(
+            "Could not remove private dental document object (key fingerprint %s)",
+            key_fingerprint,
+        )
+
+
 @router.post("/doctor/documents/{document_id}/complete")
 def complete_document_upload(
     document_id: str,
@@ -296,6 +321,7 @@ def complete_document_upload(
     )
     if not header_valid:
         store.mark_document_rejected(document_id, actor["clinic_id"], actor["id"])
+        _delete_object_safely(s3, config["bucket"], document["upload_object_key"])
         raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_VERIFICATION_FAILED", "message": "Uploaded document did not match its declared size, type or checksum."})
 
     # Presigned PUT URLs are reusable until expiry. Claim the database row once,
@@ -310,6 +336,7 @@ def complete_document_upload(
     try:
         actual_size = 0
         actual_digest = hashlib.sha256()
+        signature_prefix = bytearray()
         verified_bytes = io.BytesIO()
         stored_object = s3.get_object(
             Bucket=config["bucket"], Key=document["upload_object_key"]
@@ -327,6 +354,8 @@ def complete_document_upload(
                         detail={"code": "DOCUMENT_UPLOAD_VERIFICATION_FAILED", "message": "Uploaded document exceeds the allowed size."},
                     )
                 actual_digest.update(chunk)
+                if len(signature_prefix) < 12:
+                    signature_prefix.extend(chunk[: 12 - len(signature_prefix)])
                 verified_bytes.write(chunk)
         finally:
             body.close()
@@ -339,6 +368,11 @@ def complete_document_upload(
             raise HTTPException(
                 409,
                 detail={"code": "DOCUMENT_UPLOAD_VERIFICATION_FAILED", "message": "Uploaded document bytes did not match the declared SHA-256 checksum."},
+            )
+        if not _file_signature_matches(document["content_type"], bytes(signature_prefix)):
+            raise HTTPException(
+                409,
+                detail={"code": "DOCUMENT_CONTENT_TYPE_MISMATCH", "message": "Uploaded bytes do not match the declared PDF or image type."},
             )
 
         verified_bytes.seek(0)
@@ -369,16 +403,25 @@ def complete_document_upload(
         )
     except HTTPException:
         _reject_pending_upload_safely(store, document_id, actor)
+        _delete_object_safely(s3, config["bucket"], document["upload_object_key"])
+        _delete_object_safely(s3, config["bucket"], final_object_key)
         raise
     except ValueError as exc:
         _reject_pending_upload_safely(store, document_id, actor)
+        _delete_object_safely(s3, config["bucket"], document["upload_object_key"])
+        _delete_object_safely(s3, config["bucket"], final_object_key)
         raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_NOT_PENDING", "message": "Document upload state changed before finalization."}) from exc
     except Exception as exc:
         _reject_pending_upload_safely(store, document_id, actor)
+        _delete_object_safely(s3, config["bucket"], document["upload_object_key"])
+        _delete_object_safely(s3, config["bucket"], final_object_key)
         raise HTTPException(503, detail={"code": "DOCUMENT_STORAGE_UNAVAILABLE", "message": "Verified document could not be published to private storage."}) from exc
 
     if not result:
+        _delete_object_safely(s3, config["bucket"], document["upload_object_key"])
+        _delete_object_safely(s3, config["bucket"], final_object_key)
         raise HTTPException(404, detail={"code": "DOCUMENT_NOT_FOUND", "message": "Document not found in this workspace"})
+    _delete_object_safely(s3, config["bucket"], document["upload_object_key"])
     return _envelope(_doctor_document(result))
 
 
