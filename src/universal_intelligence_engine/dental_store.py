@@ -148,16 +148,21 @@ class DentalStore:
             (clinic_id,),
         )
 
-    def get_patient(self, patient_id: str, clinic_id: str) -> dict[str, Any] | None:
+    def get_patient(
+        self, patient_id: str, clinic_id: str, connection=None
+    ) -> dict[str, Any] | None:
         rows = self._execute(
             "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=%s AND clinic_id=%s"
             if self.database_url
             else "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=? AND clinic_id=?",
             (patient_id, clinic_id),
+            connection=connection,
         )
         return rows[0] if rows else None
 
-    def create_patient(self, data: dict[str, Any], clinic_id: str) -> dict[str, Any]:
+    def create_patient(
+        self, data: dict[str, Any], clinic_id: str, connection=None
+    ) -> dict[str, Any]:
         item = {
             "id": _id(),
             "name": data.get("name", "").strip(),
@@ -174,6 +179,7 @@ class DentalStore:
                 item[k]
                 for k in ("id", "name", "phone", "age", "clinic_id", "created_at")
             ),
+            connection=connection,
         )
         return item
 
@@ -195,9 +201,9 @@ class DentalStore:
         )
 
     def create_appointment(
-        self, data: dict[str, Any], clinic_id: str
+        self, data: dict[str, Any], clinic_id: str, connection=None
     ) -> dict[str, Any]:
-        if not self.get_patient(str(data["patient_id"]), clinic_id):
+        if not self.get_patient(str(data["patient_id"]), clinic_id, connection=connection):
             raise ValueError("Patient not found in clinic")
         item = {
             "id": _id(),
@@ -207,12 +213,14 @@ class DentalStore:
             "treatment_type": data["treatment_type"],
             "note": data.get("note", ""),
             "status": data.get("status", "scheduled"),
+            "idempotency_key": data.get("idempotency_key"),
+            "idempotency_fingerprint": data.get("idempotency_fingerprint"),
             "created_at": _now(),
         }
         self._execute(
-            "INSERT INTO dental_appointments(id,patient_id,clinic_id,starts_at,treatment_type,note,status,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+            "INSERT INTO dental_appointments(id,patient_id,clinic_id,starts_at,treatment_type,note,status,idempotency_key,idempotency_fingerprint,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
             if self.database_url
-            else "INSERT INTO dental_appointments(id,patient_id,clinic_id,starts_at,treatment_type,note,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            else "INSERT INTO dental_appointments(id,patient_id,clinic_id,starts_at,treatment_type,note,status,idempotency_key,idempotency_fingerprint,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
             tuple(
                 item[k]
                 for k in (
@@ -223,11 +231,102 @@ class DentalStore:
                     "treatment_type",
                     "note",
                     "status",
+                    "idempotency_key",
+                    "idempotency_fingerprint",
                     "created_at",
                 )
             ),
+            connection=connection,
         )
         return item
+
+    def create_public_appointment(
+        self, data: dict[str, Any], clinic_id: str
+    ) -> dict[str, Any]:
+        """Atomically create a guest request and deduplicate safe client retries."""
+        idempotency_key = str(data.get("idempotency_key") or "").strip()
+        if len(idempotency_key) < 16 or len(idempotency_key) > 128:
+            raise ValueError("Appointment idempotency key must be 16-128 characters")
+
+        request_payload = {
+            "name": str(data.get("name") or "").strip(),
+            "phone": str(data.get("phone") or "").strip(),
+            "starts_at": str(data.get("starts_at") or "").strip(),
+            "treatment_type": str(data.get("treatment_type") or "").strip(),
+            "note": str(data.get("note") or "").strip(),
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(request_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        lookup_sql = (
+            "SELECT * FROM dental_appointments WHERE clinic_id=%s AND idempotency_key=%s"
+            if self.database_url
+            else "SELECT * FROM dental_appointments WHERE clinic_id=? AND idempotency_key=?"
+        )
+
+        def existing_request(connection=None):
+            rows = self._execute(
+                lookup_sql, (clinic_id, idempotency_key), connection=connection
+            )
+            return rows[0] if rows else None
+
+        def duplicate_result(appointment, connection=None):
+            if appointment.get("idempotency_fingerprint") != fingerprint:
+                raise ValueError(
+                    "Appointment idempotency key was already used for a different request"
+                )
+            self.audit(
+                "public-intake",
+                "request.duplicate",
+                "appointment",
+                appointment["id"],
+                clinic_id=clinic_id,
+                connection=connection,
+            )
+            return {"appointment": appointment, "duplicate": True}
+
+        try:
+            with self.transaction() as connection:
+                existing = existing_request(connection)
+                if existing:
+                    return duplicate_result(existing, connection)
+                patient = self.create_patient(
+                    {"name": request_payload["name"], "phone": request_payload["phone"], "age": ""},
+                    clinic_id,
+                    connection=connection,
+                )
+                appointment = self.create_appointment(
+                    {
+                        "patient_id": patient["id"],
+                        "starts_at": request_payload["starts_at"],
+                        "treatment_type": request_payload["treatment_type"],
+                        "note": request_payload["note"],
+                        "status": "requested",
+                        "idempotency_key": idempotency_key,
+                        "idempotency_fingerprint": fingerprint,
+                    },
+                    clinic_id,
+                    connection=connection,
+                )
+                self.audit(
+                    "public-intake",
+                    "request",
+                    "appointment",
+                    appointment["id"],
+                    clinic_id=clinic_id,
+                    connection=connection,
+                )
+            return {"appointment": appointment, "duplicate": False}
+        except ValueError:
+            raise
+        except Exception:
+            # A concurrent retry can win the unique index between the initial
+            # lookup and insert. The losing transaction is rolled back before
+            # this read; return the winning row only when the payload matches.
+            existing = existing_request()
+            if existing and existing.get("idempotency_fingerprint") == fingerprint:
+                return duplicate_result(existing)
+            raise
 
     def update_appointment(
         self, appointment_id: str, changes: dict[str, Any], clinic_id: str
