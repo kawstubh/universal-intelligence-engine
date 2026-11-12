@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import os
 import re
 import uuid
@@ -22,6 +23,8 @@ from pydantic import BaseModel, Field
 from .dental_ai import require_patient
 from .dental_auth import require_doctor
 from .dental_store import get_dental_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/dental", tags=["dental-documents"])
 
@@ -257,6 +260,14 @@ def create_document_upload_intent(
     })
 
 
+def _reject_pending_upload_safely(store, document_id: str, actor: dict) -> None:
+    """Best-effort cleanup that never masks the original upload failure."""
+    try:
+        store.mark_document_rejected(document_id, actor["clinic_id"], actor["id"])
+    except Exception:
+        logger.exception("Could not reject pending dental document upload %s", document_id)
+
+
 @router.post("/doctor/documents/{document_id}/complete")
 def complete_document_upload(
     document_id: str,
@@ -357,22 +368,13 @@ def complete_document_upload(
             document_id, actor["clinic_id"], actor["id"], final_object_key
         )
     except HTTPException:
-        try:
-            store.mark_document_rejected(document_id, actor["clinic_id"], actor["id"])
-        except Exception:
-            pass
+        _reject_pending_upload_safely(store, document_id, actor)
         raise
     except ValueError as exc:
-        try:
-            store.mark_document_rejected(document_id, actor["clinic_id"], actor["id"])
-        except Exception:
-            pass
+        _reject_pending_upload_safely(store, document_id, actor)
         raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_NOT_PENDING", "message": "Document upload state changed before finalization."}) from exc
     except Exception as exc:
-        try:
-            store.mark_document_rejected(document_id, actor["clinic_id"], actor["id"])
-        except Exception:
-            pass
+        _reject_pending_upload_safely(store, document_id, actor)
         raise HTTPException(503, detail={"code": "DOCUMENT_STORAGE_UNAVAILABLE", "message": "Verified document could not be published to private storage."}) from exc
 
     if not result:
