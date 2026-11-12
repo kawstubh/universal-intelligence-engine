@@ -61,6 +61,23 @@ def test_public_booking_rate_limit_uses_cloudflare_client_ip(monkeypatch):
     assert seen == ["203.0.113.44"]
 
 
+def test_public_booking_rate_limit_uses_cloudflare_ipv6_client_ip(monkeypatch):
+    seen = []
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", seen.append)
+    response = TestClient(app).post(
+        "/v1/dental/public/appointments",
+        headers={"CF-Connecting-IP": "2001:db8::42"},
+        json={
+            "name": "Synthetic Patient",
+            "phone": "+919999000003",
+            "starts_at": "2026-11-20T10:00:00",
+            "treatment_type": "Dental check-up",
+        },
+    )
+    assert response.status_code in (200, 201)
+    assert seen == ["2001:db8::42"]
+
+
 def test_public_booking_rate_limit_ignores_invalid_cloudflare_ip_header(monkeypatch):
     seen = []
     monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", seen.append)
