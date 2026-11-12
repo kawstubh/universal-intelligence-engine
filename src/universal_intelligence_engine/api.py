@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -59,6 +60,9 @@ app = FastAPI(
     version=__version__,
     description="Shared intelligence API for research, reasoning, applications, agents, and Dental Intelligence.",
 )
+origins = [origin.strip() for origin in os.getenv("DENTAL_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://192.168.0.106:5173").split(",") if origin.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type", "X-Requested-With"])
+
 service = build_service()
 
 
@@ -67,7 +71,16 @@ service = build_service()
 @app.middleware("http")
 async def disable_patient_ai(request: Request, call_next):
     path = request.url.path.rstrip("/")
-    if path == "/v1/dental/ai/patient" or path.startswith("/v1/dental/ai/patient/"):
+    disabled_patient_ai = {
+        "/v1/dental/ai/patient/chat",
+        "/v1/dental/ai/patient/triage",
+        "/v1/dental/ai/patient/treatment-explanation",
+        "/v1/dental/ai/patient/aftercare",
+        # Consent and stored AI history are part of the patient AI surface too.
+        "/v1/dental/ai/patient/consent",
+        "/v1/dental/ai/patient/history",
+    }
+    if path in disabled_patient_ai:
         return JSONResponse(
             status_code=404,
             content={
@@ -96,10 +109,14 @@ def _doctor_only_openapi():
     schema["paths"] = {
         path: operations
         for path, operations in schema.get("paths", {}).items()
-        if not (
-            path.rstrip("/") == "/v1/dental/ai/patient"
-            or path.startswith("/v1/dental/ai/patient/")
-        )
+        if path.rstrip("/") not in {
+            "/v1/dental/ai/patient/chat",
+            "/v1/dental/ai/patient/triage",
+            "/v1/dental/ai/patient/treatment-explanation",
+            "/v1/dental/ai/patient/aftercare",
+            "/v1/dental/ai/patient/consent",
+            "/v1/dental/ai/patient/history",
+        }
     }
     app.openapi_schema = schema
     return schema

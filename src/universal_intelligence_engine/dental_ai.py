@@ -803,6 +803,25 @@ async def patient_delete_history(actor: Annotated[dict, Depends(require_patient)
     }
 
 
+@router.get("/patient/profile")
+async def patient_profile(actor: Annotated[dict, Depends(require_patient)]):
+    patient = await _patient_record(actor)
+    safe_patient = None
+    if patient:
+        safe_patient = {
+            "id": str(patient["id"]),
+            "name": str(patient.get("name") or "Patient"),
+            "clinic_id": str(patient["clinic_id"]),
+        }
+    return {
+        "result": {"linked": bool(patient), "patient": safe_patient},
+        "confidence": 1.0,
+        "sources": [],
+        "disclaimers": [DISCLAIMER_PATIENT],
+        "request_id": str(uuid.uuid4()),
+    }
+
+
 @router.get("/patient/appointments")
 async def patient_appointments(actor: Annotated[dict, Depends(require_patient)]):
     patient = await _patient_record(actor)
