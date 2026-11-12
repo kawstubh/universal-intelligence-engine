@@ -8,6 +8,7 @@ must be explicitly configured; there is no Render filesystem fallback.
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import re
 import uuid
@@ -175,7 +176,7 @@ def _patient_for_actor(actor: dict, patient_id: str | None = None) -> dict:
 
 
 def _presigned_download(document: dict, config: dict, s3) -> dict:
-    if document["status"] != "available":
+    if document["status"] != "available" or not document.get("object_key"):
         raise HTTPException(409, detail={"code": "DOCUMENT_NOT_AVAILABLE", "message": "Document is not available for download."})
     try:
         url = s3.generate_presigned_url(
@@ -209,8 +210,8 @@ def create_document_upload_intent(
         raise HTTPException(404, detail={"code": "CLINIC_NOT_FOUND", "message": "Active clinic workspace was not found"})
     safe_name = _safe_file_name(body.file_name)
     document_id = uuid.uuid4().hex
-    object_key = (
-        f"organisations/{clinic['organisation_id']}/clinics/{actor['clinic_id']}/"
+    upload_object_key = (
+        f"pending/organisations/{clinic['organisation_id']}/clinics/{actor['clinic_id']}/"
         f"patients/{patient_id}/{document_id}/{safe_name}"
     )
     data = {
@@ -221,7 +222,7 @@ def create_document_upload_intent(
         "content_type": body.content_type,
         "size_bytes": body.size_bytes,
         "checksum_sha256": body.checksum_sha256.lower(),
-        "object_key": object_key,
+        "upload_object_key": upload_object_key,
     }
     try:
         document = store.create_document(data, actor["clinic_id"], actor["id"])
@@ -233,7 +234,7 @@ def create_document_upload_intent(
             "put_object",
             Params={
                 "Bucket": config["bucket"],
-                "Key": object_key,
+                "Key": upload_object_key,
                 "ContentType": body.content_type,
                 "Metadata": {"sha256": body.checksum_sha256.lower()},
             },
@@ -268,44 +269,112 @@ def complete_document_upload(
         raise HTTPException(404, detail={"code": "DOCUMENT_NOT_FOUND", "message": "Document not found in this workspace"})
     if document["status"] != "pending_upload":
         raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_NOT_PENDING", "message": "Document upload is not pending."})
+
     s3 = _get_s3_client(config)
     try:
-        head = s3.head_object(Bucket=config["bucket"], Key=document["object_key"])
+        head = s3.head_object(Bucket=config["bucket"], Key=document["upload_object_key"])
     except Exception as exc:
+        # A client may still be uploading. Keep the intent pending so it can retry.
         raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_INCOMPLETE", "message": "Uploaded document could not be verified."}) from exc
+
     metadata = {str(key).lower(): str(value).lower() for key, value in (head.get("Metadata") or {}).items()}
     header_valid = (
         int(head.get("ContentLength", -1)) == int(document["size_bytes"])
         and head.get("ContentType") == document["content_type"]
         and metadata.get("sha256") == document["checksum_sha256"].lower()
     )
-    actual_size = 0
-    actual_digest = hashlib.sha256()
-    try:
-        if header_valid:
-            stored_object = s3.get_object(Bucket=config["bucket"], Key=document["object_key"])
-            body = stored_object["Body"]
-            try:
-                while True:
-                    chunk = body.read(64 * 1024)
-                    if not chunk:
-                        break
-                    actual_size += len(chunk)
-                    if actual_size > MAX_FILE_BYTES:
-                        break
-                    actual_digest.update(chunk)
-            finally:
-                body.close()
-    except Exception as exc:
-        raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_INCOMPLETE", "message": "Uploaded document could not be verified."}) from exc
-    valid = header_valid and actual_size == int(document["size_bytes"]) and actual_digest.hexdigest() == document["checksum_sha256"].lower()
-    if not valid:
+    if not header_valid:
         store.mark_document_rejected(document_id, actor["clinic_id"], actor["id"])
         raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_VERIFICATION_FAILED", "message": "Uploaded document did not match its declared size, type or checksum."})
+
+    # Presigned PUT URLs are reusable until expiry. Claim the database row once,
+    # then publish only bytes read and verified by this request under a different key.
+    if not store.claim_document_upload(document_id, actor["clinic_id"], actor["id"]):
+        raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_NOT_PENDING", "message": "Document upload is already being verified or has been completed."})
+
+    final_object_key = (
+        f"verified/organisations/{document['organisation_id']}/clinics/{actor['clinic_id']}/"
+        f"patients/{document['patient_id']}/{document_id}/{document['file_name']}"
+    )
     try:
-        result = store.mark_document_uploaded(document_id, actor["clinic_id"], actor["id"])
+        actual_size = 0
+        actual_digest = hashlib.sha256()
+        verified_bytes = io.BytesIO()
+        stored_object = s3.get_object(
+            Bucket=config["bucket"], Key=document["upload_object_key"]
+        )
+        body = stored_object["Body"]
+        try:
+            while True:
+                chunk = body.read(64 * 1024)
+                if not chunk:
+                    break
+                actual_size += len(chunk)
+                if actual_size > MAX_FILE_BYTES:
+                    raise HTTPException(
+                        409,
+                        detail={"code": "DOCUMENT_UPLOAD_VERIFICATION_FAILED", "message": "Uploaded document exceeds the allowed size."},
+                    )
+                actual_digest.update(chunk)
+                verified_bytes.write(chunk)
+        finally:
+            body.close()
+
+        valid = (
+            actual_size == int(document["size_bytes"])
+            and actual_digest.hexdigest() == document["checksum_sha256"].lower()
+        )
+        if not valid:
+            raise HTTPException(
+                409,
+                detail={"code": "DOCUMENT_UPLOAD_VERIFICATION_FAILED", "message": "Uploaded document bytes did not match the declared SHA-256 checksum."},
+            )
+
+        verified_bytes.seek(0)
+        s3.put_object(
+            Bucket=config["bucket"],
+            Key=final_object_key,
+            Body=verified_bytes,
+            ContentType=document["content_type"],
+            Metadata={"sha256": document["checksum_sha256"].lower()},
+        )
+        final_head = s3.head_object(Bucket=config["bucket"], Key=final_object_key)
+        final_metadata = {
+            str(key).lower(): str(value).lower()
+            for key, value in (final_head.get("Metadata") or {}).items()
+        }
+        if (
+            int(final_head.get("ContentLength", -1)) != actual_size
+            or final_head.get("ContentType") != document["content_type"]
+            or final_metadata.get("sha256") != document["checksum_sha256"].lower()
+        ):
+            raise HTTPException(
+                409,
+                detail={"code": "DOCUMENT_UPLOAD_VERIFICATION_FAILED", "message": "Verified object could not be confirmed in private storage."},
+            )
+
+        result = store.mark_document_uploaded(
+            document_id, actor["clinic_id"], actor["id"], final_object_key
+        )
+    except HTTPException:
+        try:
+            store.mark_document_rejected(document_id, actor["clinic_id"], actor["id"])
+        except Exception:
+            pass
+        raise
     except ValueError as exc:
-        raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_NOT_PENDING", "message": str(exc)}) from exc
+        try:
+            store.mark_document_rejected(document_id, actor["clinic_id"], actor["id"])
+        except Exception:
+            pass
+        raise HTTPException(409, detail={"code": "DOCUMENT_UPLOAD_NOT_PENDING", "message": "Document upload state changed before finalization."}) from exc
+    except Exception as exc:
+        try:
+            store.mark_document_rejected(document_id, actor["clinic_id"], actor["id"])
+        except Exception:
+            pass
+        raise HTTPException(503, detail={"code": "DOCUMENT_STORAGE_UNAVAILABLE", "message": "Verified document could not be published to private storage."}) from exc
+
     if not result:
         raise HTTPException(404, detail={"code": "DOCUMENT_NOT_FOUND", "message": "Document not found in this workspace"})
     return _envelope(_doctor_document(result))
