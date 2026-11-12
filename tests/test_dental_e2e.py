@@ -82,6 +82,9 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
         if path.endswith(("/chat", "/triage", "/treatment-explanation", "/aftercare", "/consent", "/history")):
             assert response.status_code == 404, (method, path, response.text)
             assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
+        elif path.startswith(("/v1/dental/patient/", "/v1/dental/ai/patient/")):
+            assert response.status_code == 404, (method, path, response.text)
+            assert response.json()["detail"]["code"] == "PATIENT_ACCOUNT_PORTAL_DISABLED"
         else:
             assert response.status_code == 401, (method, path, response.text)
 
