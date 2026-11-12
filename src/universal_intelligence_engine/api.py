@@ -153,6 +153,18 @@ async def disable_patient_ai(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def secure_dental_response_headers(request: Request, call_next):
+    """Prevent browser, proxy and service-worker caches from retaining clinical API data."""
+    response = await call_next(request)
+    if request.url.path == "/v1/dental" or request.url.path.startswith("/v1/dental/"):
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    return response
+
+
 app.include_router(dental_router)
 app.include_router(dental_ai_router)
 app.include_router(dental_patient_care_router)
