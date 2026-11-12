@@ -252,6 +252,42 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
         )
     store = get_dental_store()
     row = store.get_session(_hash(token))
+    if not row:
+        # A live Clinic Assistant token is authenticated but is never a Doctor
+        # session. Return 403 for role denial instead of treating it as a
+        # missing credential. The guarded lookup keeps older databases safe
+        # until the assistant migration has been applied.
+        try:
+            assistant_sessions = store._execute(
+                "SELECT s.token_hash FROM dental_assistant_sessions s "
+                "JOIN dental_clinic_assistants a ON a.id=s.assistant_id "
+                "JOIN dental_clinic_assistant_memberships m "
+                "ON m.assistant_id=s.assistant_id AND m.clinic_id=s.clinic_id "
+                "JOIN dental_clinics c ON c.id=s.clinic_id "
+                "JOIN dental_organisations o ON o.id=c.organisation_id "
+                "WHERE s.token_hash=%s AND s.revoked=false AND s.expires_at >= %s "
+                "AND a.active=true AND m.active=true AND c.active=true AND o.active=true"
+                if store.database_url
+                else "SELECT s.token_hash FROM dental_assistant_sessions s "
+                "JOIN dental_clinic_assistants a ON a.id=s.assistant_id "
+                "JOIN dental_clinic_assistant_memberships m "
+                "ON m.assistant_id=s.assistant_id AND m.clinic_id=s.clinic_id "
+                "JOIN dental_clinics c ON c.id=s.clinic_id "
+                "JOIN dental_organisations o ON o.id=c.organisation_id "
+                "WHERE s.token_hash=? AND s.revoked=0 AND s.expires_at >= ? "
+                "AND a.active=1 AND m.active=1 AND c.active=1 AND o.active=1",
+                (_hash(token), int(time.time())),
+            )
+        except Exception:
+            assistant_sessions = []
+        if assistant_sessions:
+            raise HTTPException(
+                403,
+                detail={
+                    "code": "DOCTOR_ROLE_REQUIRED",
+                    "message": "A Clinic Assistant session cannot access Doctor-only operations",
+                },
+            )
     if (
         not row
         or int(float(row["expires_at"])) < int(time.time())
