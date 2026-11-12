@@ -11,13 +11,6 @@ PUBLIC_PATHS = {
 }
 PATIENT_PATH_PREFIX = "/v1/dental/ai/patient/"
 PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
-PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
-PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
-PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
-PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
-PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
-PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
-PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
 DISABLED_PATIENT_AI = {
     "/v1/dental/ai/patient/chat",
     "/v1/dental/ai/patient/triage",
