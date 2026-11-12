@@ -62,3 +62,21 @@ def test_unlisted_browser_origin_is_not_reflected():
     )
     assert response.status_code == 400
     assert "access-control-allow-origin" not in response.headers
+
+def test_dental_api_responses_are_not_cached_and_use_nosniff():
+    client = TestClient(app)
+    response = client.get("/v1/dental/health")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, private"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["expires"] == "0"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_disabled_patient_ai_response_is_also_not_cacheable():
+    client = TestClient(app)
+    response = client.post("/v1/dental/ai/patient/chat", json={})
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
+    assert response.headers["cache-control"] == "no-store, private"
+    assert response.headers["x-content-type-options"] == "nosniff"
