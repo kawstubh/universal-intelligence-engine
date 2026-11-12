@@ -129,9 +129,9 @@ def scan_document_bytes(payload: bytes | bytearray | memoryview) -> dict[str, st
 
         reply_bytes = bytes(response).split(b"\0", 1)[0].split(b"\n", 1)[0]
         reply = reply_bytes.decode("utf-8", errors="replace").strip()
-        if reply.endswith("OK"):
+        if reply == "stream: OK":
             return {"engine": "clamav", "status": "clean"}
-        if reply.endswith("FOUND"):
+        if reply.startswith("stream: ") and reply.endswith(" FOUND"):
             raise DocumentMalwareDetected("ClamAV detected a malware signature.")
         raise DocumentScannerUnavailable("ClamAV returned no valid clean result.")
     except DocumentScannerError:
