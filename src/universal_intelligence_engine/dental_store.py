@@ -1207,6 +1207,49 @@ class DentalStore:
         )
         return self._execute(sql, (clinic_id, patient_id))
 
+    def dashboard_summary(self, clinic_id: str) -> dict[str, int]:
+        """Return clinic-scoped aggregate metrics without exposing patient records."""
+        placeholder = "%s" if self.database_url else "?"
+
+        patients = self._execute(
+            f"SELECT COUNT(*) AS total FROM dental_patients WHERE clinic_id={placeholder}",
+            (clinic_id,),
+        )
+        appointments = self._execute(
+            f"SELECT COUNT(*) AS total, "
+            "COALESCE(SUM(CASE WHEN status='requested' THEN 1 ELSE 0 END),0) AS pending "
+            f"FROM dental_appointments WHERE clinic_id={placeholder}",
+            (clinic_id,),
+        )
+        treatments = self._execute(
+            f"SELECT COUNT(*) AS total FROM dental_treatment_plans "
+            f"WHERE clinic_id={placeholder} AND status IN ('proposed','accepted','in_progress')",
+            (clinic_id,),
+        )
+        invoices = self._execute(
+            f"SELECT COUNT(*) AS invoice_count, "
+            "COALESCE(SUM(total_paise),0) AS invoiced_total_paise, "
+            "COALESCE(SUM(paid_paise),0) AS collected_total_paise, "
+            "COALESCE(SUM(CASE WHEN status IN ('issued','partially_paid','overdue') "
+            "THEN total_paise-paid_paise ELSE 0 END),0) AS outstanding_balance_paise "
+            f"FROM dental_invoices WHERE clinic_id={placeholder} AND status NOT IN ('draft','void')",
+            (clinic_id,),
+        )
+
+        patient_row = patients[0] if patients else {}
+        appointment_row = appointments[0] if appointments else {}
+        treatment_row = treatments[0] if treatments else {}
+        invoice_row = invoices[0] if invoices else {}
+        return {
+            "patient_count": int(patient_row.get("total") or 0),
+            "appointment_count": int(appointment_row.get("total") or 0),
+            "pending_appointment_requests": int(appointment_row.get("pending") or 0),
+            "active_treatment_plan_count": int(treatment_row.get("total") or 0),
+            "issued_invoice_count": int(invoice_row.get("invoice_count") or 0),
+            "invoiced_total_paise": int(invoice_row.get("invoiced_total_paise") or 0),
+            "collected_total_paise": int(invoice_row.get("collected_total_paise") or 0),
+            "outstanding_balance_paise": int(invoice_row.get("outstanding_balance_paise") or 0),
+        }
 
     def get_clinic(self, clinic_id: str) -> dict[str, Any] | None:
         rows = self._execute(

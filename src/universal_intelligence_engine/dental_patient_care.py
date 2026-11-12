@@ -369,3 +369,10 @@ def list_patient_receipts(
         patient["clinic_id"], patient["id"], patient_visible_only=True
     )
     return _envelope([_public_receipt(item) for item in receipts])
+
+
+@router.get("/doctor/dashboard/summary")
+def doctor_dashboard_summary(actor: Annotated[dict, Depends(require_doctor)]):
+    """Return non-identifying live metrics for the doctor's active clinic workspace."""
+    summary = get_dental_store().dashboard_summary(actor["clinic_id"])
+    return _envelope(summary)
