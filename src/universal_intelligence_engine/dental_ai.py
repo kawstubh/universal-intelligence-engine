@@ -523,7 +523,10 @@ async def _patient_record(
                 },
             )
         return row
-    linked = store.patients_by_user_id(actor["user_id"])
+    list_linked = getattr(store, "patients_by_user_id", None)
+    if list_linked is None:
+        return store.patient_by_user_id(actor["user_id"])
+    linked = list_linked(actor["user_id"])
     if len(linked) > 1:
         raise HTTPException(
             409,
