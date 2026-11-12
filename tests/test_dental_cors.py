@@ -48,7 +48,16 @@ def test_local_oralyn_preflight_allows_explicit_test_origin():
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
     assert "POST" in response.headers["access-control-allow-methods"]
     assert response.headers["access-control-allow-credentials"] == "true"
-    exposed = response.headers["access-control-expose-headers"].lower()
+
+    # Access-Control-Expose-Headers is sent on an actual CORS response, not
+    # on the OPTIONS preflight response.
+    actual = client.get(
+        "/v1/dental/health",
+        headers={"Origin": "http://localhost:5173"},
+    )
+    assert actual.status_code == 200
+    assert actual.headers["access-control-allow-origin"] == "http://localhost:5173"
+    exposed = actual.headers["access-control-expose-headers"].lower()
     assert "strict-transport-security" in exposed
     assert "x-content-type-options" in exposed
 
