@@ -131,6 +131,14 @@ def test_unknown_scanner_response_fails_closed(monkeypatch):
         scanner.scan_document_bytes(b"synthetic test payload")
 
 
+def test_non_clamav_reply_cannot_be_mistaken_for_a_clean_scan(monkeypatch):
+    fake_socket = FakeScannerSocket(b"untrusted-prefix stream: OK\\0")
+    _configure_private_scanner(monkeypatch, fake_socket)
+
+    with pytest.raises(scanner.DocumentScannerUnavailable):
+        scanner.scan_document_bytes(b"synthetic test payload")
+
+
 def test_scanner_timeout_fails_closed(monkeypatch):
     class TimeoutSocket(FakeScannerSocket):
         def recv(self, size: int) -> bytes:
