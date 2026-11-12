@@ -51,3 +51,15 @@ def test_openapi_hides_patient_ai_and_keeps_doctor_ai_and_patient_records():
     assert "/v1/dental/ai/patient/chart" in paths
     assert "/v1/dental/ai/doctor/patient-summary" in paths
     assert "/v1/dental/intelligence/run" in paths
+
+
+def test_patient_ai_disabled_routes_normalize_trailing_slashes():
+    routes = [
+        ("POST", "/v1/dental/ai/patient/consent/"),
+        ("GET", "/v1/dental/ai/patient/history/"),
+        ("DELETE", "/v1/dental/ai/patient/history/"),
+    ]
+    for method, path in routes:
+        response = client.request(method, path, json={} if method == "POST" else None)
+        assert response.status_code == 404, (method, path, response.status_code, response.text)
+        assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
