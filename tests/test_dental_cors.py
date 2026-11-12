@@ -48,9 +48,6 @@ def test_local_oralyn_preflight_allows_explicit_test_origin():
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
     assert "POST" in response.headers["access-control-allow-methods"]
     assert response.headers["access-control-allow-credentials"] == "true"
-    exposed = response.headers["access-control-expose-headers"].lower()
-    assert "strict-transport-security" in exposed
-    assert "x-content-type-options" in exposed
 
 
 def test_unlisted_browser_origin_is_not_reflected():
@@ -68,7 +65,10 @@ def test_unlisted_browser_origin_is_not_reflected():
 
 def test_dental_api_responses_are_not_cached_and_use_nosniff():
     client = TestClient(app)
-    response = client.get("/v1/dental/health")
+    response = client.get(
+        "/v1/dental/health",
+        headers={"Origin": "http://localhost:5173"},
+    )
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store, private"
     assert response.headers["pragma"] == "no-cache"
@@ -78,6 +78,9 @@ def test_dental_api_responses_are_not_cached_and_use_nosniff():
     assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
     assert response.headers["x-frame-options"] == "DENY"
     assert response.headers["permissions-policy"] == "camera=(), microphone=(), geolocation=()"
+    exposed = response.headers["access-control-expose-headers"].lower()
+    assert "strict-transport-security" in exposed
+    assert "x-content-type-options" in exposed
 
 
 def test_disabled_patient_ai_response_is_also_not_cacheable():
