@@ -1,4 +1,4 @@
-from fastapi.testclient import TestClient
+﻿from fastapi.testclient import TestClient
 
 from universal_intelligence_engine.api import app
 
@@ -37,7 +37,7 @@ def test_patient_account_data_routes_remain_available_behind_patient_auth():
         ("GET", "/v1/dental/ai/patient/appointments"),
         ("GET", "/v1/dental/ai/patient/chart"),
         ("POST", "/v1/dental/ai/patient/device"),
-        ("GET", "/v1/dental/ai/patient/recall"),
+        ("POST", "/v1/dental/ai/patient/recall"),
     ]
     for method, path in routes:
         response = client.request(method, path, json={} if method == "POST" else None)

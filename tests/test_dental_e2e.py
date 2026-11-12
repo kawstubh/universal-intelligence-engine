@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 from fastapi.testclient import TestClient
 
 from universal_intelligence_engine import dental_api
@@ -68,7 +68,7 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
         ("DELETE", "/v1/dental/ai/patient/history", None),
     ]:
         response = client.request(method, path, json=payload)
-        if path.endswith(("/chat", "/triage", "/treatment-explanation", "/aftercare")):
+        if path.endswith(("/chat", "/triage", "/treatment-explanation", "/aftercare", "/consent", "/history")):
             assert response.status_code == 404, (method, path, response.text)
             assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
         else:
