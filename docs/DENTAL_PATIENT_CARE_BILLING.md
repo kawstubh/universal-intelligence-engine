@@ -52,6 +52,7 @@ Doctor (existing doctor email/password auth and active workspace):
 - `POST /v1/dental/doctor/invoices/{invoice_id}/issue`
 - `POST /v1/dental/doctor/invoices/{invoice_id}/receipts`
 - `POST /v1/dental/doctor/invoices/{invoice_id}/void`
+- `GET /v1/dental/doctor/dashboard/summary` (aggregate counts and INR totals for the active workspace; no patient identifiers)
 
 Patient (existing Supabase patient auth; patient ID is resolved from the authenticated user):
 - `GET /v1/dental/patient/treatment-plans`

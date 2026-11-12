@@ -425,3 +425,130 @@ def test_patient_with_multiple_clinic_links_must_select_the_record(care_api):
     )
     assert denied.status_code == 403
     assert denied.json()["detail"]["code"] == "PATIENT_IDENTITY_MISMATCH"
+
+
+def test_doctor_dashboard_summary_is_live_and_scoped_to_active_workspace(care_api):
+    client, store, actor, _patient_actor, patient_a, _patient_b = care_api
+
+    plan = client.post(
+        f"/v1/dental/doctor/patients/{patient_a['id']}/treatment-plans",
+        json={
+            "title": "Dashboard treatment plan",
+            "items": [{"description": "Clinical review"}],
+        },
+    )
+    assert plan.status_code == 200, plan.text
+    plan_id = plan.json()["result"]["id"]
+    proposed = client.patch(
+        f"/v1/dental/doctor/treatment-plans/{plan_id}",
+        json={"status": "proposed"},
+    )
+    assert proposed.status_code == 200, proposed.text
+
+    invoice = client.post(
+        f"/v1/dental/doctor/patients/{patient_a['id']}/invoices",
+        json={
+            "idempotency_key": "dashboard-summary-invoice-0001",
+            "items": [
+                {
+                    "description": "Examination",
+                    "quantity_milli": 1000,
+                    "unit_price_paise": 100000,
+                    "tax_rate_bps": 0,
+                }
+            ],
+        },
+    )
+    assert invoice.status_code == 200, invoice.text
+    invoice_id = invoice.json()["result"]["id"]
+    issued = client.post(
+        f"/v1/dental/doctor/invoices/{invoice_id}/issue",
+        json={},
+    )
+    assert issued.status_code == 200, issued.text
+    receipt = client.post(
+        f"/v1/dental/doctor/invoices/{invoice_id}/receipts",
+        json={
+            "amount_paise": 25000,
+            "method": "upi",
+            "idempotency_key": "dashboard-summary-receipt-0001",
+        },
+    )
+    assert receipt.status_code == 200, receipt.text
+
+    store.create_appointment(
+        {
+            "patient_id": patient_a["id"],
+            "starts_at": "2026-11-12T10:00:00+00:00",
+            "treatment_type": "Check-up",
+            "status": "requested",
+        },
+        "clinic-a",
+    )
+
+    response = client.get("/v1/dental/doctor/dashboard/summary")
+    assert response.status_code == 200, response.text
+    summary = response.json()["result"]
+    assert summary == {
+        "patient_count": 1,
+        "appointment_count": 1,
+        "pending_appointment_requests": 1,
+        "active_treatment_plan_count": 1,
+        "issued_invoice_count": 1,
+        "invoiced_total_paise": 100000,
+        "collected_total_paise": 25000,
+        "outstanding_balance_paise": 75000,
+    }
+    assert "patient_id" not in summary
+    assert "clinic_id" not in summary
+    assert "patient_name" not in summary
+
+    actor["clinic_id"] = "clinic-b"
+    other_workspace = client.get("/v1/dental/doctor/dashboard/summary")
+    assert other_workspace.status_code == 200
+    assert other_workspace.json()["result"] == {
+        "patient_count": 1,
+        "appointment_count": 0,
+        "pending_appointment_requests": 0,
+        "active_treatment_plan_count": 0,
+        "issued_invoice_count": 0,
+        "invoiced_total_paise": 0,
+        "collected_total_paise": 0,
+        "outstanding_balance_paise": 0,
+    }
+
+
+def test_doctor_dashboard_summary_returns_zeroes_for_an_empty_workspace(care_api):
+    client, store, actor, _patient_actor, _patient_a, _patient_b = care_api
+    store.create_organisation(
+        {"id": "org-empty", "name": "Empty Clinic Group", "organisation_type": "clinic"}
+    )
+    store.create_clinic(
+        {
+            "id": "clinic-empty",
+            "organisation_id": "org-empty",
+            "name": "Empty Workspace",
+            "clinic_type": "clinic",
+        }
+    )
+    actor["clinic_id"] = "clinic-empty"
+    response = client.get("/v1/dental/doctor/dashboard/summary")
+    assert response.status_code == 200
+    assert response.json()["result"] == {
+        "patient_count": 0,
+        "appointment_count": 0,
+        "pending_appointment_requests": 0,
+        "active_treatment_plan_count": 0,
+        "issued_invoice_count": 0,
+        "invoiced_total_paise": 0,
+        "collected_total_paise": 0,
+        "outstanding_balance_paise": 0,
+    }
+
+
+def test_doctor_dashboard_summary_requires_doctor_authentication():
+    app = FastAPI()
+    app.include_router(dental_patient_care.router)
+    client = TestClient(app)
+    response = client.get("/v1/dental/doctor/dashboard/summary")
+    assert response.status_code == 401
