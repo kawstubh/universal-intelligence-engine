@@ -357,12 +357,12 @@ def list_assistant_accounts(
         "SELECT a.id,a.email,a.active,a.created_at "
         "FROM dental_clinic_assistants a "
         "JOIN dental_clinic_assistant_memberships m ON m.assistant_id=a.id "
-        "WHERE m.clinic_id=%s AND m.active=true "
+        "WHERE m.clinic_id=%s "
         "ORDER BY lower(a.email)",
         "SELECT a.id,a.email,a.active,a.created_at "
         "FROM dental_clinic_assistants a "
         "JOIN dental_clinic_assistant_memberships m ON m.assistant_id=a.id "
-        "WHERE m.clinic_id=? AND m.active=1 "
+        "WHERE m.clinic_id=? "
         "ORDER BY lower(a.email)",
         (actor["clinic_id"],),
     )
