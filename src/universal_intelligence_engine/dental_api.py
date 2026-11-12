@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import secrets
 import time
@@ -36,6 +37,22 @@ _PUBLIC_APPOINTMENT_ATTEMPTS: dict[str, deque[float]] = defaultdict(deque)
 _PUBLIC_APPOINTMENT_WINDOW_SECONDS = 300
 _PUBLIC_APPOINTMENT_MAX_ATTEMPTS = 8
 _PUBLIC_APPOINTMENT_MAX_CLIENTS = 10_000
+
+
+def _public_appointment_client_ip(request: Request) -> str:
+    """Use Cloudflare's edge-supplied client IP on Render, not the proxy socket IP.
+
+    Render routes public web-service traffic through Cloudflare. CF-Connecting-IP
+    is set by Cloudflare for origin traffic and has a single-IP format; do not
+    trust caller-supplied X-Forwarded-For chains as a rate-limit identity.
+    """
+    forwarded = str(request.headers.get("cf-connecting-ip") or "").strip()
+    if forwarded:
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            pass
+    return str(request.client.host if request.client else "unknown")
 
 
 def _check_public_appointment_rate_limit(client_ip: str) -> None:
@@ -784,9 +801,7 @@ async def create_public_appointment(body: PublicAppointmentIn, request: Request)
     The current public form is for the configured master clinic; a multi-clinic
     public booking directory needs a separate verified clinic-slug contract.
     """
-    _check_public_appointment_rate_limit(
-        request.client.host if request.client else "unknown"
-    )
+    _check_public_appointment_rate_limit(_public_appointment_client_ip(request))
     store = get_dental_store()
     master_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
     patient = store.create_patient(

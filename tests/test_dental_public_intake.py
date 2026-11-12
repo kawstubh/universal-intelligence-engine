@@ -41,6 +41,60 @@ def test_public_appointment_rate_limit_isolated_per_client_ip(monkeypatch):
     assert limited.value.status_code == 429
 
 
+def test_public_booking_rate_limit_uses_cloudflare_client_ip(monkeypatch):
+    seen = []
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", seen.append)
+    response = TestClient(app).post(
+        "/v1/dental/public/appointments",
+        headers={
+            "CF-Connecting-IP": "203.0.113.44",
+            "X-Forwarded-For": "198.51.100.99, 10.0.0.4",
+        },
+        json={
+            "name": "Synthetic Patient",
+            "phone": "+919999000001",
+            "starts_at": "2026-11-20T10:00:00",
+            "treatment_type": "Dental check-up",
+        },
+    )
+    assert response.status_code in (200, 201)
+    assert seen == ["203.0.113.44"]
+
+
+def test_public_booking_rate_limit_uses_cloudflare_ipv6_client_ip(monkeypatch):
+    seen = []
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", seen.append)
+    response = TestClient(app).post(
+        "/v1/dental/public/appointments",
+        headers={"CF-Connecting-IP": "2001:db8::42"},
+        json={
+            "name": "Synthetic Patient",
+            "phone": "+919999000003",
+            "starts_at": "2026-11-20T10:00:00",
+            "treatment_type": "Dental check-up",
+        },
+    )
+    assert response.status_code in (200, 201)
+    assert seen == ["2001:db8::42"]
+
+
+def test_public_booking_rate_limit_ignores_invalid_cloudflare_ip_header(monkeypatch):
+    seen = []
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", seen.append)
+    response = TestClient(app).post(
+        "/v1/dental/public/appointments",
+        headers={"CF-Connecting-IP": "not-an-ip"},
+        json={
+            "name": "Synthetic Patient",
+            "phone": "+919999000002",
+            "starts_at": "2026-11-20T10:00:00",
+            "treatment_type": "Dental check-up",
+        },
+    )
+    assert response.status_code in (200, 201)
+    assert seen == ["testclient"]
+
+
 def test_public_booking_route_checks_client_rate_limit_before_persisting(monkeypatch):
     seen = []
 
