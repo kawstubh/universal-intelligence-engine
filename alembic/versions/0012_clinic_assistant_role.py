@@ -99,6 +99,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Keep assistant identities and audit-relevant session records on downgrade.
-    # Removing these tables would revoke or orphan access assignments.
-    pass
+    inspector = inspect(op.get_bind())
+    for table_name in (
+        "dental_assistant_sessions",
+        "dental_clinic_assistant_memberships",
+        "dental_clinic_assistants",
+    ):
+        if inspector.has_table(table_name):
+            op.drop_table(table_name)
