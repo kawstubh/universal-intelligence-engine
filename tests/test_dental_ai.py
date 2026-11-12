@@ -292,8 +292,8 @@ def test_patient_ai_is_disabled_even_when_a_bearer_token_is_supplied():
         headers={"Authorization": "Bearer synthetic-token-must-not-be-validated"},
         json={"message": "hello"},
     )
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PATIENT_ACCOUNTS_DISABLED"
 
 
 def test_patient_appointments_and_chart_require_explicit_selection_for_multiple_links(monkeypatch):
