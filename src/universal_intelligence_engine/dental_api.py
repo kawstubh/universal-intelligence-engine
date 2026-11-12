@@ -7,11 +7,12 @@ import os
 import secrets
 import time
 from collections import defaultdict, deque
-from typing import Annotated, Any
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .dental_auth import (
     hash_password,
@@ -168,14 +169,25 @@ class AppointmentUpdateIn(BaseModel):
 
 
 class PublicAppointmentIn(BaseModel):
+    idempotency_key: str = Field(min_length=16, max_length=128)
     name: str = Field(min_length=2, max_length=200)
     phone: str = Field(min_length=7, max_length=40)
-    starts_at: str = Field(min_length=5, max_length=80)
+    starts_at: datetime
     treatment_type: str = Field(
         default="General dental consultation", min_length=1, max_length=120
     )
     note: str | None = Field(default=None, max_length=2000)
-    intelligence_request: bool = False
+    intelligence_request: Literal[False] = False
+
+    @field_validator("starts_at")
+    @classmethod
+    def require_future_timezone_aware_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Appointment start time must include a timezone")
+        normalized = value.astimezone(UTC)
+        if normalized <= datetime.now(UTC):
+            raise ValueError("Appointment start time must be in the future")
+        return normalized
 
 
 class ChartEntryIn(BaseModel):
@@ -795,31 +807,47 @@ async def create_patient(
 
 @router.post("/public/appointments")
 async def create_public_appointment(body: PublicAppointmentIn, request: Request):
-    """Create a limited single-clinic guest request with per-IP burst protection.
+    """Create a single-clinic, account-free request with server validation and idempotency.
 
-    Public intake does not run AI, expose records, or accept actor/admin identity.
+    Public intake never runs AI, exposes records, or accepts actor/admin identity.
     The current public form is for the configured master clinic; a multi-clinic
-    public booking directory needs a separate verified clinic-slug contract.
+    booking directory needs a separate verified clinic-slug contract.
     """
     _check_public_appointment_rate_limit(_public_appointment_client_ip(request))
     store = get_dental_store()
     master_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
-    patient = store.create_patient(
-        {"name": body.name.strip(), "phone": body.phone.strip(), "age": ""},
-        master_clinic,
-    )
-    appointment = store.create_appointment(
-        {
-            "patient_id": patient["id"],
-            "starts_at": body.starts_at.strip(),
-            "treatment_type": body.treatment_type.strip(),
-            "note": (body.note or "").strip(),
-            "status": "requested",
+    try:
+        result = store.create_public_appointment(
+            {
+                "idempotency_key": body.idempotency_key,
+                "name": body.name,
+                "phone": body.phone,
+                "starts_at": body.starts_at.astimezone(UTC).isoformat(),
+                "treatment_type": body.treatment_type,
+                "note": body.note or "",
+            },
+            master_clinic,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "IDEMPOTENCY_KEY_REUSED",
+                "message": str(exc),
+            },
+        ) from exc
+
+    appointment = result["appointment"]
+    return {
+        "status": "requested",
+        "duplicate": bool(result["duplicate"]),
+        "appointment": {
+            "id": appointment["id"],
+            "starts_at": appointment["starts_at"],
+            "treatment_type": appointment["treatment_type"],
+            "status": appointment["status"],
         },
-        master_clinic,
-    )
-    store.audit("public-intake", "request", "appointment", appointment["id"], clinic_id=master_clinic)
-    return {"status": "requested", "appointment": appointment}
+    }
 
 
 @router.post("/scans/screen")

@@ -1,8 +1,12 @@
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
 from universal_intelligence_engine import dental_api
 from universal_intelligence_engine.api import app
+from universal_intelligence_engine.dental_store import DentalStore
 
 
 @pytest.fixture()
@@ -10,10 +14,10 @@ def e2e_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "e2e.sqlite3"))
     monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
     monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "clinic-a")
-    dental_api._store = None
-    yield
+    store = DentalStore()
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: store)
+    yield store
     app.dependency_overrides.clear()
-    dental_api._store = None
 
 
 def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
@@ -21,15 +25,21 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
     appointment_response = client.post(
         "/v1/dental/public/appointments",
         json={
+            "idempotency_key": uuid4().hex,
             "name": "E2E Patient",
             "phone": "9876543210",
-            "starts_at": "2026-10-10T10:00:00+05:30",
+            "starts_at": (datetime.now(UTC) + timedelta(days=7)).isoformat(),
             "treatment_type": "Dental consultation",
+            "intelligence_request": False,
         },
     )
-    assert appointment_response.status_code == 200
+    assert appointment_response.status_code == 200, appointment_response.text
     appointment = appointment_response.json()["appointment"]
-    patient_id = appointment["patient_id"]
+    assert "patient_id" not in appointment
+    stored_appointment = next(
+        row for row in e2e_db.appointments("clinic-a") if row["id"] == appointment["id"]
+    )
+    patient_id = stored_appointment["patient_id"]
 
     app.dependency_overrides[dental_api.require_doctor] = lambda: {
         "id": "doctor-a",
@@ -56,8 +66,9 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
     )
     assert chart.status_code == 200
 
-    # Patient AI is disabled. Patient records/linking routes remain available
-    # only behind the separate Supabase patient-auth dependency.
+    # Patient AI is disabled and the account-free public flow never returns
+    # patient identifiers. Private patient routes remain unavailable without
+    # verified identity and are not used by the public portal.
     for method, path, payload in [
         ("POST", "/v1/dental/ai/patient/chat", {"message": "hello"}),
         ("POST", "/v1/dental/ai/patient/triage", {"symptoms": "toothache"}),
@@ -71,6 +82,9 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
         if path.endswith(("/chat", "/triage", "/treatment-explanation", "/aftercare", "/consent", "/history")):
             assert response.status_code == 404, (method, path, response.text)
             assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
+        elif path.startswith(("/v1/dental/patient/", "/v1/dental/ai/patient/")):
+            assert response.status_code == 404, (method, path, response.text)
+            assert response.json()["detail"]["code"] == "PATIENT_ACCOUNT_PORTAL_DISABLED"
         else:
             assert response.status_code == 401, (method, path, response.text)
 

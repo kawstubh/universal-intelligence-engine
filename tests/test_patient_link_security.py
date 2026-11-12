@@ -1,8 +1,15 @@
+import pytest
 from fastapi.testclient import TestClient
 
 import universal_intelligence_engine.dental_ai as dental_ai
 from universal_intelligence_engine.dental_ai import require_patient
 from universal_intelligence_engine.api import app
+
+
+@pytest.fixture(autouse=True)
+def enable_legacy_patient_routes_for_compatibility_tests(monkeypatch):
+    # These tests exercise dormant legacy handlers only; production remains off.
+    monkeypatch.setenv("DENTAL_PATIENT_ACCOUNT_PORTAL_ENABLED", "true")
 
 
 def test_patient_account_routes_require_patient_authentication():
@@ -24,6 +31,23 @@ def test_patient_account_routes_require_patient_authentication():
         assert response.status_code == 401, (
             f"{method.upper()} {path} must require patient auth, got {response.status_code}"
         )
+
+
+def test_patient_account_and_invite_routes_are_disabled_by_default(monkeypatch):
+    monkeypatch.setenv("DENTAL_PATIENT_ACCOUNT_PORTAL_ENABLED", "false")
+    client = TestClient(app)
+    cases = [
+        ("GET", "/v1/dental/ai/patient/profile"),
+        ("GET", "/v1/dental/ai/patient/appointments"),
+        ("GET", "/v1/dental/patient/linked-records"),
+        ("POST", "/v1/dental/patient/link"),
+        ("POST", "/v1/dental/doctor/patients/synthetic-patient/invite"),
+        ("POST", "/v1/dental/ai/doctor/patients/synthetic-patient/invite"),
+    ]
+    for method, path in cases:
+        response = client.request(method, path, json={"invite_code": "synthetic-code"})
+        assert response.status_code == 404, (method, path, response.text)
+        assert response.json()["detail"]["code"] == "PATIENT_ACCOUNT_PORTAL_DISABLED"
 
 
 

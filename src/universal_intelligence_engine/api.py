@@ -137,10 +137,35 @@ app.add_middleware(
 service = build_service()
 
 
-# Launch policy: patient-facing AI is disabled at the API boundary, including
-# legacy routes that may still be registered by the Dental router.
+# Launch policy: the Oralyn patient journey is account-free. Legacy patient
+# account/linking routes remain dormant for compatibility and are unavailable
+# unless an isolated test explicitly opts in. Public guest booking is separate.
+def _patient_account_portal_enabled() -> bool:
+    return os.getenv("DENTAL_PATIENT_ACCOUNT_PORTAL_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _is_patient_account_route(path: str) -> bool:
+    normalized = path.rstrip("/")
+    return (
+        normalized.startswith("/v1/dental/patient/")
+        or normalized.startswith("/v1/dental/ai/patient/")
+        or (
+            normalized.startswith("/v1/dental/doctor/patients/")
+            and normalized.endswith("/invite")
+        )
+        or (
+            normalized.startswith("/v1/dental/ai/doctor/patients/")
+            and normalized.endswith("/invite")
+        )
+    )
+
+
 @app.middleware("http")
-async def disable_patient_ai(request: Request, call_next):
+async def disable_patient_ai_and_account_routes(request: Request, call_next):
     path = request.url.path.rstrip("/")
     disabled_patient_ai = {
         "/v1/dental/ai/patient/chat",
@@ -158,6 +183,16 @@ async def disable_patient_ai(request: Request, call_next):
                 "detail": {
                     "code": "PATIENT_AI_DISABLED",
                     "message": "Patient-facing AI is not available.",
+                }
+            },
+        )
+    if not _patient_account_portal_enabled() and _is_patient_account_route(path):
+        return JSONResponse(
+            status_code=404,
+            content={
+                "detail": {
+                    "code": "PATIENT_ACCOUNT_PORTAL_DISABLED",
+                    "message": "Patient accounts and linked-record access are not part of the Oralyn public journey.",
                 }
             },
         )
@@ -203,17 +238,22 @@ def _doctor_only_openapi():
         description=app.description,
         routes=app.routes,
     )
+    disabled_patient_ai = {
+        "/v1/dental/ai/patient/chat",
+        "/v1/dental/ai/patient/triage",
+        "/v1/dental/ai/patient/treatment-explanation",
+        "/v1/dental/ai/patient/aftercare",
+        "/v1/dental/ai/patient/consent",
+        "/v1/dental/ai/patient/history",
+    }
     schema["paths"] = {
         path: operations
         for path, operations in schema.get("paths", {}).items()
-        if path.rstrip("/") not in {
-            "/v1/dental/ai/patient/chat",
-            "/v1/dental/ai/patient/triage",
-            "/v1/dental/ai/patient/treatment-explanation",
-            "/v1/dental/ai/patient/aftercare",
-            "/v1/dental/ai/patient/consent",
-            "/v1/dental/ai/patient/history",
-        }
+        if path.rstrip("/") not in disabled_patient_ai
+        and (
+            _patient_account_portal_enabled()
+            or not _is_patient_account_route(path)
+        )
     }
     app.openapi_schema = schema
     return schema

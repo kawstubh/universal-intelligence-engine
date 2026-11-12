@@ -1,3 +1,6 @@
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -32,26 +35,46 @@ def test_chart_tooth_validation(monkeypatch):
     app.dependency_overrides.clear()
 
 
-def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp_path):
-    monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "dental.sqlite3"))
-    dental_api._store = None
+def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch):
+    class FakeStore:
+        def create_public_appointment(self, data, clinic_id):
+            assert clinic_id == "clinic-a"
+            assert data["idempotency_key"]
+            assert data["starts_at"].endswith("+00:00")
+            return {
+                "appointment": {
+                    "id": "appointment-synthetic",
+                    "patient_id": "must-not-be-returned",
+                    "starts_at": data["starts_at"],
+                    "treatment_type": data["treatment_type"],
+                    "status": "requested",
+                },
+                "duplicate": False,
+            }
+
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", lambda _ip: None)
+    monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "clinic-a")
     client = TestClient(app)
     response = client.post(
         "/v1/dental/public/appointments",
         json={
-            "name": "Test Patient",
+            "idempotency_key": uuid4().hex,
+            "name": "Synthetic Test Patient",
             "phone": "9876543210",
-            "starts_at": "2026-10-06 10:00 AM",
+            "starts_at": (datetime.now(UTC) + timedelta(days=7)).isoformat(),
             "treatment_type": "Dental Check-up",
             "note": None,
             "intelligence_request": False,
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "requested"
+    assert body["duplicate"] is False
     assert body["appointment"]["status"] == "requested"
     assert body["appointment"]["treatment_type"] == "Dental Check-up"
+    assert "patient_id" not in body["appointment"]
 
 
 def test_intelligence_denies_cross_clinic_patient(monkeypatch):

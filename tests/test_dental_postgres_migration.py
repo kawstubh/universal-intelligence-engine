@@ -40,7 +40,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
         monkeypatch.delenv("DENTAL_SQLITE_PATH", raising=False)
         config = Config(str(ROOT / "alembic.ini"))
         assert ScriptDirectory.from_config(config).get_heads() == [
-            "0012_clinic_assistant_role"
+            "0013_public_booking_idempotency"
         ]
         command.upgrade(config, "0005_password_auth")
 
@@ -98,6 +98,18 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 for column in inspector.get_columns("dental_documents")
             }
             assert {"reviewed_by_doctor_id", "reviewed_at"}.issubset(document_columns)
+
+            appointment_columns = {
+                column["name"]
+                for column in inspector.get_columns("dental_appointments")
+            }
+            assert {"idempotency_key", "idempotency_fingerprint"}.issubset(
+                appointment_columns
+            )
+            appointment_indexes = {
+                index["name"] for index in inspector.get_indexes("dental_appointments")
+            }
+            assert "uq_dental_appointments_clinic_idempotency" in appointment_indexes
 
             workspaces = connection.execute(
                 sa.text("SELECT id FROM dental_clinics")
