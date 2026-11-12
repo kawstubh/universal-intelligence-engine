@@ -121,6 +121,16 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    expose_headers=[
+        "Cache-Control",
+        "Pragma",
+        "Expires",
+        "X-Content-Type-Options",
+        "Strict-Transport-Security",
+        "Referrer-Policy",
+        "X-Frame-Options",
+        "Permissions-Policy",
+    ],
 )
 
 service = build_service()
