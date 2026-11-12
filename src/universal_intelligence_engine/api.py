@@ -137,29 +137,41 @@ app.add_middleware(
 service = build_service()
 
 
-# Launch policy: patient-facing AI is disabled at the API boundary, including
-# legacy routes that may still be registered by the Dental router.
+# Launch policy: the patient journey is public and account-free. Legacy patient
+# auth, patient record portals and Doctor-created invite links are disabled at
+# the API boundary; only the public guest appointment endpoint remains open.
+def _disabled_patient_route(path: str) -> str | None:
+    normalized = path.rstrip("/")
+    if normalized.startswith("/v1/dental/patient/"):
+        return "PATIENT_ACCOUNTS_DISABLED"
+    if normalized.startswith("/v1/dental/ai/patient/"):
+        return "PATIENT_AI_DISABLED"
+    if (
+        normalized.startswith("/v1/dental/doctor/patients/")
+        and normalized.endswith("/invite")
+    ):
+        return "PATIENT_INVITES_DISABLED"
+    return None
+
+
 @app.middleware("http")
-async def disable_patient_ai(request: Request, call_next):
-    path = request.url.path.rstrip("/")
-    disabled_patient_ai = {
-        "/v1/dental/ai/patient/chat",
-        "/v1/dental/ai/patient/triage",
-        "/v1/dental/ai/patient/treatment-explanation",
-        "/v1/dental/ai/patient/aftercare",
-        # Consent and stored AI history are part of the patient AI surface too.
-        "/v1/dental/ai/patient/consent",
-        "/v1/dental/ai/patient/history",
-    }
-    if path in disabled_patient_ai:
+async def enforce_account_free_patient_journey(request: Request, call_next):
+    # Let the CORS middleware answer browser preflight requests before the
+    # account-free policy is applied to the actual patient endpoint request.
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    code = _disabled_patient_route(request.url.path)
+    if code:
+        message = (
+            "Patient-facing AI is not available."
+            if code == "PATIENT_AI_DISABLED"
+            else "Patient accounts and private portal access are disabled. Use the public clinic booking page; clinical records remain Doctor-only."
+            if code == "PATIENT_ACCOUNTS_DISABLED"
+            else "Patient account invitations are disabled. The clinic uses the public, account-free appointment request flow."
+        )
         return JSONResponse(
-            status_code=404,
-            content={
-                "detail": {
-                    "code": "PATIENT_AI_DISABLED",
-                    "message": "Patient-facing AI is not available.",
-                }
-            },
+            status_code=404 if code == "PATIENT_AI_DISABLED" else 410,
+            content={"detail": {"code": code, "message": message}},
         )
     return await call_next(request)
 
@@ -206,14 +218,7 @@ def _doctor_only_openapi():
     schema["paths"] = {
         path: operations
         for path, operations in schema.get("paths", {}).items()
-        if path.rstrip("/") not in {
-            "/v1/dental/ai/patient/chat",
-            "/v1/dental/ai/patient/triage",
-            "/v1/dental/ai/patient/treatment-explanation",
-            "/v1/dental/ai/patient/aftercare",
-            "/v1/dental/ai/patient/consent",
-            "/v1/dental/ai/patient/history",
-        }
+        if not _disabled_patient_route(path)
     }
     app.openapi_schema = schema
     return schema
