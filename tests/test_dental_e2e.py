@@ -71,7 +71,8 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
             assert response.status_code == 404, (method, path, response.text)
             assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
         else:
-            assert response.status_code == 401, (method, path, response.text)
+            assert response.status_code == 403, (method, path, response.text)
+            assert response.json()["detail"]["code"] == "PATIENT_ACCOUNTS_DISABLED"
 
     app.dependency_overrides[dental_api.require_doctor] = lambda: {
         "id": "doctor-b",
