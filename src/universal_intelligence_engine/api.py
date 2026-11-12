@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,8 +65,63 @@ app = FastAPI(
     version=__version__,
     description="Shared intelligence API for research, reasoning, applications, agents, and Dental Intelligence.",
 )
-origins = [origin.strip() for origin in os.getenv("DENTAL_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://192.168.0.106:5173").split(",") if origin.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type", "X-Requested-With"])
+def _parse_cors_origins(raw: str | None) -> list[str]:
+    """Parse a strict allow-list of exact browser origins.
+
+    An unset value deliberately returns an empty list: deployed services must
+    opt in to their exact HTTPS portal origin instead of inheriting localhost
+    or LAN development origins.
+    """
+    if not raw:
+        return []
+
+    origins: list[str] = []
+    for candidate in raw.split(","):
+        origin = candidate.strip()
+        if not origin:
+            continue
+        parsed = urlsplit(origin)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("DENTAL_CORS_ORIGINS contains an invalid port.") from exc
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        if (
+            scheme not in {"http", "https"}
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or "*" in origin
+        ):
+            raise ValueError(
+                "DENTAL_CORS_ORIGINS must contain exact HTTP(S) origins only; "
+                "wildcards, credentials, paths, queries and fragments are not allowed."
+            )
+        host = f"[{hostname.lower()}]" if ":" in hostname else hostname.lower()
+        is_default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+        if port is not None and not is_default_port:
+            host = f"{host}:{port}"
+        normalized = f"{scheme}://{host}"
+        if origin != normalized:
+            raise ValueError(
+                "DENTAL_CORS_ORIGINS entries must use canonical origin form without a trailing slash."
+            )
+        origins.append(normalized)
+    return list(dict.fromkeys(origins))
+
+
+origins = _parse_cors_origins(os.getenv("DENTAL_CORS_ORIGINS"))
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+)
 
 service = build_service()
 
@@ -95,6 +151,18 @@ async def disable_patient_ai(request: Request, call_next):
             },
         )
     return await call_next(request)
+
+
+@app.middleware("http")
+async def secure_dental_response_headers(request: Request, call_next):
+    """Prevent browser, proxy and service-worker caches from retaining clinical API data."""
+    response = await call_next(request)
+    if request.url.path == "/v1/dental" or request.url.path.startswith("/v1/dental/"):
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    return response
 
 
 app.include_router(dental_router)
