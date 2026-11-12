@@ -22,6 +22,13 @@ from pydantic import BaseModel, Field
 
 from .dental_ai import require_patient
 from .dental_auth import require_doctor
+from .dental_document_scanner import (
+    DocumentMalwareDetected,
+    DocumentScannerConfigurationError,
+    DocumentScannerNotConfigured,
+    DocumentScannerUnavailable,
+    scan_document_bytes,
+)
 from .dental_store import DocumentReviewRequiredError, get_dental_store
 
 logger = logging.getLogger(__name__)
@@ -29,6 +36,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/dental", tags=["dental-documents"])
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
+RETRYABLE_DOCUMENT_SCAN_CODES = {
+    "DOCUMENT_SCAN_NOT_CONFIGURED",
+    "DOCUMENT_SCAN_CONFIGURATION_INVALID",
+    "DOCUMENT_SCAN_UNAVAILABLE",
+    "DOCUMENT_SCAN_AUDIT_UNAVAILABLE",
+}
+
+
 class DocumentUploadIntentIn(BaseModel):
     file_name: str = Field(min_length=1, max_length=180)
     content_type: Literal["application/pdf", "image/jpeg", "image/png", "image/webp"]
@@ -283,6 +298,24 @@ def _reject_pending_upload_safely(store, document_id: str, actor: dict) -> None:
         logger.exception("Could not reject pending dental document upload %s", document_id)
 
 
+def _release_document_upload_claim_safely(store, document_id: str, actor: dict) -> None:
+    """Keep verified quarantine bytes retryable when the scanner is temporarily unavailable."""
+    try:
+        released = store.release_document_upload_claim(
+            document_id, actor["clinic_id"], actor["id"]
+        )
+        if not released:
+            logger.warning(
+                "Could not release document verification claim for retry (document %s)",
+                document_id,
+            )
+    except Exception:
+        logger.exception(
+            "Could not release document verification claim for retry (document %s)",
+            document_id,
+        )
+
+
 def _delete_object_safely(s3, bucket: str, key: str) -> None:
     """Remove quarantine/orphan bytes without masking the primary API result."""
     try:
@@ -293,6 +326,71 @@ def _delete_object_safely(s3, bucket: str, key: str) -> None:
             "Could not remove private dental document object (key fingerprint %s)",
             key_fingerprint,
         )
+
+
+def _scan_document_or_raise(payload: bytes, store, actor: dict, document_id: str) -> None:
+    """Require a clean private ClamAV result before publishing document bytes."""
+    try:
+        scan_document_bytes(payload)
+    except DocumentMalwareDetected as exc:
+        try:
+            store.audit(
+                actor["id"],
+                "document.malware_detected",
+                "document",
+                document_id,
+                actor["clinic_id"],
+            )
+        except Exception:
+            logger.exception("Could not record a blocked document malware scan")
+        raise HTTPException(
+            409,
+            detail={
+                "code": "DOCUMENT_MALWARE_DETECTED",
+                "message": "The uploaded document was blocked by the clinic security scanner.",
+            },
+        ) from exc
+    except DocumentScannerNotConfigured as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_NOT_CONFIGURED",
+                "message": "Private malware scanning is not configured; document uploads are disabled.",
+            },
+        ) from exc
+    except DocumentScannerConfigurationError as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_CONFIGURATION_INVALID",
+                "message": "The private document scanner configuration is invalid.",
+            },
+        ) from exc
+    except DocumentScannerUnavailable as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_UNAVAILABLE",
+                "message": "The clinic security scanner is unavailable; document upload was rejected.",
+            },
+        ) from exc
+
+    try:
+        store.audit(
+            actor["id"],
+            "document.malware_scan_clean",
+            "document",
+            document_id,
+            actor["clinic_id"],
+        )
+    except Exception as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_AUDIT_UNAVAILABLE",
+                "message": "The document security scan could not be recorded; upload was rejected.",
+            },
+        ) from exc
 
 
 @router.post("/doctor/documents/{document_id}/complete")
@@ -377,6 +475,10 @@ def complete_document_upload(
                 detail={"code": "DOCUMENT_CONTENT_TYPE_MISMATCH", "message": "Uploaded bytes do not match the declared PDF or image type."},
             )
 
+        # A checksum and file signature do not establish that a file is safe.
+        # Only a clean result from the private ClamAV service can be published.
+        _scan_document_or_raise(verified_bytes.getvalue(), store, actor, document_id)
+
         verified_bytes.seek(0)
         s3.put_object(
             Bucket=config["bucket"],
@@ -403,7 +505,12 @@ def complete_document_upload(
         result = store.mark_document_uploaded(
             document_id, actor["clinic_id"], actor["id"], final_object_key
         )
-    except HTTPException:
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if detail.get("code") in RETRYABLE_DOCUMENT_SCAN_CODES:
+            # Keep the quarantine object and allow retry after scanner/audit recovery.
+            _release_document_upload_claim_safely(store, document_id, actor)
+            raise
         _reject_pending_upload_safely(store, document_id, actor)
         _delete_object_safely(s3, config["bucket"], document["upload_object_key"])
         _delete_object_safely(s3, config["bucket"], final_object_key)
