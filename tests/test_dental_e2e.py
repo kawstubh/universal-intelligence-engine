@@ -56,8 +56,7 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
     )
     assert chart.status_code == 200
 
-    # Patient AI is disabled. Patient records/linking routes remain available
-    # only behind the separate Supabase patient-auth dependency.
+    # The public journey is account-free; patient account and record APIs are disabled.
     for method, path, payload in [
         ("POST", "/v1/dental/ai/patient/chat", {"message": "hello"}),
         ("POST", "/v1/dental/ai/patient/triage", {"symptoms": "toothache"}),
