@@ -314,3 +314,63 @@ def test_s3_client_failure_rejects_the_pending_upload(document_api, monkeypatch)
     documents = store.documents("clinic-a", patient_a["id"])
     assert len(documents) == 1
     assert documents[0]["status"] == "rejected"
+
+
+def test_patient_with_multiple_clinic_links_selects_only_the_requested_record(document_api):
+    client, store, actor, patient_actor, patient_a, patient_b, fake_s3 = document_api
+    store._execute(
+        "UPDATE dental_patients SET user_id=? WHERE id=?",
+        ("supabase-user-a", patient_b["id"]),
+    )
+    actor["clinic_id"] = "clinic-b"
+    intent, content, checksum = _upload_intent(client, patient_b["id"])
+    document_id = intent.json()["result"]["document"]["id"]
+    stored = store.get_document(document_id, "clinic-b")
+    fake_s3.objects[stored["object_key"]] = {
+        "ContentLength": len(content),
+        "ContentType": "application/pdf",
+        "Metadata": {"sha256": checksum},
+        "Body": content,
+    }
+    assert client.post(f"/v1/dental/doctor/documents/{document_id}/complete").status_code == 200
+    assert client.patch(
+        f"/v1/dental/doctor/documents/{document_id}",
+        json={"patient_visible": True},
+    ).status_code == 200
+
+    ambiguous = client.get("/v1/dental/patient/documents")
+    assert ambiguous.status_code == 409
+    assert ambiguous.json()["detail"]["code"] == "PATIENT_RECORD_SELECTION_REQUIRED"
+
+    clinic_a_docs = client.get(
+        "/v1/dental/patient/documents",
+        params={"patient_id": patient_a["id"]},
+    )
+    clinic_b_docs = client.get(
+        "/v1/dental/patient/documents",
+        params={"patient_id": patient_b["id"]},
+    )
+    assert clinic_a_docs.status_code == 200
+    assert clinic_a_docs.json()["result"] == []
+    assert clinic_b_docs.status_code == 200
+    assert [item["id"] for item in clinic_b_docs.json()["result"]] == [document_id]
+
+    ambiguous_download = client.post(
+        f"/v1/dental/patient/documents/{document_id}/download-intent"
+    )
+    assert ambiguous_download.status_code == 409
+    selected_download = client.post(
+        f"/v1/dental/patient/documents/{document_id}/download-intent",
+        params={"patient_id": patient_b["id"]},
+    )
+    assert selected_download.status_code == 200
+
+    patient_actor["user_id"] = "supabase-user-b"
+    denied = client.get(
+        "/v1/dental/patient/documents",
+        params={"patient_id": patient_a["id"]},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "PATIENT_IDENTITY_MISMATCH"
+
+
