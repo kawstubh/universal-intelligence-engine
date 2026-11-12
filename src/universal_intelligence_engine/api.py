@@ -238,17 +238,22 @@ def _doctor_only_openapi():
         description=app.description,
         routes=app.routes,
     )
+    disabled_patient_ai = {
+        "/v1/dental/ai/patient/chat",
+        "/v1/dental/ai/patient/triage",
+        "/v1/dental/ai/patient/treatment-explanation",
+        "/v1/dental/ai/patient/aftercare",
+        "/v1/dental/ai/patient/consent",
+        "/v1/dental/ai/patient/history",
+    }
     schema["paths"] = {
         path: operations
         for path, operations in schema.get("paths", {}).items()
-        if path.rstrip("/") not in {
-            "/v1/dental/ai/patient/chat",
-            "/v1/dental/ai/patient/triage",
-            "/v1/dental/ai/patient/treatment-explanation",
-            "/v1/dental/ai/patient/aftercare",
-            "/v1/dental/ai/patient/consent",
-            "/v1/dental/ai/patient/history",
-        }
+        if path.rstrip("/") not in disabled_patient_ai
+        and (
+            _patient_account_portal_enabled()
+            or not _is_patient_account_route(path)
+        )
     }
     app.openapi_schema = schema
     return schema
