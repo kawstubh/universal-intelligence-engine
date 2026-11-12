@@ -9,11 +9,21 @@ PUBLIC_PATHS = {
     "/v1/dental/billing/plans",
     "/v1/dental/billing/razorpay/webhook",
 }
+PATIENT_PATH_PREFIX = "/v1/dental/ai/patient/"
+DISABLED_PATIENT_AI = {
+    "/v1/dental/ai/patient/chat",
+    "/v1/dental/ai/patient/triage",
+    "/v1/dental/ai/patient/treatment-explanation",
+    "/v1/dental/ai/patient/aftercare",
+    "/v1/dental/ai/patient/consent",
+    "/v1/dental/ai/patient/history",
+}
 
 
 def _is_patient_ai_route(path: str) -> bool:
-    # Patient-facing AI is deliberately disabled and separately tested.
-    return path.startswith("/v1/dental/ai/patient/")
+    # Only patient AI actions are disabled; account, appointment and chart routes
+    # remain available behind Supabase patient authentication.
+    return path.rstrip("/") in DISABLED_PATIENT_AI
 
 
 def _sample_path(path: str) -> str:
@@ -31,10 +41,14 @@ def test_no_demo_or_otp_release_auth_symbols():
     assert not hasattr(auth, "request_otp")
     assert not hasattr(auth, "verify_otp")
     assert not hasattr(auth, "login_google")
+    assert not any(
+        getattr(route, "path", "") == "/v1/dental/auth/google"
+        for route in app.routes
+    )
     assert "otp/request" not in api.__dict__.get("router").routes.__repr__().lower()
 
 
-def test_protected_dental_routes_require_auth_dependency():
+def test_protected_dental_routes_require_the_correct_auth_dependency():
     for route in app.routes:
         path = getattr(route, "path", "")
         if not path.startswith("/v1/dental/"):
@@ -45,7 +59,10 @@ def test_protected_dental_routes_require_auth_dependency():
             getattr(dep.call, "__name__", "")
             for dep in getattr(route, "dependant", None).dependencies
         }
-        assert "require_doctor" in dependency_calls, f"missing auth on {path}"
+        if path.startswith(PATIENT_PATH_PREFIX):
+            assert "require_patient" in dependency_calls, f"missing patient auth on {path}"
+        else:
+            assert "require_doctor" in dependency_calls, f"missing doctor auth on {path}"
 
 
 def test_protected_dental_requests_return_401_without_bearer():
