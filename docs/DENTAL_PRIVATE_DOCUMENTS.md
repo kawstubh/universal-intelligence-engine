@@ -10,10 +10,11 @@ The backend verifies the uploaded object before marking it available:
 3. The client uploads with the exact signed `Content-Type` and `x-amz-meta-sha256` headers.
 4. The doctor completes the upload.
 5. The server checks object size, content type and declared metadata, atomically claims the pending upload, then streams the object in 64 KiB chunks into a bounded in-memory buffer while verifying the actual SHA-256 checksum.
-6. The server writes those exact verified bytes to a separate `verified/` object key and confirms the final object's size, content type and checksum metadata. The database stores this final key only after verification succeeds.
-7. The original presigned PUT URL can be replayed until expiry, but it targets only the `pending/` quarantine key. Doctor and patient downloads always use the separate verified key, so replay cannot mutate a published document. No persistent local file is created.
-8. Only a verified document can be shared with the patient.
-9. Patient download URLs are issued only for documents that are both available and explicitly shared.
+6. The server checks the file signature against the declared PDF/JPEG/PNG/WebP media type. A mismatched header is rejected before publication.
+7. The server writes those exact verified bytes to a separate `verified/` object key and confirms the final object's size, content type and checksum metadata. The database stores this final key only after verification succeeds.
+8. The quarantine object is deleted after successful publication or rejection. The original presigned PUT URL can still be replayed until expiry, but it targets only the `pending/` prefix; a bucket lifecycle rule must expire replayed pending objects after 24 hours. Doctor and patient downloads always use the separate verified key, so replay cannot mutate a published document. No persistent local file is created.
+9. Only a verified document can be shared with the patient.
+10. Patient download URLs are issued only for documents that are both available and explicitly shared.
 
 ## Tenant isolation
 
@@ -32,11 +33,12 @@ The application derives organisation and clinic IDs from the authenticated docto
 ## Limits and supported files
 
 - Maximum file size: 10 MiB.
-- Accepted media types: PDF, JPEG, PNG and WebP.
+- Accepted media types: PDF, JPEG, PNG and WebP, with server-side magic-byte/header validation.
 - Upload URL lifetime: default 300 seconds, allowed 60–600.
 - Download URL lifetime: default 120 seconds, allowed 30–300.
-- Documents are not deleted by this API. No public bucket or permanent public URL is used.
+- Verified clinical documents are not deleted by this API; quarantine and orphaned pending objects are cleaned best-effort. No public bucket or permanent public URL is used.
 - No patient AI or document interpretation is performed.
+- File signature validation is not malware scanning. A production deployment must add an antivirus/content-disarm scan before a document can be marked available, or keep document sharing disabled until an approved clinical file-review process is in place.
 
 ## Required staging configuration
 
