@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
+from collections import defaultdict, deque
 from typing import Annotated, Any
 
 import httpx
@@ -25,6 +27,64 @@ from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
 
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
+
+# Public guest intake is intentionally bounded even before an edge/WAF policy is
+# configured. This in-process sliding window is suitable for the current
+# single-instance staging service; production horizontal scaling must add a
+# shared rate limiter or edge-level rule before increasing instance count.
+_PUBLIC_APPOINTMENT_ATTEMPTS: dict[str, deque[float]] = defaultdict(deque)
+_PUBLIC_APPOINTMENT_WINDOW_SECONDS = 300
+_PUBLIC_APPOINTMENT_MAX_ATTEMPTS = 8
+_PUBLIC_APPOINTMENT_MAX_CLIENTS = 10_000
+
+
+def _check_public_appointment_rate_limit(client_ip: str) -> None:
+    key = (client_ip or "unknown").strip()[:128] or "unknown"
+    now = time.monotonic()
+    attempts = _PUBLIC_APPOINTMENT_ATTEMPTS.get(key)
+    if attempts is not None:
+        while attempts and now - attempts[0] >= _PUBLIC_APPOINTMENT_WINDOW_SECONDS:
+            attempts.popleft()
+        if not attempts:
+            _PUBLIC_APPOINTMENT_ATTEMPTS.pop(key, None)
+            attempts = None
+
+    if attempts is None:
+        if len(_PUBLIC_APPOINTMENT_ATTEMPTS) >= _PUBLIC_APPOINTMENT_MAX_CLIENTS:
+            cutoff = now - _PUBLIC_APPOINTMENT_WINDOW_SECONDS
+            for stale_key, stale_attempts in list(_PUBLIC_APPOINTMENT_ATTEMPTS.items()):
+                while stale_attempts and stale_attempts[0] <= cutoff:
+                    stale_attempts.popleft()
+                if not stale_attempts:
+                    _PUBLIC_APPOINTMENT_ATTEMPTS.pop(stale_key, None)
+                if len(_PUBLIC_APPOINTMENT_ATTEMPTS) < _PUBLIC_APPOINTMENT_MAX_CLIENTS:
+                    break
+        if len(_PUBLIC_APPOINTMENT_ATTEMPTS) >= _PUBLIC_APPOINTMENT_MAX_CLIENTS:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "PUBLIC_APPOINTMENT_CAPACITY",
+                    "message": "Public booking is temporarily busy. Please try again shortly.",
+                },
+                headers={"Retry-After": str(_PUBLIC_APPOINTMENT_WINDOW_SECONDS)},
+            )
+        attempts = deque()
+        _PUBLIC_APPOINTMENT_ATTEMPTS[key] = attempts
+
+    if len(attempts) >= _PUBLIC_APPOINTMENT_MAX_ATTEMPTS:
+        retry_after = max(
+            1,
+            int(_PUBLIC_APPOINTMENT_WINDOW_SECONDS - (now - attempts[0])),
+        )
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "PUBLIC_APPOINTMENT_RATE_LIMITED",
+                "message": "Too many appointment requests. Please wait and try again.",
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
+    attempts.append(now)
 
 
 class DoctorPasswordLoginIn(BaseModel):
@@ -717,12 +777,16 @@ async def create_patient(
 
 
 @router.post("/public/appointments")
-async def create_public_appointment(body: PublicAppointmentIn):
-    """Create a patient appointment request without exposing doctor credentials.
+async def create_public_appointment(body: PublicAppointmentIn, request: Request):
+    """Create a limited single-clinic guest request with per-IP burst protection.
 
-    Public intake deliberately creates a limited requested appointment. It does
-    not run AI, expose patient/doctor records, or accept an actor/admin identity.
+    Public intake does not run AI, expose records, or accept actor/admin identity.
+    The current public form is for the configured master clinic; a multi-clinic
+    public booking directory needs a separate verified clinic-slug contract.
     """
+    _check_public_appointment_rate_limit(
+        request.client.host if request.client else "unknown"
+    )
     store = get_dental_store()
     master_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
     patient = store.create_patient(
