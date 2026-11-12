@@ -31,7 +31,7 @@ def test_patient_ai_routes_are_server_disabled_for_every_method():
         assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
 
 
-def test_patient_account_data_routes_remain_available_behind_patient_auth():
+def test_patient_account_routes_are_disabled_without_supabase_auth():
     routes = [
         ("POST", "/v1/dental/ai/patient/link"),
         ("GET", "/v1/dental/ai/patient/appointments"),
@@ -50,25 +50,19 @@ def test_patient_account_data_routes_remain_available_behind_patient_auth():
     ]
     for method, path in routes:
         response = client.request(method, path, json={} if method == "POST" else None)
-        assert response.status_code == 401, (method, path, response.status_code, response.text)
+        assert response.status_code == 403, (method, path, response.status_code, response.text)
+        assert response.json()["detail"]["code"] == "PATIENT_ACCOUNTS_DISABLED"
 
 
-def test_openapi_hides_patient_ai_and_keeps_doctor_ai_and_patient_records():
+def test_openapi_hides_patient_account_routes_and_keeps_doctor_ai_and_public_booking():
     paths = client.get("/openapi.json").json()["paths"]
-    assert not any(path in paths for path in DISABLED_AI_PATHS)
-    assert "/v1/dental/ai/patient/appointments" in paths
-    assert "/v1/dental/ai/patient/chart" in paths
-    assert "/v1/dental/patient/treatment-plans" in paths
-    assert "/v1/dental/patient/invoices" in paths
-    assert "/v1/dental/patient/receipts" in paths
-    assert "/v1/dental/patient/documents" in paths
-    assert "/v1/dental/patient/documents/{document_id}/download-intent" in paths
-    assert "/v1/dental/patient/link" in paths
-    assert "/v1/dental/patient/appointments" in paths
-    assert "/v1/dental/patient/chart" in paths
-    assert "/v1/dental/doctor/patients/{patient_id}/invite" in paths
+    assert not any(
+        path.startswith(("/v1/dental/patient/", "/v1/dental/ai/patient/"))
+        for path in paths
+    )
     assert "/v1/dental/ai/doctor/patient-summary" in paths
     assert "/v1/dental/intelligence/run" in paths
+    assert "/v1/dental/public/appointments" in paths
 
 
 def test_patient_ai_disabled_routes_normalize_trailing_slashes():
