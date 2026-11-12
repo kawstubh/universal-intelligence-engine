@@ -118,9 +118,13 @@ def test_messages_and_notes_require_authenticated_roles():
     app.include_router(dental_patient_comms.router)
     client = TestClient(app)
     assert client.get("/v1/dental/doctor/patients/missing/clinical-notes").status_code == 401
-    assert client.get("/v1/dental/patient/clinical-notes").status_code == 401
+    patient_notes = client.get("/v1/dental/patient/clinical-notes")
+    assert patient_notes.status_code == 403
+    assert patient_notes.json()["detail"]["code"] == "PATIENT_ACCOUNTS_DISABLED"
     assert client.get("/v1/dental/doctor/patients/missing/messages").status_code == 401
-    assert client.get("/v1/dental/patient/messages").status_code == 401
+    patient_messages = client.get("/v1/dental/patient/messages")
+    assert patient_messages.status_code == 403
+    assert patient_messages.json()["detail"]["code"] == "PATIENT_ACCOUNTS_DISABLED"
 
 
 def test_clinical_note_validation_and_empty_message_validation(comms_api):
