@@ -13,8 +13,9 @@ The backend verifies the uploaded object before marking it available:
 6. The server checks the file signature against the declared PDF/JPEG/PNG/WebP media type. A mismatched header is rejected before publication.
 7. The server writes those exact verified bytes to a separate `verified/` object key and confirms the final object's size, content type and checksum metadata. The database stores this final key only after verification succeeds.
 8. The quarantine object is deleted after successful publication or rejection. The original presigned PUT URL can still be replayed until expiry, but it targets only the `pending/` prefix; a bucket lifecycle rule must expire replayed pending objects after 24 hours. Doctor and patient downloads always use the separate verified key, so replay cannot mutate a published document. No persistent local file is created.
-9. Only a verified document can be shared with the patient.
-10. Patient download URLs are issued only for documents that are both available and explicitly shared.
+9. A doctor must explicitly review an available document. The review is recorded with the doctor ID and timestamp.
+10. Review and sharing are separate actions. A verified document cannot be shared with a patient until a doctor has reviewed it.
+11. Patient download URLs are issued only for documents that are available, doctor-reviewed and explicitly shared.
 
 ## Tenant isolation
 
@@ -28,7 +29,7 @@ Verified download keys use a separate prefix:
 
 The upload key is never used for downloads. A database status transition (`pending_upload` → `verifying` → `available`) is claimed atomically so only one completion request can publish a verified object.
 
-The application derives organisation and clinic IDs from the authenticated doctor workspace. Patient APIs derive the patient record from the authenticated Supabase user; the client cannot choose a patient ID. Patient list/download operations require `status=available` and `patient_visible=true`. Object keys, checksums, organisation IDs and clinic IDs are not returned to patients.
+The application derives organisation and clinic IDs from the authenticated doctor workspace. Patient APIs derive the patient record from the authenticated Supabase user; the client cannot choose a patient ID. Patient list/download operations require `status=available`, `reviewed_at IS NOT NULL` and `patient_visible=true`. The database query enforces the review timestamp even if a legacy or bypassed visibility flag is set. Object keys, checksums, organisation IDs and clinic IDs are not returned to patients.
 
 ## Limits and supported files
 
@@ -38,14 +39,14 @@ The application derives organisation and clinic IDs from the authenticated docto
 - Download URL lifetime: default 120 seconds, allowed 30–300.
 - Verified clinical documents are not deleted by this API; quarantine and orphaned pending objects are cleaned best-effort. No public bucket or permanent public URL is used.
 - No patient AI or document interpretation is performed.
-- File signature validation is not malware scanning. A production deployment must add an antivirus/content-disarm scan before a document can be marked available, or keep document sharing disabled until an approved clinical file-review process is in place.
+- File signature validation is not malware scanning. This branch implements the documented manual-review alternative: patient sharing remains blocked until a doctor explicitly reviews the verified document. A production deployment should still add antivirus/content-disarm scanning when an approved service is available; the review gate is not represented as malware detection.
 
 ## Required staging configuration
 
 Configure these values only in the **staging** backend environment after a dedicated private bucket is created and verified:
 
 - `DENTAL_DOCUMENTS_S3_ENDPOINT`: HTTPS S3-compatible endpoint for the staging object store.
-- `DENTAL_DOCUMENTS_S3_REGION`: storage region (Neon Storage currently reports `ap-southeast-1` for the existing project).
+- `DENTAL_DOCUMENTS_S3_REGION`: storage region (the connected Neon project reports `ap-southeast-1`).
 - `DENTAL_DOCUMENTS_S3_BUCKET`: dedicated private bucket name.
 - `DENTAL_DOCUMENTS_S3_ACCESS_KEY_ID`: scoped staging storage credential.
 - `DENTAL_DOCUMENTS_S3_SECRET_ACCESS_KEY`: matching secret; never put it in source control, logs or chat.
@@ -58,7 +59,7 @@ When the configuration is absent or the private-bucket attestation is false, upl
 
 ## Current infrastructure gate
 
-The Neon project `dr-pranali-dental-recovery` has object storage enabled, but the connected project currently exposes only its `main` branch and no buckets. Public bucket access is disabled at the project storage setting. This PR does **not** create a bucket, create a credential, alter Neon main, or change Render secrets. A dedicated staging branch/bucket and scoped staging credential are required before end-to-end storage can be enabled.
+The Neon project `dr-pranali-dental-recovery` currently exposes only its `main` branch and no buckets in the connected account. This PR does **not** create a bucket, create a credential, alter Neon main, or change Render secrets. A dedicated staging branch/bucket and scoped staging credential are required before end-to-end storage can be enabled.
 
 ## API
 
@@ -66,7 +67,8 @@ Doctor (existing doctor authentication and active workspace):
 - `POST /v1/dental/doctor/patients/{patient_id}/documents/upload-intent`
 - `POST /v1/dental/doctor/documents/{document_id}/complete`
 - `GET /v1/dental/doctor/patients/{patient_id}/documents`
-- `PATCH /v1/dental/doctor/documents/{document_id}` (patient visibility)
+- `POST /v1/dental/doctor/documents/{document_id}/review` (explicit clinician review)
+- `PATCH /v1/dental/doctor/documents/{document_id}` (patient visibility; requires prior review)
 - `POST /v1/dental/doctor/documents/{document_id}/download-intent`
 
 Patient (existing Supabase patient authentication; no client-supplied patient ID):
@@ -75,4 +77,4 @@ Patient (existing Supabase patient authentication; no client-supplied patient ID
 
 ## Migration and rollback
 
-Alembic revision `0009_private_dental_documents` follows `0008_patient_billing_plans`. It adds only tenant-scoped metadata; the object store remains private and external. The downgrade is intentionally a no-op to avoid deleting clinical document history during application rollback.
+Alembic revision `0009_private_dental_documents` follows `0008_patient_billing_plans`. Revision `0011_document_clinical_review` follows `0010_clinical_notes_messaging` and adds nullable review-provenance columns. Existing rows and object keys are preserved; legacy patient-visible documents remain hidden until a doctor explicitly re-reviews them. Downgrades are intentionally no-ops to avoid deleting clinical document history during application rollback.

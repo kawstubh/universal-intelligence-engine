@@ -22,6 +22,10 @@ from threading import Lock
 from typing import Any
 
 
+class DocumentReviewRequiredError(ValueError):
+    """Raised when an unreviewed clinical document is shared with a patient."""
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -1287,6 +1291,8 @@ class DentalStore:
             "object_key": None,
             "status": "pending_upload",
             "patient_visible": False,
+            "reviewed_by_doctor_id": None,
+            "reviewed_at": None,
             "created_at": now,
             "uploaded_at": None,
             "updated_at": now,
@@ -1308,16 +1314,16 @@ class DentalStore:
             if not clinic or clinic[0]["organisation_id"] != document["organisation_id"]:
                 raise ValueError("Clinic organisation does not match the active workspace")
             insert_sql = (
-                "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,upload_object_key,object_key,status,patient_visible,created_at,uploaded_at,updated_at) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,upload_object_key,object_key,status,patient_visible,reviewed_by_doctor_id,reviewed_at,created_at,uploaded_at,updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
                 if self.database_url
-                else "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,upload_object_key,object_key,status,patient_visible,created_at,uploaded_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                else "INSERT INTO dental_documents(id,organisation_id,clinic_id,patient_id,uploaded_by_doctor_id,file_name,content_type,size_bytes,checksum_sha256,upload_object_key,object_key,status,patient_visible,reviewed_by_doctor_id,reviewed_at,created_at,uploaded_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             )
             self._execute(insert_sql, tuple(document[key] for key in (
                 "id","organisation_id","clinic_id","patient_id","uploaded_by_doctor_id","file_name",
                 "content_type","size_bytes","checksum_sha256","upload_object_key","object_key","status","patient_visible",
-                "created_at","uploaded_at","updated_at"
+                "reviewed_by_doctor_id","reviewed_at","created_at","uploaded_at","updated_at"
             )), connection=connection)
             self.audit(doctor_id, "document.upload_intent_created", "document", document["id"], clinic_id, connection)
         return document
@@ -1335,6 +1341,7 @@ class DentalStore:
             clauses.extend([
                 "patient_visible=true" if self.database_url else "patient_visible=1",
                 "status='available'",
+                "reviewed_at IS NOT NULL",
             ])
         rows = self._execute(
             "SELECT * FROM dental_documents WHERE " + " AND ".join(clauses),
@@ -1346,9 +1353,9 @@ class DentalStore:
         self, clinic_id: str, patient_id: str, patient_visible_only: bool = False
     ) -> list[dict[str, Any]]:
         visibility = (
-            " AND patient_visible=true AND status='available'"
+            " AND patient_visible=true AND status='available' AND reviewed_at IS NOT NULL"
             if self.database_url
-            else " AND patient_visible=1 AND status='available'"
+            else " AND patient_visible=1 AND status='available' AND reviewed_at IS NOT NULL"
         ) if patient_visible_only else ""
         sql = (
             "SELECT * FROM dental_documents WHERE clinic_id=%s AND patient_id=%s"
@@ -1438,9 +1445,10 @@ class DentalStore:
                 self.audit(doctor_id, "document.upload_rejected", "document", document_id, clinic_id, connection)
         return self.get_document(document_id, clinic_id)
 
-    def set_document_visibility(
-        self, document_id: str, clinic_id: str, doctor_id: str, visible: bool
+    def review_document(
+        self, document_id: str, clinic_id: str, doctor_id: str
     ):
+        """Record an explicit clinician review before a document can be shared."""
         now = _now()
         with self.transaction() as connection:
             lock = " FOR UPDATE" if self.database_url else ""
@@ -1453,7 +1461,40 @@ class DentalStore:
             if not rows:
                 return None
             if rows[0]["status"] != "available":
+                raise ValueError("Only an available document can be reviewed")
+            update_sql = (
+                "UPDATE dental_documents SET reviewed_by_doctor_id=%s,reviewed_at=%s,updated_at=%s "
+                "WHERE id=%s AND clinic_id=%s AND status='available'"
+                if self.database_url
+                else "UPDATE dental_documents SET reviewed_by_doctor_id=?,reviewed_at=?,updated_at=? "
+                "WHERE id=? AND clinic_id=? AND status='available'"
+            )
+            self._execute(
+                update_sql,
+                (doctor_id, now, now, document_id, clinic_id),
+                connection=connection,
+            )
+            self.audit(doctor_id, "document.reviewed", "document", document_id, clinic_id, connection)
+        return self.get_document(document_id, clinic_id)
+
+    def set_document_visibility(
+        self, document_id: str, clinic_id: str, doctor_id: str, visible: bool
+    ):
+        now = _now()
+        with self.transaction() as connection:
+            lock = " FOR UPDATE" if self.database_url else ""
+            sql = (
+                "SELECT status,reviewed_at FROM dental_documents WHERE id=%s AND clinic_id=%s" + lock
+                if self.database_url
+                else "SELECT status,reviewed_at FROM dental_documents WHERE id=? AND clinic_id=?"
+            )
+            rows = self._execute(sql, (document_id, clinic_id), connection=connection)
+            if not rows:
+                return None
+            if rows[0]["status"] != "available":
                 raise ValueError("Only an available document can be shared with the patient")
+            if visible and not rows[0].get("reviewed_at"):
+                raise DocumentReviewRequiredError("A doctor must review this document before patient sharing is enabled")
             update_sql = (
                 "UPDATE dental_documents SET patient_visible=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
                 if self.database_url

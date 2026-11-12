@@ -147,7 +147,25 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
     assert fake_s3.objects[verified["object_key"]]["Body"] == content
     assert verified["upload_object_key"] not in fake_s3.objects
 
+    assert verified["reviewed_at"] is None
+    assert verified["reviewed_by_doctor_id"] is None
+
+    premature_share = client.patch(
+        f"/v1/dental/doctor/documents/{document_id}",
+        json={"patient_visible": True},
+    )
+    assert premature_share.status_code == 409
+    assert premature_share.json()["detail"]["code"] == "DOCUMENT_REVIEW_REQUIRED"
     assert client.get("/v1/dental/patient/documents").json()["result"] == []
+
+    reviewed = client.post(f"/v1/dental/doctor/documents/{document_id}/review")
+    assert reviewed.status_code == 200, reviewed.text
+    review_result = reviewed.json()["result"]
+    assert review_result["reviewed_by_doctor_id"] == "doctor-a"
+    assert review_result["reviewed_at"]
+    assert review_result["patient_visible"] is False
+    assert client.get("/v1/dental/patient/documents").json()["result"] == []
+
     shared = client.patch(
         f"/v1/dental/doctor/documents/{document_id}",
         json={"patient_visible": True},
@@ -163,6 +181,8 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
     assert "organisation_id" not in visible[0]
     assert "clinic_id" not in visible[0]
     assert "checksum_sha256" not in visible[0]
+    assert "reviewed_at" not in visible[0]
+    assert "reviewed_by_doctor_id" not in visible[0]
 
     patient_download = client.post(
         f"/v1/dental/patient/documents/{document_id}/download-intent"
@@ -179,6 +199,32 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
     assert fake_s3.presign_calls[-1]["expires"] == 120
 
 
+def test_only_available_documents_can_be_reviewed(document_api):
+    client, store, _actor, _patient_actor, patient_a, _patient_b, _fake_s3 = document_api
+    intent, _content, _checksum = _upload_intent(client, patient_a["id"])
+    document_id = intent.json()["result"]["document"]["id"]
+
+    response = client.post(f"/v1/dental/doctor/documents/{document_id}/review")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "DOCUMENT_NOT_REVIEWABLE"
+    stored = store.get_document(document_id, "clinic-a")
+    assert stored["reviewed_at"] is None
+    assert stored["reviewed_by_doctor_id"] is None
+
+
+def test_patient_identity_cannot_call_doctor_document_review_route(document_api):
+    client, _store, _actor, _patient_actor, patient_a, _patient_b, _fake_s3 = document_api
+
+    def reject_doctor():
+        raise HTTPException(status_code=401, detail="Doctor authentication required")
+
+    client.app.dependency_overrides[dental_documents.require_doctor] = reject_doctor
+    response = client.post(
+        f"/v1/dental/doctor/documents/{patient_a['id']}/review"
+    )
+    assert response.status_code == 401
+
+
 def test_patient_cannot_access_unshared_or_another_patients_document(document_api):
     client, store, _actor, patient_actor, patient_a, _patient_b, fake_s3 = document_api
     intent, content, checksum = _upload_intent(client, patient_a["id"])
@@ -192,6 +238,12 @@ def test_patient_cannot_access_unshared_or_another_patients_document(document_ap
     }
     assert client.post(f"/v1/dental/doctor/documents/{document_id}/complete").status_code == 200
 
+    # A legacy or bypassed visibility flag must never expose an unreviewed document.
+    store._execute("UPDATE dental_documents SET patient_visible=1 WHERE id=?", (document_id,))
+    assert store.documents("clinic-a", patient_a["id"], patient_visible_only=True) == []
+    assert store.get_document(
+        document_id, "clinic-a", patient_id=patient_a["id"], patient_visible_only=True
+    ) is None
     assert client.get("/v1/dental/patient/documents").json()["result"] == []
     hidden_download = client.post(f"/v1/dental/patient/documents/{document_id}/download-intent")
     assert hidden_download.status_code == 404
@@ -224,6 +276,9 @@ def test_doctor_document_routes_are_workspace_scoped(document_api):
     assert client.patch(
         f"/v1/dental/doctor/documents/{document_id}",
         json={"patient_visible": True},
+    ).status_code == 404
+    assert client.post(
+        f"/v1/dental/doctor/documents/{document_id}/review"
     ).status_code == 404
 
 
@@ -325,6 +380,8 @@ def test_replayed_upload_url_cannot_mutate_verified_patient_document(document_ap
     final_key = verified["object_key"]
     assert final_key and final_key != upload_key
     assert fake_s3.objects[final_key]["Body"] == content
+    reviewed = client.post(f"/v1/dental/doctor/documents/{document_id}/review")
+    assert reviewed.status_code == 200, reviewed.text
 
     # A still-live presigned PUT can overwrite only the quarantine key.
     replayed_bytes = b"X" * len(content)
@@ -420,6 +477,7 @@ def test_patient_with_multiple_clinic_links_selects_only_the_requested_record(do
         "Body": content,
     }
     assert client.post(f"/v1/dental/doctor/documents/{document_id}/complete").status_code == 200
+    assert client.post(f"/v1/dental/doctor/documents/{document_id}/review").status_code == 200
     assert client.patch(
         f"/v1/dental/doctor/documents/{document_id}",
         json={"patient_visible": True},

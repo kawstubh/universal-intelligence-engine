@@ -40,7 +40,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
         monkeypatch.delenv("DENTAL_SQLITE_PATH", raising=False)
         config = Config(str(ROOT / "alembic.ini"))
         assert ScriptDirectory.from_config(config).get_heads() == [
-            "0010_clinical_notes_messaging"
+            "0011_document_clinical_review"
         ]
         command.upgrade(config, "0005_password_auth")
 
@@ -93,6 +93,11 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 for column in inspector.get_columns("dental_audit_events")
             }
             assert "clinic_id" in audit_columns
+            document_columns = {
+                column["name"]
+                for column in inspector.get_columns("dental_documents")
+            }
+            assert {"reviewed_by_doctor_id", "reviewed_at"}.issubset(document_columns)
 
             workspaces = connection.execute(
                 sa.text("SELECT id FROM dental_clinics")
