@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from .dental_ai import require_patient
 from .dental_auth import require_doctor
-from .dental_store import get_dental_store
+from .dental_store import DocumentReviewRequiredError, get_dental_store
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +142,8 @@ def _doctor_document(document: dict) -> dict:
         "size_bytes": int(document["size_bytes"]),
         "status": document["status"],
         "patient_visible": bool(document["patient_visible"]),
+        "reviewed_by_doctor_id": document.get("reviewed_by_doctor_id"),
+        "reviewed_at": document.get("reviewed_at"),
         "created_at": document["created_at"],
         "uploaded_at": document["uploaded_at"],
     }
@@ -439,6 +441,27 @@ def list_doctor_documents(
     ])
 
 
+@router.post("/doctor/documents/{document_id}/review")
+def review_document(
+    document_id: str,
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    store = get_dental_store()
+    try:
+        result = store.review_document(document_id, actor["clinic_id"], actor["id"])
+    except ValueError as exc:
+        raise HTTPException(
+            409,
+            detail={"code": "DOCUMENT_NOT_REVIEWABLE", "message": str(exc)},
+        ) from exc
+    if not result:
+        raise HTTPException(
+            404,
+            detail={"code": "DOCUMENT_NOT_FOUND", "message": "Document not found in this workspace"},
+        )
+    return _envelope(_doctor_document(result))
+
+
 @router.patch("/doctor/documents/{document_id}")
 def set_document_visibility(
     document_id: str,
@@ -449,6 +472,11 @@ def set_document_visibility(
         result = get_dental_store().set_document_visibility(
             document_id, actor["clinic_id"], actor["id"], body.patient_visible
         )
+    except DocumentReviewRequiredError as exc:
+        raise HTTPException(
+            409,
+            detail={"code": "DOCUMENT_REVIEW_REQUIRED", "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(409, detail={"code": "DOCUMENT_NOT_SHAREABLE", "message": str(exc)}) from exc
     if not result:
