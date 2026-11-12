@@ -156,6 +156,10 @@ def _disabled_patient_route(path: str) -> str | None:
 
 @app.middleware("http")
 async def enforce_account_free_patient_journey(request: Request, call_next):
+    # Let the CORS middleware answer browser preflight requests before the
+    # account-free policy is applied to the actual patient endpoint request.
+    if request.method == "OPTIONS":
+        return await call_next(request)
     code = _disabled_patient_route(request.url.path)
     if code:
         message = (
