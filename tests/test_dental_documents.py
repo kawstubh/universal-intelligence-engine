@@ -33,6 +33,18 @@ class FakeS3Client:
             raise RuntimeError("object not uploaded")
         return {"Body": io.BytesIO(self.objects[Key]["Body"])}
 
+    def put_object(self, Bucket, Key, Body, ContentType, Metadata):
+        payload = Body.read() if hasattr(Body, "read") else Body
+        if hasattr(Body, "seek"):
+            Body.seek(0)
+        self.objects[Key] = {
+            "ContentLength": len(payload),
+            "ContentType": ContentType,
+            "Metadata": dict(Metadata),
+            "Body": payload,
+        }
+        return {"ETag": '"verified-test-object"'}
+
 
 @pytest.fixture
 def document_api(tmp_path: Path, monkeypatch):
@@ -104,14 +116,15 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
     assert "object_key" not in result["document"]
 
     stored = store.get_document(document_id, "clinic-a")
-    assert stored["object_key"].startswith("organisations/org-a/clinics/clinic-a/patients/")
+    assert stored["upload_object_key"].startswith("pending/organisations/org-a/clinics/clinic-a/patients/")
+    assert stored["object_key"] is None
     assert stored["size_bytes"] == len(content)
 
     incomplete = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
     assert incomplete.status_code == 409
     assert incomplete.json()["detail"]["code"] == "DOCUMENT_UPLOAD_INCOMPLETE"
 
-    fake_s3.objects[stored["object_key"]] = {
+    fake_s3.objects[stored["upload_object_key"]] = {
         "ContentLength": len(content),
         "ContentType": "application/pdf",
         "Metadata": {"sha256": checksum},
@@ -120,6 +133,10 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
     completed = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
     assert completed.status_code == 200, completed.text
     assert completed.json()["result"]["status"] == "available"
+    verified = store.get_document(document_id, "clinic-a")
+    assert verified["object_key"].startswith("verified/organisations/org-a/clinics/clinic-a/patients/")
+    assert verified["object_key"] != verified["upload_object_key"]
+    assert fake_s3.objects[verified["object_key"]]["Body"] == content
 
     assert client.get("/v1/dental/patient/documents").json()["result"] == []
     shared = client.patch(
@@ -149,6 +166,7 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
     )
     assert doctor_download.status_code == 200, doctor_download.text
     assert fake_s3.presign_calls[-1]["operation"] == "get_object"
+    assert fake_s3.presign_calls[-1]["params"]["Key"] == verified["object_key"]
     assert fake_s3.presign_calls[-1]["expires"] == 120
 
 
@@ -157,7 +175,7 @@ def test_patient_cannot_access_unshared_or_another_patients_document(document_ap
     intent, content, checksum = _upload_intent(client, patient_a["id"])
     document_id = intent.json()["result"]["document"]["id"]
     stored = store.get_document(document_id, "clinic-a")
-    fake_s3.objects[stored["object_key"]] = {
+    fake_s3.objects[stored["upload_object_key"]] = {
         "ContentLength": len(content),
         "ContentType": "application/pdf",
         "Metadata": {"sha256": checksum},
@@ -182,7 +200,7 @@ def test_doctor_document_routes_are_workspace_scoped(document_api):
     intent, content, checksum = _upload_intent(client, patient_a["id"])
     document_id = intent.json()["result"]["document"]["id"]
     stored = store.get_document(document_id, "clinic-a")
-    fake_s3.objects[stored["object_key"]] = {
+    fake_s3.objects[stored["upload_object_key"]] = {
         "ContentLength": len(content),
         "ContentType": "application/pdf",
         "Metadata": {"sha256": checksum},
@@ -205,7 +223,7 @@ def test_mismatched_upload_is_rejected_and_never_patient_visible(document_api):
     intent, content, _checksum = _upload_intent(client, patient_a["id"])
     document_id = intent.json()["result"]["document"]["id"]
     stored = store.get_document(document_id, "clinic-a")
-    fake_s3.objects[stored["object_key"]] = {
+    fake_s3.objects[stored["upload_object_key"]] = {
         "ContentLength": len(content) + 1,
         "ContentType": "application/pdf",
         "Metadata": {"sha256": "0" * 64},
@@ -264,7 +282,7 @@ def test_document_checksum_is_verified_against_actual_object_bytes(document_api)
     intent, content, checksum = _upload_intent(client, patient_a["id"])
     document_id = intent.json()["result"]["document"]["id"]
     stored = store.get_document(document_id, "clinic-a")
-    fake_s3.objects[stored["object_key"]] = {
+    fake_s3.objects[stored["upload_object_key"]] = {
         "ContentLength": len(content),
         "ContentType": "application/pdf",
         "Metadata": {"sha256": checksum},
@@ -274,6 +292,63 @@ def test_document_checksum_is_verified_against_actual_object_bytes(document_api)
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "DOCUMENT_UPLOAD_VERIFICATION_FAILED"
     assert store.get_document(document_id, "clinic-a")["status"] == "rejected"
+
+
+def test_replayed_upload_url_cannot_mutate_verified_patient_document(document_api):
+    client, store, _actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
+    intent, content, checksum = _upload_intent(client, patient_a["id"])
+    document_id = intent.json()["result"]["document"]["id"]
+    pending = store.get_document(document_id, "clinic-a")
+    upload_key = pending["upload_object_key"]
+    fake_s3.objects[upload_key] = {
+        "ContentLength": len(content),
+        "ContentType": "application/pdf",
+        "Metadata": {"sha256": checksum},
+        "Body": content,
+    }
+
+    completed = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
+    assert completed.status_code == 200, completed.text
+    verified = store.get_document(document_id, "clinic-a")
+    final_key = verified["object_key"]
+    assert final_key and final_key != upload_key
+    assert fake_s3.objects[final_key]["Body"] == content
+
+    # A still-live presigned PUT can overwrite only the quarantine key.
+    replayed_bytes = b"X" * len(content)
+    fake_s3.objects[upload_key] = {
+        "ContentLength": len(replayed_bytes),
+        "ContentType": "application/pdf",
+        "Metadata": {"sha256": checksum},
+        "Body": replayed_bytes,
+    }
+    shared = client.patch(
+        f"/v1/dental/doctor/documents/{document_id}",
+        json={"patient_visible": True},
+    )
+    assert shared.status_code == 200, shared.text
+    download = client.post(f"/v1/dental/patient/documents/{document_id}/download-intent")
+    assert download.status_code == 200, download.text
+    assert fake_s3.presign_calls[-1]["params"]["Key"] == final_key
+    assert fake_s3.objects[final_key]["Body"] == content
+    assert fake_s3.objects[upload_key]["Body"] == replayed_bytes
+
+
+def test_document_upload_finalization_can_only_be_claimed_once(document_api):
+    client, store, _actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
+    intent, content, checksum = _upload_intent(client, patient_a["id"])
+    document_id = intent.json()["result"]["document"]["id"]
+    pending = store.get_document(document_id, "clinic-a")
+    fake_s3.objects[pending["upload_object_key"]] = {
+        "ContentLength": len(content),
+        "ContentType": "application/pdf",
+        "Metadata": {"sha256": checksum},
+        "Body": content,
+    }
+    assert client.post(f"/v1/dental/doctor/documents/{document_id}/complete").status_code == 200
+    second = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
+    assert second.status_code == 409
+    assert store.get_document(document_id, "clinic-a")["status"] == "available"
 
 
 def test_storage_config_requires_explicit_private_bucket_attestation(monkeypatch):
@@ -326,7 +401,7 @@ def test_patient_with_multiple_clinic_links_selects_only_the_requested_record(do
     intent, content, checksum = _upload_intent(client, patient_b["id"])
     document_id = intent.json()["result"]["document"]["id"]
     stored = store.get_document(document_id, "clinic-b")
-    fake_s3.objects[stored["object_key"]] = {
+    fake_s3.objects[stored["upload_object_key"]] = {
         "ContentLength": len(content),
         "ContentType": "application/pdf",
         "Metadata": {"sha256": checksum},
