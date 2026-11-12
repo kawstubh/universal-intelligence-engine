@@ -55,11 +55,26 @@ Configure these values only in the **staging** backend environment after a dedic
 
 Use a credential scoped to object read/write for the dedicated bucket/prefix. Do not grant bucket administration, public ACL changes or object deletion to the application credential. Configure a bucket lifecycle rule to expire objects under `pending/` after 24 hours; the application never downloads from that prefix after finalization. Verify private access independently before setting the attestation flag.
 
-When the configuration is absent or the private-bucket attestation is false, upload and download-intent endpoints return `503 DOCUMENT_STORAGE_NOT_CONFIGURED`. The application never falls back to Render's ephemeral filesystem.
+When the storage configuration is absent or the private-bucket attestation is false, upload and download-intent endpoints return `503 DOCUMENT_STORAGE_NOT_CONFIGURED`. The application never falls back to Render's ephemeral filesystem.
+
+### Mandatory malware scanning
+
+A document is not published to the verified object prefix until it passes a private ClamAV daemon scan. SHA-256 and file-signature checks are integrity/type checks, not malware detection. The scanner uses ClamAV's bounded `INSTREAM` protocol after the server has verified the uploaded bytes and before it writes the immutable verified object.
+
+Configure these values only after a dedicated scanner is available on the backend's private network:
+
+- `DENTAL_DOCUMENT_SCANNER_HOST`: internal hostname or private IP for the ClamAV daemon.
+- `DENTAL_DOCUMENT_SCANNER_PORT=3310`: ClamAV TCP stream port.
+- `DENTAL_DOCUMENT_SCANNER_TIMEOUT_SECONDS=20`: allowed range 1–60 seconds.
+- `DENTAL_DOCUMENT_SCANNER_PRIVATE=true`: explicit operator attestation that the daemon is reachable only over the private network.
+
+The backend resolves the scanner host and rejects public, multicast and unspecified addresses before connecting to the resolved private address. It sends no file bytes to a public scanning vendor. The scanner should be reachable only through the service's private network, use current virus definitions, and set ClamAV `StreamMaxLength` to at least 10 MiB. Monitor definition freshness and scanner availability.
+
+The upload pipeline fails closed: missing or unavailable scanning returns HTTP 503; a malware finding returns HTTP 409. In either case the pending upload is rejected and its quarantine object is removed best-effort. No unscanned object can become available or patient-visible. A clean scan is recorded in the clinic audit trail. Clinician review remains a separate required step before patient sharing; antivirus scanning does not replace clinical review.
 
 ## Current infrastructure gate
 
-The Neon project `dr-pranali-dental-recovery` currently exposes only its `main` branch and no buckets in the connected account. This PR does **not** create a bucket, create a credential, alter Neon main, or change Render secrets. A dedicated staging branch/bucket and scoped staging credential are required before end-to-end storage can be enabled.
+The Neon project `dr-pranali-dental-recovery` currently exposes only its `main` branch and no buckets in the connected account. This PR does **not** create a bucket, create a credential, alter Neon main, or change Render secrets. A dedicated staging branch/bucket and scoped staging credential are required before end-to-end storage can be enabled. No private ClamAV scanner service is currently provisioned or attested; the new upload finalization path therefore remains fail-closed with HTTP 503 until a private scanner is independently deployed and configured.
 
 ## API
 

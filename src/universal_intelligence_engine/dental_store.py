@@ -1393,6 +1393,33 @@ class DentalStore:
                 )
             return bool(rows)
 
+    def release_document_upload_claim(
+        self, document_id: str, clinic_id: str, doctor_id: str
+    ) -> bool:
+        """Return a claimed upload to pending when a required scanner is unavailable."""
+        now = _now()
+        with self.transaction() as connection:
+            release_sql = (
+                "UPDATE dental_documents SET status='pending_upload',updated_at=%s "
+                "WHERE id=%s AND clinic_id=%s AND status='verifying' RETURNING id"
+                if self.database_url
+                else "UPDATE dental_documents SET status='pending_upload',updated_at=? "
+                "WHERE id=? AND clinic_id=? AND status='verifying' RETURNING id"
+            )
+            rows = self._execute(
+                release_sql, (now, document_id, clinic_id), connection=connection
+            )
+            if rows:
+                self.audit(
+                    doctor_id,
+                    "document.upload_verification_retryable",
+                    "document",
+                    document_id,
+                    clinic_id,
+                    connection,
+                )
+            return bool(rows)
+
     def mark_document_uploaded(
         self, document_id: str, clinic_id: str, doctor_id: str, final_object_key: str
     ):

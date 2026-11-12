@@ -9,6 +9,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from universal_intelligence_engine import dental_documents
+from universal_intelligence_engine.dental_document_scanner import (
+    DocumentMalwareDetected,
+    DocumentScannerNotConfigured,
+    DocumentScannerUnavailable,
+)
 from universal_intelligence_engine.dental_store import DentalStore
 
 
@@ -84,6 +89,11 @@ def document_api(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(dental_documents, "get_dental_store", lambda: store)
     monkeypatch.setattr(dental_documents, "_storage_config", lambda: config)
     monkeypatch.setattr(dental_documents, "_get_s3_client", lambda _config: fake_s3)
+    monkeypatch.setattr(
+        dental_documents,
+        "scan_document_bytes",
+        lambda _payload: {"engine": "clamav", "status": "clean"},
+    )
 
     app = FastAPI()
     app.include_router(dental_documents.router)
@@ -149,6 +159,14 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
 
     assert verified["reviewed_at"] is None
     assert verified["reviewed_by_doctor_id"] is None
+    scan_actions = [
+        row["action"]
+        for row in store._execute(
+            "SELECT action FROM dental_audit_events WHERE resource_id=?",
+            (document_id,),
+        )
+    ]
+    assert "document.malware_scan_clean" in scan_actions
 
     premature_share = client.patch(
         f"/v1/dental/doctor/documents/{document_id}",
@@ -553,3 +571,98 @@ def test_supported_document_signatures_match_the_declared_media_type():
     assert not dental_documents._file_signature_matches("image/jpeg", b"\x89PNG\r\n\x1a\n")
     assert not dental_documents._file_signature_matches("image/png", b"\xff\xd8\xff\xe0")
     assert not dental_documents._file_signature_matches("image/webp", b"RIFF\x00\x00\x00\x00PNG ")
+
+
+def test_document_upload_fails_closed_when_private_scanner_is_not_configured(
+    document_api, monkeypatch
+):
+    client, store, actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
+    intent, content, checksum = _upload_intent(client, patient_a["id"])
+    document_id = intent.json()["result"]["document"]["id"]
+    pending = store.get_document(document_id, actor["clinic_id"])
+    upload_key = pending["upload_object_key"]
+    fake_s3.objects[upload_key] = {
+        "ContentLength": len(content),
+        "ContentType": "application/pdf",
+        "Metadata": {"sha256": checksum},
+        "Body": content,
+    }
+
+    def not_configured(_payload):
+        raise DocumentScannerNotConfigured("scanner not configured")
+
+    monkeypatch.setattr(dental_documents, "scan_document_bytes", not_configured)
+    response = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DOCUMENT_SCAN_NOT_CONFIGURED"
+    assert store.get_document(document_id, actor["clinic_id"])["status"] == "pending_upload"
+    assert upload_key in fake_s3.objects
+    assert not any(key.startswith("verified/") for key in fake_s3.objects)
+    retry_actions = [
+        row["action"]
+        for row in store._execute(
+            "SELECT action FROM dental_audit_events WHERE resource_id=?",
+            (document_id,),
+        )
+    ]
+    assert "document.upload_verification_retryable" in retry_actions
+
+
+def test_document_scanner_outage_preserves_the_quarantine_upload_for_retry(
+    document_api, monkeypatch
+):
+    client, store, actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
+    intent, content, checksum = _upload_intent(client, patient_a["id"])
+    document_id = intent.json()["result"]["document"]["id"]
+    pending = store.get_document(document_id, actor["clinic_id"])
+    upload_key = pending["upload_object_key"]
+    fake_s3.objects[upload_key] = {
+        "ContentLength": len(content),
+        "ContentType": "application/pdf",
+        "Metadata": {"sha256": checksum},
+        "Body": content,
+    }
+
+    def unavailable(_payload):
+        raise DocumentScannerUnavailable("synthetic scanner outage")
+
+    monkeypatch.setattr(dental_documents, "scan_document_bytes", unavailable)
+    response = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DOCUMENT_SCAN_UNAVAILABLE"
+    assert store.get_document(document_id, actor["clinic_id"])["status"] == "pending_upload"
+    assert upload_key in fake_s3.objects
+    assert not any(key.startswith("verified/") for key in fake_s3.objects)
+
+
+def test_document_with_detected_malware_is_never_published_or_shared(
+    document_api, monkeypatch
+):
+    client, store, actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
+    intent, content, checksum = _upload_intent(client, patient_a["id"])
+    document_id = intent.json()["result"]["document"]["id"]
+    pending = store.get_document(document_id, actor["clinic_id"])
+    upload_key = pending["upload_object_key"]
+    fake_s3.objects[upload_key] = {
+        "ContentLength": len(content),
+        "ContentType": "application/pdf",
+        "Metadata": {"sha256": checksum},
+        "Body": content,
+    }
+
+    def infected(_payload):
+        raise DocumentMalwareDetected("synthetic EICAR detection")
+
+    monkeypatch.setattr(dental_documents, "scan_document_bytes", infected)
+    response = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "DOCUMENT_MALWARE_DETECTED"
+    rejected = store.get_document(document_id, actor["clinic_id"])
+    assert rejected["status"] == "rejected"
+    assert rejected["patient_visible"] in (False, 0)
+    assert upload_key not in fake_s3.objects
+    assert not any(key.startswith("verified/") for key in fake_s3.objects)
+    assert client.get("/v1/dental/patient/documents").json()["result"] == []
