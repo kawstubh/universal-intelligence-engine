@@ -79,7 +79,7 @@ def test_clinical_notes_are_private_until_doctor_explicitly_shares(comms_api):
 
 
 def test_patient_and_doctor_messages_are_tenant_scoped_and_shared(comms_api):
-    client, _store, actor, patient_actor, patient_a, patient_b = comms_api
+    client, _store, actor, _patient_actor, patient_a, patient_b = comms_api
     doctor_send = client.post(
         f"/v1/dental/doctor/patients/{patient_a['id']}/messages",
         json={"body": "Your appointment request has been received."},
