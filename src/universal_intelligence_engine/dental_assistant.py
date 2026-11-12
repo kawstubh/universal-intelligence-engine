@@ -346,6 +346,47 @@ def assistant_logout(
     return {"ok": True}
 
 
+@router.get("/auth/assistants")
+def list_assistant_accounts(
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    _require_owner_or_admin(actor)
+    store = get_dental_store()
+    assistants = _query(
+        store,
+        "SELECT a.id,a.email,a.active,a.created_at "
+        "FROM dental_clinic_assistants a "
+        "JOIN dental_clinic_assistant_memberships m ON m.assistant_id=a.id "
+        "WHERE m.clinic_id=%s AND m.active=true "
+        "ORDER BY lower(a.email)",
+        "SELECT a.id,a.email,a.active,a.created_at "
+        "FROM dental_clinic_assistants a "
+        "JOIN dental_clinic_assistant_memberships m ON m.assistant_id=a.id "
+        "WHERE m.clinic_id=? AND m.active=1 "
+        "ORDER BY lower(a.email)",
+        (actor["clinic_id"],),
+    )
+    store.audit(
+        actor["id"],
+        "assistant.directory.viewed",
+        "clinic_assistant_directory",
+        actor["clinic_id"],
+        actor["clinic_id"],
+    )
+    return {
+        "assistants": [
+            {
+                "id": item["id"],
+                "email": item["email"],
+                "active": bool(item["active"]),
+                "created_at": item["created_at"],
+                "role": "assistant",
+            }
+            for item in assistants
+        ]
+    }
+
+
 @router.post("/auth/assistants", status_code=201)
 def create_assistant_account(
     body: AssistantCreateIn,
