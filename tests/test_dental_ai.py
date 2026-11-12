@@ -296,3 +296,60 @@ def test_invalid_patient_token_has_stable_error_code(monkeypatch):
     )
     assert response.status_code == 401
     assert response.json()["detail"]["code"] == "INVALID_PATIENT_SESSION"
+
+
+def test_patient_appointments_and_chart_require_explicit_selection_for_multiple_links(monkeypatch):
+    class Store:
+        records = {
+            "patient-a": {"id": "patient-a", "clinic_id": "clinic-a"},
+            "patient-b": {"id": "patient-b", "clinic_id": "clinic-b"},
+        }
+
+        def patients_by_user_id(self, user_id):
+            return [
+                {"patient_id": "patient-a"},
+                {"patient_id": "patient-b"},
+            ]
+
+        def patient_by_user_id(self, user_id, patient_id=None):
+            return self.records.get(patient_id)
+
+        def appointments(self, clinic_id, patient_id):
+            return [{
+                "id": "appointment-" + patient_id,
+                "starts_at": "2026-11-13T10:00:00+05:30",
+                "treatment_type": "Check-up",
+                "status": "scheduled",
+            }]
+
+        def chart(self, patient_id, clinic_id):
+            return [{"tooth_fdi": "16", "status": "healthy"}]
+
+    monkeypatch.setattr(dental_ai, "get_dental_store", lambda: Store())
+    app.dependency_overrides[dental_ai.require_patient] = patient
+    client = TestClient(app)
+
+    ambiguous = client.get("/v1/dental/ai/patient/appointments")
+    assert ambiguous.status_code == 409
+    assert ambiguous.json()["detail"]["code"] == "PATIENT_RECORD_SELECTION_REQUIRED"
+
+    clinic_a = client.get(
+        "/v1/dental/ai/patient/appointments",
+        params={"patient_id": "patient-a"},
+    )
+    clinic_b = client.get(
+        "/v1/dental/ai/patient/appointments",
+        params={"patient_id": "patient-b"},
+    )
+    assert clinic_a.status_code == 200
+    assert clinic_a.json()["result"][0]["id"] == "appointment-patient-a"
+    assert clinic_b.status_code == 200
+    assert clinic_b.json()["result"][0]["id"] == "appointment-patient-b"
+
+    chart = client.get(
+        "/v1/dental/ai/patient/chart",
+        params={"patient_id": "patient-b"},
+    )
+    assert chart.status_code == 200
+    assert chart.json()["result"] == [{"tooth_fdi": "16", "status": "healthy"}]
+    app.dependency_overrides.clear()

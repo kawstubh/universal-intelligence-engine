@@ -78,17 +78,37 @@ def _envelope(result):
     }
 
 
-def _patient_for_actor(actor: dict):
-    patient = get_dental_store().patient_by_user_id(actor["user_id"])
-    if not patient:
+def _patient_for_actor(actor: dict, patient_id: str | None = None):
+    store = get_dental_store()
+    if patient_id:
+        patient = store.patient_by_user_id(actor["user_id"], patient_id)
+        if not patient:
+            raise HTTPException(
+                403,
+                detail={
+                    "code": "PATIENT_IDENTITY_MISMATCH",
+                    "message": "The selected clinic record is not linked to this patient account.",
+                },
+            )
+        return patient
+    linked = store.patients_by_user_id(actor["user_id"])
+    if len(linked) > 1:
         raise HTTPException(
-            404,
+            409,
             detail={
-                "code": "PATIENT_RECORD_NOT_LINKED",
-                "message": "No clinic record is linked to this patient account.",
+                "code": "PATIENT_RECORD_SELECTION_REQUIRED",
+                "message": "Choose the clinic record you want to view.",
             },
         )
-    return patient
+    if linked:
+        return store.patient_by_user_id(actor["user_id"], linked[0]["patient_id"])
+    raise HTTPException(
+        404,
+        detail={
+            "code": "PATIENT_RECORD_NOT_LINKED",
+            "message": "No clinic record is linked to this patient account.",
+        },
+    )
 
 
 def _public_plan(plan: dict) -> dict:
@@ -221,9 +241,26 @@ def update_treatment_plan(
     return _envelope(result)
 
 
+@router.get("/patient/linked-records")
+def list_patient_linked_records(actor: Annotated[dict, Depends(require_patient)]):
+    records = get_dental_store().patients_by_user_id(actor["user_id"])
+    return _envelope([
+        {
+            "patient_id": item["patient_id"],
+            "patient_name": item["patient_name"],
+            "clinic_name": item["clinic_name"],
+            "organisation_name": item.get("organisation_name") or item["clinic_name"],
+        }
+        for item in records
+    ])
+
+
 @router.get("/patient/treatment-plans")
-def list_patient_treatment_plans(actor: Annotated[dict, Depends(require_patient)]):
-    patient = _patient_for_actor(actor)
+def list_patient_treatment_plans(
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = _patient_for_actor(actor, patient_id)
     plans = get_dental_store().treatment_plans(
         patient["clinic_id"], patient["id"], patient_visible_only=True
     )
@@ -311,8 +348,11 @@ def void_invoice(
 
 
 @router.get("/patient/invoices")
-def list_patient_invoices(actor: Annotated[dict, Depends(require_patient)]):
-    patient = _patient_for_actor(actor)
+def list_patient_invoices(
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = _patient_for_actor(actor, patient_id)
     invoices = get_dental_store().invoices(
         patient["clinic_id"], patient["id"], patient_visible_only=True
     )
@@ -320,8 +360,11 @@ def list_patient_invoices(actor: Annotated[dict, Depends(require_patient)]):
 
 
 @router.get("/patient/receipts")
-def list_patient_receipts(actor: Annotated[dict, Depends(require_patient)]):
-    patient = _patient_for_actor(actor)
+def list_patient_receipts(
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = _patient_for_actor(actor, patient_id)
     receipts = get_dental_store().receipts(
         patient["clinic_id"], patient["id"], patient_visible_only=True
     )

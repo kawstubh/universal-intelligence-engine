@@ -1383,6 +1383,25 @@ class DentalStore:
                 connection,
             )
         return self.get_document(document_id, clinic_id)
+    def patients_by_user_id(self, user_id: str) -> list[dict[str, Any]]:
+        """Return the clinic records explicitly linked to one authenticated patient account."""
+        sql = (
+            "SELECT p.id AS patient_id,p.name AS patient_name,p.clinic_id,"
+            "c.name AS clinic_name,o.name AS organisation_name,p.created_at "
+            "FROM dental_patients p "
+            "JOIN dental_clinics c ON c.id=p.clinic_id "
+            "LEFT JOIN dental_organisations o ON o.id=c.organisation_id "
+            "WHERE p.user_id=%s ORDER BY p.created_at DESC,p.id"
+            if self.database_url
+            else
+            "SELECT p.id AS patient_id,p.name AS patient_name,p.clinic_id,"
+            "c.name AS clinic_name,o.name AS organisation_name,p.created_at "
+            "FROM dental_patients p "
+            "JOIN dental_clinics c ON c.id=p.clinic_id "
+            "LEFT JOIN dental_organisations o ON o.id=c.organisation_id "
+            "WHERE p.user_id=? ORDER BY p.created_at DESC,p.id"
+        )
+        return self._execute(sql, (user_id,))
 
     def patient_by_user_id(self, user_id: str, patient_id: str | None = None):
         if patient_id:

@@ -363,3 +363,65 @@ def test_invoice_creation_is_idempotent_and_rejects_key_reuse_with_different_pay
     conflict = client.post(f"/v1/dental/doctor/patients/{patient_a['id']}/invoices", json=changed)
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "DENTAL_RECORD_CONFLICT"
+
+
+def test_patient_with_multiple_clinic_links_must_select_the_record(care_api):
+    client, store, actor, patient_actor, patient_a, patient_b = care_api
+    store._execute(
+        "UPDATE dental_patients SET user_id=? WHERE id=?",
+        ("supabase-user-a", patient_b["id"]),
+    )
+    actor["clinic_id"] = "clinic-a"
+    plan_a = client.post(
+        f"/v1/dental/doctor/patients/{patient_a['id']}/treatment-plans",
+        json={"title": "Clinic A plan", "items": [{"description": "Assessment"}]},
+    ).json()["result"]
+    actor["clinic_id"] = "clinic-b"
+    plan_b = client.post(
+        f"/v1/dental/doctor/patients/{patient_b['id']}/treatment-plans",
+        json={"title": "Clinic B plan", "items": [{"description": "Review"}]},
+    ).json()["result"]
+    actor["clinic_id"] = "clinic-a"
+    share_a = client.patch(
+        f"/v1/dental/doctor/treatment-plans/{plan_a['id']}",
+        json={"status": "proposed", "patient_visible": True},
+    )
+    actor["clinic_id"] = "clinic-b"
+    share_b = client.patch(
+        f"/v1/dental/doctor/treatment-plans/{plan_b['id']}",
+        json={"status": "proposed", "patient_visible": True},
+    )
+    assert share_a.status_code == 200
+    assert share_b.status_code == 200
+
+    linked = client.get("/v1/dental/patient/linked-records")
+    assert linked.status_code == 200
+    records = linked.json()["result"]
+    assert {item["patient_id"] for item in records} == {patient_a["id"], patient_b["id"]}
+    assert {item["clinic_name"] for item in records} == {"Main Clinic", "Other Clinic"}
+    assert all("organisation_id" not in item for item in records)
+
+    ambiguous = client.get("/v1/dental/patient/treatment-plans")
+    assert ambiguous.status_code == 409
+    assert ambiguous.json()["detail"]["code"] == "PATIENT_RECORD_SELECTION_REQUIRED"
+
+    clinic_a = client.get(
+        "/v1/dental/patient/treatment-plans",
+        params={"patient_id": patient_a["id"]},
+    )
+    clinic_b = client.get(
+        "/v1/dental/patient/treatment-plans",
+        params={"patient_id": patient_b["id"]},
+    )
+    assert clinic_a.status_code == 200
+    assert [item["id"] for item in clinic_a.json()["result"]] == [plan_a["id"]]
+    assert clinic_b.status_code == 200
+    assert [item["id"] for item in clinic_b.json()["result"]] == [plan_b["id"]]
+
+    patient_actor["user_id"] = "supabase-user-b"
+    denied = client.get(
+        "/v1/dental/patient/treatment-plans",
+        params={"patient_id": patient_a["id"]},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "PATIENT_IDENTITY_MISMATCH"
