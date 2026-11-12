@@ -38,6 +38,9 @@ def test_patient_account_data_routes_remain_available_behind_patient_auth():
         ("GET", "/v1/dental/ai/patient/chart"),
         ("POST", "/v1/dental/ai/patient/device"),
         ("POST", "/v1/dental/ai/patient/recall"),
+        ("GET", "/v1/dental/patient/treatment-plans"),
+        ("GET", "/v1/dental/patient/invoices"),
+        ("GET", "/v1/dental/patient/receipts"),
     ]
     for method, path in routes:
         response = client.request(method, path, json={} if method == "POST" else None)
@@ -49,6 +52,9 @@ def test_openapi_hides_patient_ai_and_keeps_doctor_ai_and_patient_records():
     assert not any(path in paths for path in DISABLED_AI_PATHS)
     assert "/v1/dental/ai/patient/appointments" in paths
     assert "/v1/dental/ai/patient/chart" in paths
+    assert "/v1/dental/patient/treatment-plans" in paths
+    assert "/v1/dental/patient/invoices" in paths
+    assert "/v1/dental/patient/receipts" in paths
     assert "/v1/dental/ai/doctor/patient-summary" in paths
     assert "/v1/dental/intelligence/run" in paths
 
