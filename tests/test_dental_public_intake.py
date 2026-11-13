@@ -60,7 +60,7 @@ def _payload(
         "name": "Synthetic Patient",
         "phone": phone,
         "starts_at": preferred,
-        "treatment_type": "Dental check-up",
+        "treatment_type": "Dental Check-up & Consultation",
         "intelligence_request": False,
     }
 
@@ -262,3 +262,60 @@ def test_public_booking_honeypot_is_accepted_without_persisting(public_booking_a
     assert _count(store, "dental_patients") == 0
     assert _count(store, "dental_appointments") == 0
     assert _count(store, "dental_public_booking_requests") == 0
+
+def test_public_booking_accepts_all_twenty_repository_catalog_services(monkeypatch, public_booking_api):
+    client, store = public_booking_api
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", lambda _client_ip: None)
+    services = [
+        "Dental Check-up & Consultation",
+        "Scaling & Cleaning",
+        "Teeth Whitening",
+        "Tooth Filling",
+        "Root Canal Treatment (RCT)",
+        "Dental Crowns & Caps",
+        "Dental Implants",
+        "Tooth Extraction",
+        "Braces Treatment",
+        "Clear Aligners (Invisible Braces)",
+        "Dentures (Full / Partial)",
+        "Veneers (Smile Makeover)",
+        "Gum Treatment (Periodontal Care)",
+        "Kids Dentistry (Child Care)",
+        "Emergency Dental Care",
+        "Tooth Sensitivity Treatment",
+        "Dental Sealants (Cavity Prevention)",
+        "Oral Hygiene Education",
+        "Smile Makeover (Cosmetic Dentistry)",
+        "TMJ & Jaw Pain Treatment",
+    ]
+    for index, service in enumerate(services):
+        response = client.post(
+            "/v1/dental/public/appointments",
+            json={
+                **_payload(
+                    key=f"public-booking-catalog-{index:02d}",
+                    phone=f"+9199990000{index:02d}",
+                ),
+                "treatment_type": service,
+            },
+        )
+        assert response.status_code == 200, (service, response.text)
+        assert response.json()["status"] == "requested"
+    assert _count(store, "dental_patients") == 20
+    assert _count(store, "dental_appointments") == 20
+    assert _count(store, "dental_public_booking_requests") == 20
+
+
+def test_public_booking_keeps_other_concern_as_a_safe_fallback(public_booking_api):
+    client, store = public_booking_api
+    response = client.post(
+        "/v1/dental/public/appointments",
+        json={
+            **_payload(key="public-booking-other-concern-001"),
+            "treatment_type": "Other dental concern",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "requested"
+    assert _count(store, "dental_patients") == 1
+    assert _count(store, "dental_appointments") == 1
