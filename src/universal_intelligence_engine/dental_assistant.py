@@ -227,6 +227,13 @@ async def assistant_login(body: AssistantLoginIn, request: Request):
         "VALUES (?,?,?,?,0,?)",
         (_token_hash(token), assistant["id"], assistant["clinic_id"], expires_at, _now()),
     )
+    store.audit(
+        f"assistant:{assistant['id']}",
+        "session.created",
+        "assistant_session",
+        assistant["id"],
+        assistant["clinic_id"],
+    )
     return {
         "access_token": token,
         "token_type": "Bearer",
@@ -253,6 +260,13 @@ async def assistant_logout(
         "UPDATE dental_assistant_sessions SET revoked=1 WHERE token_hash=? AND assistant_id=?",
         (_token_hash(token), actor["id"]),
     )
+    store.audit(
+        f"assistant:{actor['id']}",
+        "session.revoked",
+        "assistant_session",
+        actor["id"],
+        actor["clinic_id"],
+    )
     return {"ok": True}
 
 
@@ -266,9 +280,15 @@ async def assistant_list_patients(actor: Annotated[dict, Depends(require_assista
     store = get_dental_store()
     rows = _query(
         store,
-        "SELECT id,name,phone,created_at FROM dental_patients WHERE clinic_id=%s ORDER BY created_at DESC LIMIT 200",
-        "SELECT id,name,phone,created_at FROM dental_patients WHERE clinic_id=? ORDER BY created_at DESC LIMIT 200",
+        "SELECT name,phone,created_at FROM dental_patients WHERE clinic_id=%s ORDER BY created_at DESC LIMIT 200",
+        "SELECT name,phone,created_at FROM dental_patients WHERE clinic_id=? ORDER BY created_at DESC LIMIT 200",
         (actor["clinic_id"],),
+    )
+    store.audit(
+        f"assistant:{actor['id']}",
+        "read",
+        "patient_directory",
+        clinic_id=actor["clinic_id"],
     )
     return _envelope(rows)
 
@@ -291,7 +311,7 @@ async def assistant_create_patient(
         actor["clinic_id"],
     )
     return _envelope(
-        {"id": patient["id"], "name": patient["name"], "phone": patient["phone"], "created_at": patient["created_at"]}
+        {"name": patient["name"], "phone": patient["phone"], "created_at": patient["created_at"]}
     )
 
 
@@ -300,7 +320,7 @@ async def assistant_list_appointments(actor: Annotated[dict, Depends(require_ass
     store = get_dental_store()
     rows = _query(
         store,
-        "SELECT a.id,a.patient_id,p.name AS patient_name,p.phone AS patient_phone,"
+        "SELECT a.id,p.name AS patient_name,p.phone AS patient_phone,"
         "a.starts_at,a.treatment_type,a.status,a.created_at "
         "FROM dental_appointments a JOIN dental_patients p "
         "ON p.id=a.patient_id AND p.clinic_id=a.clinic_id "
@@ -313,6 +333,12 @@ async def assistant_list_appointments(actor: Annotated[dict, Depends(require_ass
         "WHERE a.clinic_id=? AND a.status IN ('requested','confirmed','scheduled','rescheduled') "
         "ORDER BY a.starts_at ASC LIMIT 200",
         (actor["clinic_id"],),
+    )
+    store.audit(
+        f"assistant:{actor['id']}",
+        "read",
+        "appointment_queue",
+        clinic_id=actor["clinic_id"],
     )
     return _envelope(rows)
 
@@ -360,7 +386,6 @@ async def assistant_update_appointment(
     return _envelope(
         {
             "id": item["id"],
-            "patient_id": item["patient_id"],
             "starts_at": item["starts_at"],
             "treatment_type": item["treatment_type"],
             "status": item["status"],
@@ -386,6 +411,12 @@ async def assistant_list_invoice_balances(actor: Annotated[dict, Depends(require
         "WHERE i.clinic_id=? AND i.status IN ('issued','partially_paid','paid','overdue') "
         "ORDER BY i.created_at DESC LIMIT 200",
         (actor["clinic_id"],),
+    )
+    store.audit(
+        f"assistant:{actor['id']}",
+        "read",
+        "invoice_balances",
+        clinic_id=actor["clinic_id"],
     )
     return _envelope(rows)
 
