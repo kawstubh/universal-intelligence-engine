@@ -5,8 +5,10 @@ from __future__ import annotations
 import hmac
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -15,6 +17,9 @@ from . import __version__
 from .contracts import IntelligenceRequest, KnowledgeProvider
 from .dental_ai import router as dental_ai_router
 from .dental_api import router as dental_router
+from .dental_documents import router as dental_documents_router
+from .dental_patient_care import router as dental_patient_care_router
+from .dental_patient_comms import router as dental_patient_comms_router
 from .dental_store import get_dental_store
 from .engine import UniversalIntelligenceEngine
 from .evaluation import BasicResponseEvaluator
@@ -60,6 +65,74 @@ app = FastAPI(
     version=__version__,
     description="Shared intelligence API for research, reasoning, applications, agents, and Dental Intelligence.",
 )
+def _parse_cors_origins(raw: str | None) -> list[str]:
+    """Parse a strict allow-list of exact browser origins.
+
+    An unset value deliberately returns an empty list: deployed services must
+    opt in to their exact HTTPS portal origin instead of inheriting localhost
+    or LAN development origins.
+    """
+    if not raw:
+        return []
+
+    origins: list[str] = []
+    for candidate in raw.split(","):
+        origin = candidate.strip()
+        if not origin:
+            continue
+        parsed = urlsplit(origin)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("DENTAL_CORS_ORIGINS contains an invalid port.") from exc
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        if (
+            scheme not in {"http", "https"}
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or "*" in origin
+        ):
+            raise ValueError(
+                "DENTAL_CORS_ORIGINS must contain exact HTTP(S) origins only; "
+                "wildcards, credentials, paths, queries and fragments are not allowed."
+            )
+        host = f"[{hostname.lower()}]" if ":" in hostname else hostname.lower()
+        is_default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+        if port is not None and not is_default_port:
+            host = f"{host}:{port}"
+        normalized = f"{scheme}://{host}"
+        if origin != normalized:
+            raise ValueError(
+                "DENTAL_CORS_ORIGINS entries must use canonical origin form without a trailing slash."
+            )
+        origins.append(normalized)
+    return list(dict.fromkeys(origins))
+
+
+origins = _parse_cors_origins(os.getenv("DENTAL_CORS_ORIGINS"))
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    expose_headers=[
+        "Cache-Control",
+        "Pragma",
+        "Expires",
+        "X-Content-Type-Options",
+        "Strict-Transport-Security",
+        "Referrer-Policy",
+        "X-Frame-Options",
+        "Permissions-Policy",
+    ],
+)
+
 service = build_service()
 
 
@@ -68,21 +141,50 @@ service = build_service()
 @app.middleware("http")
 async def disable_patient_ai(request: Request, call_next):
     path = request.url.path.rstrip("/")
-    if path == "/v1/dental/ai/patient" or path.startswith("/v1/dental/ai/patient/"):
+    disabled_patient_prefixes = (
+        "/v1/dental/patient/",
+        "/v1/dental/ai/patient/",
+    )
+    if path.startswith(disabled_patient_prefixes):
         return JSONResponse(
             status_code=404,
             content={
                 "detail": {
-                    "code": "PATIENT_AI_DISABLED",
-                    "message": "Patient-facing AI is not available.",
+                    "code": "PATIENT_ACCOUNT_FREE",
+                    "message": "Patient accounts and linked-record access are disabled. Use the public guest appointment request; private patient records are not available through this route.",
                 }
             },
         )
     return await call_next(request)
 
 
+@app.middleware("http")
+async def secure_dental_response_headers(request: Request, call_next):
+    """Prevent browser, proxy and service-worker caches from retaining clinical API data."""
+    response = await call_next(request)
+    if request.url.path == "/v1/dental" or request.url.path.startswith("/v1/dental/"):
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains",
+    )
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()",
+    )
+    return response
+
+
 app.include_router(dental_router)
 app.include_router(dental_ai_router)
+app.include_router(dental_patient_care_router)
+app.include_router(dental_documents_router)
+app.include_router(dental_patient_comms_router)
 
 
 def _doctor_only_openapi():
@@ -97,10 +199,10 @@ def _doctor_only_openapi():
     schema["paths"] = {
         path: operations
         for path, operations in schema.get("paths", {}).items()
-        if not (
-            path.rstrip("/") == "/v1/dental/ai/patient"
-            or path.startswith("/v1/dental/ai/patient/")
-        )
+        if not path.startswith((
+            "/v1/dental/patient/",
+            "/v1/dental/ai/patient/",
+        ))
     }
     app.openapi_schema = schema
     return schema

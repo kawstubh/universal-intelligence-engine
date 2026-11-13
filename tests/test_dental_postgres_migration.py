@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
-from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy.engine import make_url
 
+from alembic import command
 from universal_intelligence_engine.dental_store import DentalStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +40,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
         monkeypatch.delenv("DENTAL_SQLITE_PATH", raising=False)
         config = Config(str(ROOT / "alembic.ini"))
         assert ScriptDirectory.from_config(config).get_heads() == [
-            "0007_dental_audit_workspace"
+            "0011_document_clinical_review"
         ]
         command.upgrade(config, "0005_password_auth")
 
@@ -79,12 +79,25 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 "dental_organisations",
                 "dental_clinics",
                 "dental_doctor_memberships",
+                "dental_treatment_plans",
+                "dental_treatment_plan_items",
+                "dental_invoices",
+                "dental_invoice_items",
+                "dental_receipts",
+                "dental_documents",
+                "dental_clinical_notes",
+                "dental_patient_messages",
             }.issubset(tables)
             audit_columns = {
                 column["name"]
                 for column in inspector.get_columns("dental_audit_events")
             }
             assert "clinic_id" in audit_columns
+            document_columns = {
+                column["name"]
+                for column in inspector.get_columns("dental_documents")
+            }
+            assert {"reviewed_by_doctor_id", "reviewed_at"}.issubset(document_columns)
 
             workspaces = connection.execute(
                 sa.text("SELECT id FROM dental_clinics")
@@ -219,40 +232,39 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             for organisation in store.organisations_for_doctor("doctor-pg")
         }
 
-        with pytest.raises(RuntimeError, match="simulated PostgreSQL rollback"):
-            with store.transaction() as connection:
-                store.create_organisation(
-                    {
-                        "id": "org-pg-rollback",
-                        "name": "Rollback Organisation",
-                        "organisation_type": "group",
-                    },
-                    connection=connection,
-                )
-                store.create_clinic(
-                    {
-                        "id": "clinic-pg-rollback",
-                        "organisation_id": "org-pg-rollback",
-                        "name": "Rollback Workspace",
-                        "clinic_type": "clinic",
-                    },
-                    connection=connection,
-                )
-                store.create_doctor_membership(
-                    "doctor-pg",
-                    "clinic-pg-rollback",
-                    "dentist",
-                    connection=connection,
-                )
-                store.audit(
-                    "doctor-pg",
-                    "workspace.created",
-                    "clinic",
-                    "clinic-pg-rollback",
-                    clinic_id="legacy-pg-clinic",
-                    connection=connection,
-                )
-                raise RuntimeError("simulated PostgreSQL rollback")
+        with pytest.raises(RuntimeError, match="simulated PostgreSQL rollback"), store.transaction() as connection:
+            store.create_organisation(
+                {
+                    "id": "org-pg-rollback",
+                    "name": "Rollback Organisation",
+                    "organisation_type": "group",
+                },
+                connection=connection,
+            )
+            store.create_clinic(
+                {
+                    "id": "clinic-pg-rollback",
+                    "organisation_id": "org-pg-rollback",
+                    "name": "Rollback Workspace",
+                    "clinic_type": "clinic",
+                },
+                connection=connection,
+            )
+            store.create_doctor_membership(
+                "doctor-pg",
+                "clinic-pg-rollback",
+                "dentist",
+                connection=connection,
+            )
+            store.audit(
+                "doctor-pg",
+                "workspace.created",
+                "clinic",
+                "clinic-pg-rollback",
+                clinic_id="legacy-pg-clinic",
+                connection=connection,
+            )
+            raise RuntimeError("simulated PostgreSQL rollback")
 
         assert store._execute(
             "SELECT id FROM dental_organisations WHERE id=%s",

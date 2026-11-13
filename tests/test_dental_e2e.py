@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
@@ -18,12 +19,13 @@ def e2e_db(tmp_path, monkeypatch):
 
 def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
     client = TestClient(app)
+    starts_at = (datetime.now(UTC) + timedelta(days=10)).isoformat()
     appointment_response = client.post(
         "/v1/dental/public/appointments",
         json={
             "name": "E2E Patient",
             "phone": "9876543210",
-            "starts_at": "2026-10-10T10:00:00+05:30",
+            "starts_at": starts_at,
             "treatment_type": "Dental consultation",
         },
     )
@@ -56,19 +58,31 @@ def test_patient_books_doctor_updates_and_patient_ai_is_disabled(e2e_db):
     )
     assert chart.status_code == 200
 
-    # Patient AI, consent, linking, history, and AI-prefixed patient routes are
-    # disabled at the API boundary; doctor-facing clinical AI remains separate.
+    # No patient account, Supabase login, linked-record or patient AI API is exposed.
     for method, path, payload in [
         ("POST", "/v1/dental/ai/patient/chat", {"message": "hello"}),
+        ("POST", "/v1/dental/ai/patient/triage", {"symptoms": "toothache"}),
         ("POST", "/v1/dental/ai/patient/consent", {"consent": True}),
-        ("POST", "/v1/dental/ai/patient/link", {"invite_code": "ABCDEFGH"}),
+        ("POST", "/v1/dental/ai/patient/link", {"invite_code": "synthetic-invite"}),
         ("GET", "/v1/dental/ai/patient/appointments", None),
         ("GET", "/v1/dental/ai/patient/chart", None),
         ("DELETE", "/v1/dental/ai/patient/history", None),
+        ("GET", "/v1/dental/patient/linked-records", None),
+        ("POST", "/v1/dental/patient/link", {"invite_code": "synthetic-invite"}),
+        ("GET", "/v1/dental/patient/appointments", None),
+        ("GET", "/v1/dental/patient/chart", None),
+        ("GET", "/v1/dental/patient/treatment-plans", None),
+        ("GET", "/v1/dental/patient/invoices", None),
+        ("GET", "/v1/dental/patient/receipts", None),
+        ("GET", "/v1/dental/patient/clinical-notes", None),
+        ("GET", "/v1/dental/patient/messages", None),
+        ("POST", "/v1/dental/patient/messages", {"body": "synthetic"}),
+        ("GET", "/v1/dental/patient/documents", None),
+        ("POST", "/v1/dental/patient/documents/document-1/download-intent", {}),
     ]:
         response = client.request(method, path, json=payload)
         assert response.status_code == 404, (method, path, response.text)
-        assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
+        assert response.json()["detail"]["code"] == "PATIENT_ACCOUNT_FREE"
 
     app.dependency_overrides[dental_api.require_doctor] = lambda: {
         "id": "doctor-b",
