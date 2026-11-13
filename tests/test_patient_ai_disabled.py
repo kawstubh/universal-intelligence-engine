@@ -54,7 +54,8 @@ def test_openapi_hides_all_patient_account_and_ai_routes_but_keeps_doctor_routes
         path.startswith(("/v1/dental/ai/patient/", "/v1/dental/patient/"))
         for path in paths
     )
-    assert "/v1/dental/doctor/patients/{patient_id}/invite" in paths
+    # Patient invitations/linking are disabled; this is not a Doctor clinical route.
+    assert "/v1/dental/doctor/patients/{patient_id}/invite" not in paths
     assert "/v1/dental/ai/doctor/patient-summary" in paths
     assert "/v1/dental/intelligence/run" in paths
     assert "/v1/dental/public/appointments" in paths
