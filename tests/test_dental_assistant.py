@@ -655,3 +655,24 @@ def test_assistant_patient_and_appointment_writes_roll_back_if_audit_fails(assis
         (context["appointment_a"]["id"],),
     )[0]["status"]
     assert after_status == before_status == "requested"
+
+
+def test_assistant_login_rate_limit_uses_validated_client_ip(assistant_api):
+    client = assistant_api["client"]
+    path = "/v1/dental/assistant/auth/login"
+    first_ip = {"CF-Connecting-IP": "198.51.100.10"}
+    payload = {"email": "missing@example.test", "password": "not-the-password"}
+
+    for _ in range(10):
+        response = client.post(path, headers=first_ip, json=payload)
+        assert response.status_code == 401
+
+    blocked = client.post(path, headers=first_ip, json=payload)
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"]
+
+    # Render requests share a proxy socket IP. A second validated Cloudflare
+    # client IP must have an independent rate-limit bucket.
+    second_ip = {"CF-Connecting-IP": "198.51.100.11"}
+    other_client = client.post(path, headers=second_ip, json=payload)
+    assert other_client.status_code == 401
