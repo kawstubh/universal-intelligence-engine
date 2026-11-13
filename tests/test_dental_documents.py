@@ -415,6 +415,7 @@ def test_storage_config_requires_explicit_private_bucket_attestation(monkeypatch
         "DENTAL_DOCUMENTS_S3_ACCESS_KEY_ID",
         "DENTAL_DOCUMENTS_S3_SECRET_ACCESS_KEY",
         "DENTAL_DOCUMENTS_STORAGE_PRIVATE",
+        "DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED",
     ):
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(HTTPException) as missing:
@@ -431,6 +432,13 @@ def test_storage_config_requires_explicit_private_bucket_attestation(monkeypatch
     assert not_private.value.status_code == 503
 
     monkeypatch.setenv("DENTAL_DOCUMENTS_STORAGE_PRIVATE", "true")
+    monkeypatch.setenv("DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED", "false")
+    with pytest.raises(HTTPException) as cleanup_not_verified:
+        dental_documents._storage_config()
+    assert cleanup_not_verified.value.status_code == 503
+    assert cleanup_not_verified.value.detail["code"] == "DOCUMENT_STORAGE_LIFECYCLE_NOT_VERIFIED"
+
+    monkeypatch.setenv("DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED", "true")
     assert dental_documents._storage_config()["bucket"] == "private-documents"
 
 
