@@ -9,7 +9,7 @@ received by the clinic and never store card credentials.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -68,9 +68,25 @@ class ReceiptCreateIn(BaseModel):
     paid_at: datetime | None = None
 
 
+def _normalize_patient_visibility(value):
+    """Serialize database booleans consistently across SQLite and PostgreSQL."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                bool(item)
+                if key == "patient_visible"
+                else _normalize_patient_visibility(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalize_patient_visibility(item) for item in value]
+    return value
+
+
 def _envelope(result):
     return {
-        "result": result,
+        "result": _normalize_patient_visibility(result),
         "confidence": 1.0,
         "sources": [],
         "request_id": str(uuid.uuid4()),
