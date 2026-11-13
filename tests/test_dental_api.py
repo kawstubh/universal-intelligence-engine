@@ -39,6 +39,7 @@ def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp
     monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "dental.sqlite3"))
     monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
     monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "clinic-public-test")
+    monkeypatch.setenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", "synthetic-public-booking-hash-key-32-bytes-minimum")
     monkeypatch.setattr(dental_store, "_store", None)
     store = DentalStore()
     store.create_organisation(
