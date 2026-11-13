@@ -1,7 +1,10 @@
 from fastapi import FastAPI
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine import dental_api
+from universal_intelligence_engine import dental_api, dental_store
 from universal_intelligence_engine.dental_api import router
 
 app = FastAPI()
@@ -34,15 +37,21 @@ def test_chart_tooth_validation(monkeypatch):
 
 def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp_path):
     monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "dental.sqlite3"))
-    dental_api._store = None
+    monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
+    monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "dr-pranali")
+    dental_store._store = None
     client = TestClient(app)
+    starts_at = (
+        datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=7)
+    ).replace(hour=10, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
     response = client.post(
         "/v1/dental/public/appointments",
         json={
+            "idempotency_key": "api-test-key-0000000000000000",
             "name": "Test Patient",
             "phone": "9876543210",
-            "starts_at": "2026-10-06 10:00 AM",
-            "treatment_type": "Dental Check-up",
+            "starts_at": starts_at,
+            "treatment_type": "Dental check-up",
             "note": None,
             "intelligence_request": False,
         },
@@ -50,8 +59,11 @@ def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "requested"
-    assert body["appointment"]["status"] == "requested"
-    assert body["appointment"]["treatment_type"] == "Dental Check-up"
+    assert body["reference"].startswith("ORL-")
+    assert "patient_id" not in body
+    assert "appointment_id" not in body
+    assert "appointment" not in body
+    dental_store._store = None
 
 
 def test_intelligence_denies_cross_clinic_patient(monkeypatch):

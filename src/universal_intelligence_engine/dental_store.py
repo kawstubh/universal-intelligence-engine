@@ -16,7 +16,7 @@ import string
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -148,16 +148,17 @@ class DentalStore:
             (clinic_id,),
         )
 
-    def get_patient(self, patient_id: str, clinic_id: str) -> dict[str, Any] | None:
+    def get_patient(self, patient_id: str, clinic_id: str, connection=None) -> dict[str, Any] | None:
         rows = self._execute(
             "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=%s AND clinic_id=%s"
             if self.database_url
             else "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=? AND clinic_id=?",
             (patient_id, clinic_id),
+            connection=connection,
         )
         return rows[0] if rows else None
 
-    def create_patient(self, data: dict[str, Any], clinic_id: str) -> dict[str, Any]:
+    def create_patient(self, data: dict[str, Any], clinic_id: str, connection=None) -> dict[str, Any]:
         item = {
             "id": _id(),
             "name": data.get("name", "").strip(),
@@ -174,6 +175,7 @@ class DentalStore:
                 item[k]
                 for k in ("id", "name", "phone", "age", "clinic_id", "created_at")
             ),
+            connection=connection,
         )
         return item
 
@@ -195,9 +197,9 @@ class DentalStore:
         )
 
     def create_appointment(
-        self, data: dict[str, Any], clinic_id: str
+        self, data: dict[str, Any], clinic_id: str, connection=None
     ) -> dict[str, Any]:
-        if not self.get_patient(str(data["patient_id"]), clinic_id):
+        if not self.get_patient(str(data["patient_id"]), clinic_id, connection=connection):
             raise ValueError("Patient not found in clinic")
         item = {
             "id": _id(),
@@ -226,8 +228,151 @@ class DentalStore:
                     "created_at",
                 )
             ),
+            connection=connection,
         )
         return item
+
+    def create_public_appointment_request(
+        self,
+        data: dict[str, Any],
+        clinic_id: str,
+        idempotency_key_hash: str,
+        request_hash: str,
+        duplicate_hash: str,
+        public_reference: str,
+        duplicate_window_seconds: int = 600,
+    ) -> dict[str, Any]:
+        """Atomically create a guest patient, appointment and idempotency receipt."""
+        cutoff = (datetime.now(UTC) - timedelta(seconds=duplicate_window_seconds)).isoformat()
+        key_sql = (
+            "SELECT * FROM dental_public_booking_requests WHERE clinic_id=%s AND idempotency_key_hash=%s"
+            if self.database_url
+            else "SELECT * FROM dental_public_booking_requests WHERE clinic_id=? AND idempotency_key_hash=?"
+        )
+        duplicate_sql = (
+            "SELECT * FROM dental_public_booking_requests WHERE clinic_id=%s AND duplicate_hash=%s AND created_at >= %s ORDER BY created_at DESC LIMIT 1"
+            if self.database_url
+            else "SELECT * FROM dental_public_booking_requests WHERE clinic_id=? AND duplicate_hash=? AND created_at >= ? ORDER BY created_at DESC LIMIT 1"
+        )
+        try:
+            with self.transaction() as connection:
+                if self.database_url:
+                    lock_values = {
+                        int.from_bytes(
+                            hashlib.sha256(
+                                f"{scope}:{clinic_id}:{value}".encode()
+                            ).digest()[:8],
+                            "big",
+                            signed=True,
+                        )
+                        for scope, value in (
+                            ("public-booking-key", idempotency_key_hash),
+                            ("public-booking-request", request_hash),
+                        )
+                    }
+                    for lock_value in sorted(lock_values):
+                        self._execute(
+                            "SELECT pg_advisory_xact_lock(%s)",
+                            (lock_value,),
+                            connection=connection,
+                        )
+                else:
+                    connection.execute("BEGIN IMMEDIATE")
+
+                existing = self._execute(
+                    key_sql, (clinic_id, idempotency_key_hash), connection=connection
+                )
+                if existing:
+                    if existing[0]["request_hash"] != request_hash:
+                        raise ValueError(
+                            "Idempotency key was already used for a different public booking request"
+                        )
+                    return {"outcome": "replayed", "request": existing[0]}
+
+                duplicate = self._execute(
+                    duplicate_sql,
+                    (clinic_id, duplicate_hash, cutoff),
+                    connection=connection,
+                )
+                if duplicate:
+                    return {"outcome": "duplicate", "request": duplicate[0]}
+
+                patient = self.create_patient(
+                    {
+                        "name": data["name"],
+                        "phone": data["phone"],
+                        "age": "",
+                    },
+                    clinic_id,
+                    connection=connection,
+                )
+                appointment = self.create_appointment(
+                    {
+                        "patient_id": patient["id"],
+                        "starts_at": data["starts_at"],
+                        "treatment_type": data["treatment_type"],
+                        "note": data.get("note", ""),
+                        "status": "requested",
+                    },
+                    clinic_id,
+                    connection=connection,
+                )
+                created_at = _now()
+                request = {
+                    "id": _id(),
+                    "clinic_id": clinic_id,
+                    "idempotency_key_hash": idempotency_key_hash,
+                    "request_hash": request_hash,
+                    "duplicate_hash": duplicate_hash,
+                    "public_reference": public_reference,
+                    "patient_id": patient["id"],
+                    "appointment_id": appointment["id"],
+                    "created_at": created_at,
+                }
+                self._execute(
+                    "INSERT INTO dental_public_booking_requests(id,clinic_id,idempotency_key_hash,request_hash,duplicate_hash,public_reference,patient_id,appointment_id,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                    if self.database_url
+                    else "INSERT INTO dental_public_booking_requests(id,clinic_id,idempotency_key_hash,request_hash,duplicate_hash,public_reference,patient_id,appointment_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    tuple(request[key] for key in (
+                        "id",
+                        "clinic_id",
+                        "idempotency_key_hash",
+                        "request_hash",
+                        "duplicate_hash",
+                        "public_reference",
+                        "patient_id",
+                        "appointment_id",
+                        "created_at",
+                    )),
+                    connection=connection,
+                )
+                self.audit(
+                    "public-intake",
+                    "request",
+                    "appointment",
+                    appointment["id"],
+                    clinic_id=clinic_id,
+                    connection=connection,
+                )
+                return {
+                    "outcome": "created",
+                    "request": request,
+                    "patient": patient,
+                    "appointment": appointment,
+                }
+        except Exception:
+            # A concurrent retry may have committed the unique idempotency row
+            # between our first read and insert. Resolve it without leaking IDs.
+            existing = self._execute(
+                key_sql, (clinic_id, idempotency_key_hash)
+            )
+            if existing:
+                if existing[0]["request_hash"] != request_hash:
+                    raise ValueError(
+                        "Idempotency key was already used for a different public booking request"
+                    ) from None
+                return {"outcome": "replayed", "request": existing[0]}
+            raise
 
     def update_appointment(
         self, appointment_id: str, changes: dict[str, Any], clinic_id: str

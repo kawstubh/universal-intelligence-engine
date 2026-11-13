@@ -356,7 +356,9 @@ def test_document_routes_require_doctor_or_patient_authentication():
     app = FastAPI()
     app.include_router(dental_documents.router)
     client = TestClient(app)
-    assert client.get("/v1/dental/patient/documents").status_code == 401
+    patient_documents = client.get("/v1/dental/patient/documents")
+    assert patient_documents.status_code == 403
+    assert patient_documents.json()["detail"]["code"] == "PATIENT_ACCOUNTS_DISABLED"
     assert client.get("/v1/dental/doctor/patients/missing/documents").status_code == 401
 
 

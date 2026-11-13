@@ -286,16 +286,14 @@ def test_patient_context_full_mode_is_explicit_opt_in(monkeypatch):
     assert context["appointments"][0]["starts_at"] == "2026-10-08T10:00:00"
 
 
-def test_invalid_patient_token_has_stable_error_code(monkeypatch):
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_PUBLISHABLE_KEY", raising=False)
+def test_patient_ai_is_disabled_even_when_a_bearer_token_is_supplied():
     response = TestClient(app).post(
         "/v1/dental/ai/patient/chat",
-        headers={"Authorization": "Bearer definitely-invalid-token"},
+        headers={"Authorization": "Bearer synthetic-token-must-not-be-validated"},
         json={"message": "hello"},
     )
-    assert response.status_code == 401
-    assert response.json()["detail"]["code"] == "INVALID_PATIENT_SESSION"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PATIENT_ACCOUNTS_DISABLED"
 
 
 def test_patient_appointments_and_chart_require_explicit_selection_for_multiple_links(monkeypatch):

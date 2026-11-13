@@ -10,7 +10,7 @@ import uuid
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .dental_auth import require_doctor
@@ -462,50 +462,15 @@ async def doctor_approve(
     }
 
 
-async def _supabase_user(authorization: str | None) -> dict[str, Any]:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "Bearer access token required")
-    token = authorization[7:].strip()
-    url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    key = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
-    if not token or not url or not key:
-        raise HTTPException(
-            401,
-            detail={
-                "message": "Invalid patient session",
-                "code": "INVALID_PATIENT_SESSION",
-            },
-        )
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(
-            f"{url}/auth/v1/user",
-            headers={"apikey": key, "Authorization": f"Bearer {token}"},
-        )
-    if response.status_code != 200:
-        raise HTTPException(
-            401,
-            detail={
-                "message": "Invalid patient session",
-                "code": "INVALID_PATIENT_SESSION",
-            },
-        )
-    user = response.json()
-    if not user.get("id"):
-        raise HTTPException(
-            401,
-            detail={
-                "message": "Patient identity missing",
-                "code": "PATIENT_IDENTITY_MISSING",
-            },
-        )
-    return user
-
-
-async def require_patient(
-    authorization: str | None = Header(default=None),
-) -> dict[str, Any]:
-    user = await _supabase_user(authorization)
-    return {"user_id": str(user["id"]), "email": str(user.get("email") or "")}
+async def require_patient() -> dict[str, Any]:
+    """Patient accounts are intentionally disabled for the public account-free journey."""
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "PATIENT_ACCOUNTS_DISABLED",
+            "message": "Patient accounts are disabled. Use public appointment booking or contact the clinic.",
+        },
+    )
 
 
 async def _patient_record(
