@@ -39,3 +39,8 @@ routes. A Doctor token is not accepted by Assistant routes.
 - Billing collection records money already received. It does not initiate
   payment gateway transactions, create invoices, edit line items, issue or
   void invoices, or sign prescriptions.
+
+
+## Sign-in abuse protection
+
+Assistant sign-in uses a short in-process sliding window keyed by a validated Cloudflare `CF-Connecting-IP` address on Render, with a bounded client map to prevent unbounded memory growth. This protects the current single-instance synthetic staging service. Before production runs multiple API instances, add a shared/distributed rate limiter or a trusted edge/WAF policy; do not treat the in-process limiter as cluster-wide protection.
