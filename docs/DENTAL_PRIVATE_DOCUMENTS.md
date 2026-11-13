@@ -69,9 +69,9 @@ Configure only on the isolated synthetic staging backend:
 
 Neon storage credentials are branch-scoped, not bucket/prefix-scoped. The `storage:write` scope includes object reads/writes, object deletion and bucket creation. Keep the staging branch/project isolated with only this dedicated private bucket. Do not reuse its credential in production or across unrelated buckets. If production requires bucket/prefix-scoped credentials, use a provider that supports those scopes or a separate isolated storage project.
 
-**Neon Object Storage lifecycle rules are not currently enforced.** Do not rely on a configured S3 lifecycle rule to expire `pending/` objects. Before enabling uploads, implement and test a server-side cleanup process for expired pending objects, or use a storage provider with enforced lifecycle expiration. This is a release gate because replayed presigned PUT URLs and abandoned uploads must not leave unbounded quarantine objects.
+**Neon Object Storage lifecycle rules are not currently enforced. The backend now also requires `DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED=true`; it defaults to false and blocks upload/download-intent configuration until the cleanup job has been independently tested. The cleanup process must target expired pending/quarantine objects only and must never delete verified clinical documents.** Do not rely on a configured S3 lifecycle rule to expire `pending/` objects. Before enabling uploads, implement and test a server-side cleanup process for expired pending objects, or use a storage provider with enforced lifecycle expiration. This is a release gate because replayed presigned PUT URLs and abandoned uploads must not leave unbounded quarantine objects.
 
-When storage configuration is absent or private-bucket attestation is false, Doctor upload/download-intent endpoints return `503 DOCUMENT_STORAGE_NOT_CONFIGURED`. The application never falls back to Render's ephemeral filesystem.
+When storage configuration is absent or private-bucket attestation is false, Doctor upload/download-intent endpoints return `503 DOCUMENT_STORAGE_NOT_CONFIGURED`. When lifecycle cleanup has not been independently verified, they return `503 DOCUMENT_STORAGE_LIFECYCLE_NOT_VERIFIED`. The application never falls back to Render's ephemeral filesystem.
 
 ## Mandatory private ClamAV scanning
 
