@@ -382,8 +382,10 @@ def test_replayed_upload_url_cannot_mutate_verified_document(document_api):
         json={"patient_visible": True},
     )
     assert shared.status_code == 404
-    download = client.post(f"/v1/dental/patient/documents/{document_id}/download-intent")
-    assert download.status_code == 404
+    patient_download = client.post(f"/v1/dental/patient/documents/{document_id}/download-intent")
+    assert patient_download.status_code == 404
+    doctor_download = client.post(f"/v1/dental/doctor/documents/{document_id}/download-intent")
+    assert doctor_download.status_code == 200, doctor_download.text
     assert fake_s3.presign_calls[-1]["params"]["Key"] == final_key
     assert fake_s3.objects[final_key]["Body"] == content
     assert fake_s3.objects[upload_key]["Body"] == replayed_bytes

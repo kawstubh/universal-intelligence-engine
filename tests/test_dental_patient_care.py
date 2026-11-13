@@ -26,34 +26,24 @@ def care_api(tmp_path: Path, monkeypatch):
     store.create_clinic({"id": "clinic-b", "organisation_id": "org-b", "name": "Other Clinic", "clinic_type": "clinic"})
     patient_a = store.create_patient({"name": "Synthetic Patient A", "phone": "9000000001", "age": "35"}, "clinic-a")
     patient_b = store.create_patient({"name": "Synthetic Patient B", "phone": "9000000002", "age": "29"}, "clinic-b")
-    store._execute(
-        "UPDATE dental_patients SET user_id=? WHERE id=?",
-        ("supabase-user-a", patient_a["id"]),
-    )
-    store._execute(
-        "UPDATE dental_patients SET user_id=? WHERE id=?",
-        ("supabase-user-b", patient_b["id"]),
-    )
-
     actor = {"id": "doctor-a", "clinic_id": "clinic-a", "role": "owner"}
-    patient_actor = {"user_id": "supabase-user-a"}
+    patient_actor = {}
     monkeypatch.setattr(dental_patient_care, "get_dental_store", lambda: store)
 
     app = FastAPI()
     app.include_router(dental_patient_care.router)
     app.dependency_overrides[dental_patient_care.require_doctor] = lambda: actor
-    app.dependency_overrides[dental_patient_care.require_patient] = lambda: patient_actor
     client = TestClient(app)
     return client, store, actor, patient_actor, patient_a, patient_b
 
 
-def test_treatment_plan_is_private_until_doctor_shares_it_and_is_workspace_scoped(care_api):
-    client, _store, actor, patient_actor, patient_a, _patient_b = care_api
+def test_treatment_plan_remains_clinic_only_and_is_workspace_scoped(care_api):
+    client, _store, actor, _patient_actor, patient_a, _patient_b = care_api
     created = client.post(
         f"/v1/dental/doctor/patients/{patient_a['id']}/treatment-plans",
         json={
             "title": "Initial care plan",
-            "summary": "A proposed care sequence to discuss with the patient.",
+            "summary": "A proposed care sequence for the clinic record.",
             "items": [
                 {"service_code": "EXAM", "description": "Clinical examination", "tooth_fdi": "16"},
                 {"service_code": "CLEAN", "description": "Professional cleaning"},
@@ -65,42 +55,26 @@ def test_treatment_plan_is_private_until_doctor_shares_it_and_is_workspace_scope
     assert plan["status"] == "draft"
     assert plan["patient_visible"] is False
     assert len(plan["items"]) == 2
-
-    hidden = client.get("/v1/dental/patient/treatment-plans")
-    assert hidden.status_code == 200
-    assert hidden.json()["result"] == []
+    assert client.get("/v1/dental/patient/treatment-plans").status_code == 404
 
     actor["clinic_id"] = "clinic-b"
     cross_workspace = client.patch(
         f"/v1/dental/doctor/treatment-plans/{plan['id']}",
-        json={"status": "proposed", "patient_visible": True},
+        json={"status": "proposed"},
     )
     assert cross_workspace.status_code == 404
 
     actor["clinic_id"] = "clinic-a"
-    shared = client.patch(
+    proposed = client.patch(
         f"/v1/dental/doctor/treatment-plans/{plan['id']}",
-        json={"status": "proposed", "patient_visible": True},
+        json={"status": "proposed"},
     )
-    assert shared.status_code == 200, shared.text
-    visible = client.get("/v1/dental/patient/treatment-plans")
-    assert visible.status_code == 200
-    assert len(visible.json()["result"]) == 1
-    patient_plan = visible.json()["result"][0]
-    assert patient_plan["id"] == plan["id"]
-    assert patient_plan["title"] == "Initial care plan"
-    assert len(patient_plan["items"]) == 2
-    assert "clinic_id" not in patient_plan
-    assert "patient_id" not in patient_plan
-    assert "created_by_doctor_id" not in patient_plan
-
-    patient_actor["user_id"] = "supabase-user-b"
-    other_patient = client.get("/v1/dental/patient/treatment-plans")
-    assert other_patient.status_code == 200
-    assert other_patient.json()["result"] == []
+    assert proposed.status_code == 200, proposed.text
+    assert proposed.json()["result"]["patient_visible"] is False
+    assert client.get("/v1/dental/patient/treatment-plans").status_code == 404
 
 
-def test_treatment_plan_draft_cannot_be_shared(care_api):
+def test_treatment_plan_patient_visibility_cannot_be_enabled(care_api):
     client, _store, _actor, _patient_actor, patient_a, _patient_b = care_api
     created = client.post(
         f"/v1/dental/doctor/patients/{patient_a['id']}/treatment-plans",
@@ -111,11 +85,10 @@ def test_treatment_plan_draft_cannot_be_shared(care_api):
         f"/v1/dental/doctor/treatment-plans/{plan_id}",
         json={"patient_visible": True},
     )
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "DENTAL_RECORD_CONFLICT"
+    assert response.status_code == 422
 
 
-def test_invoice_uses_integer_paise_pre_tax_discount_and_patient_visibility(care_api):
+def test_invoice_uses_integer_paise_pre_tax_discount_and_remains_clinic_only(care_api):
     client, _store, _actor, _patient_actor, patient_a, _patient_b = care_api
     created = client.post(
         f"/v1/dental/doctor/patients/{patient_a['id']}/invoices",
@@ -144,7 +117,7 @@ def test_invoice_uses_integer_paise_pre_tax_discount_and_patient_visibility(care
     assert invoice["items"][0]["discount_paise"] == 1000
     assert invoice["items"][0]["total_paise"] == 16520
 
-    assert client.get("/v1/dental/patient/invoices").json()["result"] == []
+    assert client.get("/v1/dental/patient/invoices").status_code == 404
 
     issued = client.post(
         f"/v1/dental/doctor/invoices/{invoice['id']}/issue",
@@ -152,15 +125,8 @@ def test_invoice_uses_integer_paise_pre_tax_discount_and_patient_visibility(care
     )
     assert issued.status_code == 200, issued.text
     assert issued.json()["result"]["status"] == "issued"
-    patient_invoices = client.get("/v1/dental/patient/invoices")
-    assert patient_invoices.status_code == 200
-    visible = patient_invoices.json()["result"]
-    assert len(visible) == 1
-    assert visible[0]["invoice_number"] == invoice["invoice_number"]
-    assert visible[0]["balance_paise"] == 16520
-    assert "clinic_id" not in visible[0]
-    assert "patient_id" not in visible[0]
-    assert "created_by_doctor_id" not in visible[0]
+    assert issued.json()["result"]["patient_visible"] is False
+    assert client.get("/v1/dental/patient/invoices").status_code == 404
 
 
 def test_receipt_idempotency_partial_payment_and_overpayment_guard(care_api):
@@ -213,10 +179,7 @@ def test_receipt_idempotency_partial_payment_and_overpayment_guard(care_api):
     assert paid["paid_paise"] == 20000
     assert paid["balance_paise"] == 0
 
-    receipts = client.get("/v1/dental/patient/receipts")
-    assert receipts.status_code == 200
-    assert len(receipts.json()["result"]) == 2
-    assert all("idempotency_key" not in item for item in receipts.json()["result"])
+    assert client.get("/v1/dental/patient/receipts").status_code == 404
 
     overpayment = client.post(
         f"/v1/dental/doctor/invoices/{invoice_id}/receipts",
@@ -247,7 +210,7 @@ def test_invoice_and_patient_receipts_are_isolated_by_workspace_and_patient(care
 
     patient_actor["user_id"] = "supabase-user-b"
     assert client.get("/v1/dental/patient/invoices").json()["result"] == []
-    assert client.get("/v1/dental/patient/receipts").json()["result"] == []
+    assert client.get("/v1/dental/patient/receipts").status_code == 404
 
 
 def test_invoice_cannot_be_voided_after_receipt(care_api):
@@ -270,11 +233,11 @@ def test_invoice_cannot_be_voided_after_receipt(care_api):
     assert voided.status_code == 409
 
 
-def test_doctor_and_patient_routes_remain_auth_protected():
+def test_doctor_routes_require_auth_and_patient_account_routes_are_absent():
     app = FastAPI()
     app.include_router(dental_patient_care.router)
     client = TestClient(app)
-    assert client.get("/v1/dental/patient/invoices").status_code == 401
+    assert client.get("/v1/dental/patient/invoices").status_code == 404
     assert client.get("/v1/dental/doctor/patients/missing/invoices").status_code == 401
 
 
@@ -326,7 +289,7 @@ def test_treatment_plan_items_are_editable_only_while_draft_with_version_control
 
     proposed = client.patch(
         f"/v1/dental/doctor/treatment-plans/{plan['id']}",
-        json={"expected_version": 2, "status": "proposed", "patient_visible": True},
+        json={"expected_version": 2, "status": "proposed"},
     )
     assert proposed.status_code == 200, proposed.text
 
@@ -363,68 +326,6 @@ def test_invoice_creation_is_idempotent_and_rejects_key_reuse_with_different_pay
     conflict = client.post(f"/v1/dental/doctor/patients/{patient_a['id']}/invoices", json=changed)
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "DENTAL_RECORD_CONFLICT"
-
-
-def test_patient_with_multiple_clinic_links_must_select_the_record(care_api):
-    client, store, actor, patient_actor, patient_a, patient_b = care_api
-    store._execute(
-        "UPDATE dental_patients SET user_id=? WHERE id=?",
-        ("supabase-user-a", patient_b["id"]),
-    )
-    actor["clinic_id"] = "clinic-a"
-    plan_a = client.post(
-        f"/v1/dental/doctor/patients/{patient_a['id']}/treatment-plans",
-        json={"title": "Clinic A plan", "items": [{"description": "Assessment"}]},
-    ).json()["result"]
-    actor["clinic_id"] = "clinic-b"
-    plan_b = client.post(
-        f"/v1/dental/doctor/patients/{patient_b['id']}/treatment-plans",
-        json={"title": "Clinic B plan", "items": [{"description": "Review"}]},
-    ).json()["result"]
-    actor["clinic_id"] = "clinic-a"
-    share_a = client.patch(
-        f"/v1/dental/doctor/treatment-plans/{plan_a['id']}",
-        json={"status": "proposed", "patient_visible": True},
-    )
-    actor["clinic_id"] = "clinic-b"
-    share_b = client.patch(
-        f"/v1/dental/doctor/treatment-plans/{plan_b['id']}",
-        json={"status": "proposed", "patient_visible": True},
-    )
-    assert share_a.status_code == 200
-    assert share_b.status_code == 200
-
-    linked = client.get("/v1/dental/patient/linked-records")
-    assert linked.status_code == 200
-    records = linked.json()["result"]
-    assert {item["patient_id"] for item in records} == {patient_a["id"], patient_b["id"]}
-    assert {item["clinic_name"] for item in records} == {"Main Clinic", "Other Clinic"}
-    assert all("organisation_id" not in item for item in records)
-
-    ambiguous = client.get("/v1/dental/patient/treatment-plans")
-    assert ambiguous.status_code == 409
-    assert ambiguous.json()["detail"]["code"] == "PATIENT_RECORD_SELECTION_REQUIRED"
-
-    clinic_a = client.get(
-        "/v1/dental/patient/treatment-plans",
-        params={"patient_id": patient_a["id"]},
-    )
-    clinic_b = client.get(
-        "/v1/dental/patient/treatment-plans",
-        params={"patient_id": patient_b["id"]},
-    )
-    assert clinic_a.status_code == 200
-    assert [item["id"] for item in clinic_a.json()["result"]] == [plan_a["id"]]
-    assert clinic_b.status_code == 200
-    assert [item["id"] for item in clinic_b.json()["result"]] == [plan_b["id"]]
-
-    patient_actor["user_id"] = "supabase-user-b"
-    denied = client.get(
-        "/v1/dental/patient/treatment-plans",
-        params={"patient_id": patient_a["id"]},
-    )
-    assert denied.status_code == 403
-    assert denied.json()["detail"]["code"] == "PATIENT_IDENTITY_MISMATCH"
 
 
 def test_doctor_dashboard_summary_is_live_and_scoped_to_active_workspace(care_api):
@@ -554,137 +455,19 @@ def test_doctor_dashboard_summary_requires_doctor_authentication():
     assert response.status_code == 401
 
 
-def test_patient_portal_linking_and_booking_use_linked_non_ai_routes(care_api):
-    client, store, _actor, patient_actor, patient_a, patient_b = care_api
-    store._execute(
-        "UPDATE dental_patients SET user_id=NULL WHERE id=?",
-        (patient_a["id"],),
-    )
-    invite_code = store.create_patient_invite(patient_a["id"], "clinic-a")
-    linked = client.post(
-        "/v1/dental/patient/link",
-        json={"invite_code": invite_code},
-    )
-    assert linked.status_code == 200, linked.text
-    assert linked.json()["result"] == {
-        "patient_id": patient_a["id"],
-        "linked": True,
-    }
-    assert store.patient_by_user_id("supabase-user-a", patient_a["id"])
-
-    store.create_appointment(
-        {
-            "patient_id": patient_a["id"],
-            "starts_at": "2026-11-15T09:00:00+00:00",
-            "treatment_type": "Dental check-up",
-            "status": "scheduled",
-        },
-        "clinic-a",
-    )
-    listed = client.get(
+def test_patient_account_routes_are_not_mounted_on_care_router():
+    app = FastAPI()
+    app.include_router(dental_patient_care.router)
+    client = TestClient(app)
+    for path in (
+        "/v1/dental/patient/linked-records",
+        "/v1/dental/patient/treatment-plans",
+        "/v1/dental/patient/invoices",
+        "/v1/dental/patient/receipts",
         "/v1/dental/patient/appointments",
-        params={"patient_id": patient_a["id"]},
-    )
-    assert listed.status_code == 200, listed.text
-    assert listed.json()["result"] == [
-        {
-            "id": listed.json()["result"][0]["id"],
-            "starts_at": "2026-11-15T09:00:00+00:00",
-            "treatment_type": "Dental check-up",
-            "status": "scheduled",
-        }
-    ]
-    assert "patient_id" not in listed.json()["result"][0]
-    assert "clinic_id" not in listed.json()["result"][0]
-
-    store.save_chart(
-        {
-            "patient_id": patient_a["id"],
-            "tooth_fdi": "16",
-            "status": "restored",
-            "note": "Internal clinical note",
-        },
-        "clinic-a",
-    )
-    chart = client.get(
         "/v1/dental/patient/chart",
-        params={"patient_id": patient_a["id"]},
-    )
-    assert chart.status_code == 200
-    assert chart.json()["result"] == [{"tooth_fdi": "16", "status": "restored"}]
-    assert "note" not in chart.json()["result"][0]
-
-    requested = client.post(
-        "/v1/dental/patient/appointments",
-        params={"patient_id": patient_a["id"]},
-        json={
-            "starts_at": "2026-11-16T10:30:00+05:30",
-            "treatment_type": "Consultation",
-            "note": "Please call before confirming.",
-            "patient_id": patient_b["id"],
-            "status": "confirmed",
-        },
-    )
-    assert requested.status_code == 201, requested.text
-    result = requested.json()["result"]
-    assert result["status"] == "requested"
-    assert result["starts_at"] == "2026-11-16T05:00:00+00:00"
-    assert "patient_id" not in result
-    assert "clinic_id" not in result
-    persisted = store.appointments("clinic-a", patient_a["id"])
-    assert any(item["id"] == result["id"] and item["status"] == "requested" for item in persisted)
-    assert not store.appointments("clinic-b", patient_b["id"])
-
-    cross_patient = client.post(
-        "/v1/dental/patient/appointments",
-        params={"patient_id": patient_b["id"]},
-        json={
-            "starts_at": "2026-11-17T10:00:00+00:00",
-            "treatment_type": "Check-up",
-        },
-    )
-    assert cross_patient.status_code == 403
-    assert cross_patient.json()["detail"]["code"] == "PATIENT_IDENTITY_MISMATCH"
-
-    patient_actor["user_id"] = "supabase-user-b"
-    denied_link = client.post(
-        "/v1/dental/patient/link",
-        json={"invite_code": store.create_patient_invite(patient_a["id"], "clinic-a")},
-    )
-    assert denied_link.status_code == 403
-
-
-def test_patient_appointment_request_requires_timezone_and_linked_record(care_api):
-    client, _store, _actor, _patient_actor, patient_a, _patient_b = care_api
-    missing_timezone = client.post(
-        "/v1/dental/patient/appointments",
-        params={"patient_id": patient_a["id"]},
-        json={
-            "starts_at": "2026-11-16T10:30:00",
-            "treatment_type": "Consultation",
-        },
-    )
-    assert missing_timezone.status_code == 422
-
-    past_time = client.post(
-        "/v1/dental/patient/appointments",
-        params={"patient_id": patient_a["id"]},
-        json={
-            "starts_at": "2020-01-01T10:30:00+00:00",
-            "treatment_type": "Consultation",
-        },
-    )
-    assert past_time.status_code == 422
-
-    unlinked = client.post(
-        "/v1/dental/patient/appointments",
-        params={"patient_id": "not-linked"},
-        json={
-            "starts_at": "2026-11-16T10:30:00+00:00",
-            "treatment_type": "Consultation",
-        },
-    )
-    assert unlinked.status_code == 403
+    ):
+        assert client.get(path).status_code == 404
 
 
 def test_doctor_patient_invite_route_is_disabled_for_account_free_journey(care_api):

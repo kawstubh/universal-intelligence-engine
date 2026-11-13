@@ -570,9 +570,6 @@ def test_assistant_cannot_mutate_clinical_notes_plans_billing_documents_or_use_c
             "checksum_sha256": "a" * 64,
         }),
         ("POST", f"/v1/dental/doctor/documents/{document_id}/review", None),
-        ("PATCH", f"/v1/dental/doctor/documents/{document_id}", {
-            "patient_visible": True,
-        }),
         ("POST", "/v1/dental/ai/doctor/patient-summary", {"patient_id": patient_id}),
         ("POST", "/v1/dental/ai/doctor/treatment-plan", {"patient_id": patient_id}),
         ("POST", "/v1/dental/ai/doctor/chart-insights", {"patient_id": patient_id}),

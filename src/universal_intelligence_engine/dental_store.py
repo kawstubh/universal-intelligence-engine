@@ -791,11 +791,12 @@ class DentalStore:
     def update_treatment_plan(
         self, plan_id: str, clinic_id: str, doctor_id: str, changes: dict[str, Any]
     ) -> dict[str, Any] | None:
-        allowed = {"title", "summary", "status", "patient_visible", "items"}
+        allowed = {"title", "summary", "status", "items"}
         expected_version = changes.pop("expected_version", None)
         changes = {key: value for key, value in changes.items() if key in allowed}
         if not changes:
             return None
+        changes["patient_visible"] = False
         with self.transaction() as connection:
             lock = " FOR UPDATE" if self.database_url else ""
             sql = (
@@ -820,8 +821,6 @@ class DentalStore:
             }
             if next_status != current["status"] and next_status not in transitions.get(current["status"], set()):
                 raise ValueError(f"Treatment plan cannot transition from {current['status']} to {next_status}")
-            if changes.get("patient_visible") is True and next_status in {"draft", "cancelled"}:
-                raise ValueError("A treatment plan must be proposed before it can be shared")
             items = changes.pop("items", None)
             if items is not None and current["status"] != "draft":
                 raise ValueError("Treatment plan items can only be edited while the plan is a draft")
@@ -1083,9 +1082,9 @@ class DentalStore:
             if rows[0]["status"] != "draft":
                 raise ValueError("Only a draft invoice can be issued")
             update_sql = (
-                "UPDATE dental_invoices SET status='issued',patient_visible=true,due_date=%s,issued_at=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
+                "UPDATE dental_invoices SET status='issued',patient_visible=false,due_date=%s,issued_at=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
                 if self.database_url
-                else "UPDATE dental_invoices SET status='issued',patient_visible=1,due_date=?,issued_at=?,updated_at=? WHERE id=? AND clinic_id=?"
+                else "UPDATE dental_invoices SET status='issued',patient_visible=0,due_date=?,issued_at=?,updated_at=? WHERE id=? AND clinic_id=?"
             )
             self._execute(update_sql, (due_date, now, now, invoice_id, clinic_id), connection=connection)
             self.audit(doctor_id, "invoice.issued", "invoice", invoice_id, clinic_id, connection)
