@@ -224,6 +224,18 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     )
     assert naive_reschedule_time.status_code == 422
 
+    future_start = (datetime.now(UTC) + timedelta(days=3)).replace(microsecond=0).isoformat()
+    rescheduled = client.patch(
+        f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
+        headers=headers,
+        json={"status": "rescheduled", "starts_at": future_start},
+    )
+    assert rescheduled.status_code == 200, rescheduled.text
+    assert rescheduled.json()["result"]["status"] == "rescheduled"
+    assert rescheduled.json()["result"]["starts_at"] == future_start
+    assert "patient_id" not in rescheduled.json()["result"]
+    assert "treatment_type" not in rescheduled.json()["result"]
+
     invalid_intake = client.post(
         "/v1/dental/assistant/patients",
         headers=headers,
