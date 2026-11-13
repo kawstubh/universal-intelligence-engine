@@ -154,6 +154,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             "legacy-pg-clinic",
             "a" * 64,
             "b" * 64,
+            "g" * 64,
             "ORL-" + "c" * 24,
         )
         assert created["outcome"] == "created"
@@ -163,6 +164,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             "legacy-pg-clinic",
             "a" * 64,
             "b" * 64,
+            "g" * 64,
             "ORL-" + "d" * 24,
         )
         assert replayed["outcome"] == "replayed"
@@ -172,6 +174,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             "legacy-pg-clinic",
             "e" * 64,
             "b" * 64,
+            "g" * 64,
             "ORL-" + "f" * 24,
         )
         assert duplicate["outcome"] == "duplicate"
@@ -185,6 +188,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 "legacy-pg-clinic",
                 "a" * 64,
                 "f" * 64,
+                "h" * 64,
                 "ORL-" + "1" * 24,
             )
         home_workspace = store._execute(
