@@ -29,8 +29,9 @@ def public_client(tmp_path, monkeypatch):
 
 
 def _future_ist_time(days=7):
+    # Use a published clinic slot so ordinary test requests pass validation.
     return (datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=days)).replace(
-        second=0, microsecond=0
+        hour=10, minute=0, second=0, microsecond=0
     ).isoformat(timespec="seconds")
 
 
