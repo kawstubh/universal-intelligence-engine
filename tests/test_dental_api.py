@@ -61,7 +61,7 @@ def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp
             "name": "Test Patient",
             "phone": "9876543210",
             "starts_at": starts_at,
-            "treatment_type": "Dental check-up",
+            "treatment_type": "Dental Check-up & Consultation",
             "intelligence_request": False,
         },
     )
