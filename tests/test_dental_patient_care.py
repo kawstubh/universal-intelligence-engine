@@ -193,8 +193,8 @@ def test_receipt_idempotency_partial_payment_and_overpayment_guard(care_api):
     assert overpayment.json()["detail"]["code"] == "DENTAL_RECORD_CONFLICT"
 
 
-def test_invoice_and_patient_receipts_are_isolated_by_workspace_and_patient(care_api):
-    client, _store, actor, patient_actor, patient_a, _patient_b = care_api
+def test_invoice_isolation_and_patient_account_routes_are_absent(care_api):
+    client, _store, actor, _patient_actor, patient_a, _patient_b = care_api
     created = client.post(
         f"/v1/dental/doctor/patients/{patient_a['id']}/invoices",
         json={"idempotency_key": "invoice-test-key-0003", "items": [{"description": "Check-up", "quantity_milli": 1000, "unit_price_paise": 5000}]},
@@ -208,8 +208,7 @@ def test_invoice_and_patient_receipts_are_isolated_by_workspace_and_patient(care
     )
     assert denied.status_code == 404
 
-    patient_actor["user_id"] = "supabase-user-b"
-    assert client.get("/v1/dental/patient/invoices").json()["result"] == []
+    assert client.get("/v1/dental/patient/invoices").status_code == 404
     assert client.get("/v1/dental/patient/receipts").status_code == 404
 
 
