@@ -22,6 +22,7 @@ def upgrade() -> None:
             sa.Column("clinic_id", sa.String(128), nullable=False),
             sa.Column("idempotency_key_hash", sa.String(64), nullable=False),
             sa.Column("request_hash", sa.String(64), nullable=False),
+            sa.Column("duplicate_hash", sa.String(64), nullable=False),
             sa.Column("public_reference", sa.String(32), nullable=False),
             sa.Column(
                 "patient_id",
@@ -49,7 +50,7 @@ def upgrade() -> None:
     op.create_index(
         "idx_dental_public_booking_duplicate_window",
         "dental_public_booking_requests",
-        ["clinic_id", "request_hash", "created_at"],
+        ["clinic_id", "duplicate_hash", "created_at"],
         if_not_exists=True,
     )
 
