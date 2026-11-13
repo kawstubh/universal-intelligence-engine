@@ -12,7 +12,7 @@ records, return patient/appointment IDs, or invoke AI.
 
 The public form sends:
 - A cryptographically random idempotency key (16-128 characters).
-- Patient name and contact number (7-15 digits after normalisation).
+- Patient name and contact number (10-digit Indian mobile number (optionally prefixed with +91)).
 - A timezone-aware future appointment time.
 - One of the seven currently approved service labels.
 - intelligence_request=false and an empty honeypot field.
