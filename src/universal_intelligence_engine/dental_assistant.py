@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from .dental_auth import hash_password, require_doctor, verify_password
+from .dental_api import PUBLIC_APPOINTMENT_SERVICES
 from .dental_store import get_dental_store
 
 router = APIRouter(prefix="/v1/dental", tags=["dental-assistant"])
@@ -53,6 +54,14 @@ class AssistantAppointmentIn(BaseModel):
     patient_id: str = Field(min_length=1, max_length=64)
     starts_at: datetime
     treatment_type: str = Field(min_length=1, max_length=120)
+
+    @field_validator("treatment_type")
+    @classmethod
+    def require_approved_clinic_service(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized not in PUBLIC_APPOINTMENT_SERVICES:
+            raise ValueError("Appointment service must be selected from the approved clinic catalog")
+        return normalized
 
     @field_validator("starts_at")
     @classmethod
