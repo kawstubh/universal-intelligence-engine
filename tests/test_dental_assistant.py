@@ -177,6 +177,7 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     patient = patients.json()["result"][0]
     assert patient["name"] == "Synthetic Patient A"
     assert patient["phone"] == "9000000001"
+    assert "id" not in patient
     assert "age" not in patient
     assert "clinic_id" not in patient
 
@@ -187,6 +188,7 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     )
     assert created_patient.status_code == 201, created_patient.text
     assert "age" not in created_patient.json()["result"]
+    assert "id" not in created_patient.json()["result"]
 
     appointments = client.get("/v1/dental/assistant/appointments", headers=headers)
     assert appointments.status_code == 200
@@ -195,6 +197,7 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     assert appointment["patient_name"] == "Synthetic Patient A"
     assert appointment["status"] == "requested"
     assert "note" not in appointment
+    assert "patient_id" not in appointment
 
     confirmed = client.patch(
         f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
@@ -203,6 +206,7 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     )
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["result"]["status"] == "confirmed"
+    assert "patient_id" not in confirmed.json()["result"]
 
     invoices = client.get("/v1/dental/assistant/billing/invoices", headers=headers)
     assert invoices.status_code == 200
@@ -312,10 +316,11 @@ def test_assistant_tenant_isolation_and_cross_clinic_account_management(assistan
     headers = _assistant_headers(context)
 
     patients = client.get("/v1/dental/assistant/patients", headers=headers).json()["result"]
-    assert {item["id"] for item in patients} == {context["patient_a"]["id"]}
+    assert {item["name"] for item in patients} == {"Synthetic Patient A"}
 
     appointments = client.get("/v1/dental/assistant/appointments", headers=headers).json()["result"]
     assert {item["id"] for item in appointments} == {context["appointment_a"]["id"]}
+    assert "patient_id" not in appointments[0]
 
     invoices = client.get("/v1/dental/assistant/billing/invoices", headers=headers).json()["result"]
     assert {item["id"] for item in invoices} == {context["invoice_a"]["id"]}
