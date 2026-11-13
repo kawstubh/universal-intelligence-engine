@@ -687,48 +687,9 @@ def test_patient_appointment_request_requires_timezone_and_linked_record(care_ap
     assert unlinked.status_code == 403
 
 
-def test_patient_invite_cannot_reassign_a_linked_record_to_another_account(care_api):
-    _client, store, _actor, _patient_actor, patient_a, _patient_b = care_api
-    store._execute(
-        "UPDATE dental_patients SET user_id=NULL WHERE id=?",
-        (patient_a["id"],),
-    )
-    first_code = store.create_patient_invite(patient_a["id"], "clinic-a")
-    second_code = store.create_patient_invite(patient_a["id"], "clinic-a")
-
-    first = store.consume_patient_invite(first_code, "supabase-user-a")
-    assert first and first["user_id"] == "supabase-user-a"
-
-    rejected = store.consume_patient_invite(second_code, "supabase-user-b")
-    assert rejected is None
-    assert store.patient_by_user_id("supabase-user-a", patient_a["id"])
-    assert store.patient_by_user_id("supabase-user-b", patient_a["id"]) is None
-
-    same_account = store.consume_patient_invite(second_code, "supabase-user-a")
-    assert same_account and same_account["user_id"] == "supabase-user-a"
-
-def test_doctor_patient_invite_uses_non_ai_workspace_scoped_route(care_api):
-    client, _store, actor, _patient_actor, patient_a, patient_b = care_api
-
+def test_doctor_patient_invite_route_is_disabled_for_account_free_journey(care_api):
+    client, _store, _actor, _patient_actor, patient_a, _patient_b = care_api
     response = client.post(
         f"/v1/dental/doctor/patients/{patient_a['id']}/invite"
     )
-    assert response.status_code == 200, response.text
-    result = response.json()["result"]
-    assert result["patient_id"] == patient_a["id"]
-    assert len(result["invite_code"]) >= 8
-    assert result["expires_in"] == 86400
-    assert "disclaimers" not in response.json()
-
-    actor["clinic_id"] = "clinic-b"
-    cross_workspace = client.post(
-        f"/v1/dental/doctor/patients/{patient_a['id']}/invite"
-    )
-    assert cross_workspace.status_code == 404
-    assert cross_workspace.json()["detail"]["code"] == "PATIENT_NOT_FOUND"
-
-    own_workspace = client.post(
-        f"/v1/dental/doctor/patients/{patient_b['id']}/invite"
-    )
-    assert own_workspace.status_code == 200
-    assert own_workspace.json()["result"]["patient_id"] == patient_b["id"]
+    assert response.status_code == 404
