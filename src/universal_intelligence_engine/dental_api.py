@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -56,6 +57,26 @@ def _public_appointment_client_ip(request: Request) -> str:
         except ValueError:
             pass
     return str(request.client.host if request.client else "unknown")
+
+
+def _public_booking_hmac(value: str, purpose: str) -> str:
+    """Keyed digest for low-entropy contact data and request fingerprints.
+
+    Plain SHA-256 is not suitable for phone numbers because the input space is
+    enumerable. Keep this key stable across deploys so duplicate detection and
+    idempotency remain consistent.
+    """
+    key = os.getenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", "").strip()
+    if len(key.encode("utf-8")) < 32:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "PUBLIC_BOOKING_HASH_NOT_CONFIGURED",
+                "message": "Online appointment requests are temporarily unavailable. Please call the clinic.",
+            },
+        )
+    message = (purpose + ":" + value).encode("utf-8")
+    return hmac.new(key.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
 def _check_public_appointment_rate_limit(client_ip: str) -> None:
@@ -884,11 +905,12 @@ async def create_public_appointment(body: PublicAppointmentIn, request: Request)
         "starts_at": starts_at_utc,
         "treatment_type": body.treatment_type,
     }
-    payload_hash = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    idempotency_hash = hashlib.sha256(body.idempotency_key.encode("utf-8")).hexdigest()
-    phone_hash = hashlib.sha256(phone_digits.encode("utf-8")).hexdigest()
+    payload_hash = _public_booking_hmac(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        "payload",
+    )
+    idempotency_hash = _public_booking_hmac(body.idempotency_key, "idempotency")
+    phone_hash = _public_booking_hmac(phone_digits, "phone")
     now = datetime.now(UTC).isoformat()
     public_reference = "ORL-" + secrets.token_hex(8).upper()
 
