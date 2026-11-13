@@ -96,6 +96,15 @@ def test_patient_books_doctor_updates_and_patient_account_routes_are_disabled(e2
         ("GET", "/v1/dental/patient/clinical-notes", None),
         ("POST", f"/v1/dental/doctor/patients/{patient_id}/invite", None),
         ("POST", f"/v1/dental/ai/doctor/patients/{patient_id}/invite", None),
+        ("POST", "/v1/dental/patient/link", {"invite_code": "synthetic-invite"}),
+        ("GET", "/v1/dental/patient/appointments", None),
+        ("GET", "/v1/dental/patient/chart", None),
+        ("GET", "/v1/dental/patient/treatment-plans", None),
+        ("GET", "/v1/dental/patient/receipts", None),
+        ("GET", "/v1/dental/patient/messages", None),
+        ("POST", "/v1/dental/patient/messages", {"body": "synthetic"}),
+        ("GET", "/v1/dental/patient/documents", None),
+        ("POST", "/v1/dental/patient/documents/document-1/download-intent", {}),
     ]
     for method, path, payload in disabled_routes:
         response = client.request(method, path, json=payload)

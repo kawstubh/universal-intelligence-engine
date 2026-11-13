@@ -182,11 +182,11 @@ async def secure_dental_response_headers(request: Request, call_next):
 
 
 app.include_router(dental_router)
+app.include_router(dental_assistant_router)
 app.include_router(dental_ai_router)
 app.include_router(dental_patient_care_router)
 app.include_router(dental_documents_router)
 app.include_router(dental_patient_comms_router)
-app.include_router(dental_assistant_router)
 
 
 def _doctor_only_openapi():

@@ -38,6 +38,8 @@ DISABLED_PATIENT_METHODS = [
     ("GET", "/v1/dental/patient/clinical-notes"),
     ("GET", "/v1/dental/patient/messages"),
     ("POST", "/v1/dental/patient/messages"),
+    ("GET", "/v1/dental/patient/documents"),
+    ("POST", "/v1/dental/patient/documents/document-1/download-intent"),
 ]
 
 
