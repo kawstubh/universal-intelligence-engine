@@ -25,6 +25,7 @@ router = APIRouter(prefix="/v1/dental", tags=["dental-clinic-assistant"])
 ASSISTANT_SESSION_TTL = 8 * 60 * 60
 _LOGIN_WINDOW_SECONDS = 300
 _LOGIN_MAX_ATTEMPTS = 10
+_LOGIN_MAX_CLIENTS = 10_000
 _LOGIN_ATTEMPTS: dict[str, deque[float]] = defaultdict(deque)
 
 
