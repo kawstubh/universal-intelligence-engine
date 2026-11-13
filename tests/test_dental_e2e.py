@@ -25,7 +25,7 @@ def test_public_guest_booking_doctor_workflow_and_patient_apis_disabled(e2e_db):
     client = TestClient(app)
     starts_at = (
         datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=7)
-    ).replace(second=0, microsecond=0).isoformat(timespec="seconds")
+    ).replace(hour=10, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
     appointment_response = client.post(
         "/v1/dental/public/appointments",
         json={
