@@ -257,6 +257,34 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
         or int(float(row["expires_at"])) < int(time.time())
         or row.get("revoked")
     ):
+        # A valid Clinic Assistant session is deliberately not a Doctor session.
+        assistant_rows = store._execute(
+            "SELECT s.expires_at,s.revoked,a.active,c.active AS clinic_active "
+            "FROM dental_assistant_sessions s "
+            "JOIN dental_clinic_assistants a ON a.id=s.assistant_id AND a.clinic_id=s.clinic_id "
+            "JOIN dental_clinics c ON c.id=s.clinic_id WHERE s.token_hash=%s"
+            if store.database_url
+            else "SELECT s.expires_at,s.revoked,a.active,c.active AS clinic_active "
+            "FROM dental_assistant_sessions s "
+            "JOIN dental_clinic_assistants a ON a.id=s.assistant_id AND a.clinic_id=s.clinic_id "
+            "JOIN dental_clinics c ON c.id=s.clinic_id WHERE s.token_hash=?",
+            (_hash(token),),
+        )
+        if assistant_rows:
+            assistant_session = assistant_rows[0]
+            if (
+                not assistant_session["revoked"]
+                and assistant_session["active"]
+                and assistant_session["clinic_active"]
+                and int(assistant_session["expires_at"]) >= int(time.time())
+            ):
+                raise HTTPException(
+                    403,
+                    detail={
+                        "code": "DOCTOR_ROLE_REQUIRED",
+                        "message": "Clinic Assistant access cannot be used for Doctor operations",
+                    },
+                )
         raise HTTPException(
             401,
             detail={
