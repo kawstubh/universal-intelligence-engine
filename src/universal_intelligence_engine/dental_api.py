@@ -12,6 +12,7 @@ import time
 from collections import defaultdict, deque
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -841,6 +842,26 @@ async def doctor_logout(
     return {"ok": True}
 
 
+def _database_identity_verified(store) -> bool | None:
+    expected_hosts = {
+        value.strip().lower().rstrip(".")
+        for value in os.getenv("DENTAL_EXPECTED_DATABASE_HOSTS", "").split(",")
+        if value.strip()
+    }
+    expected_database = os.getenv("DENTAL_EXPECTED_DATABASE_NAME", "").strip()
+    if not expected_hosts or not expected_database:
+        return None
+
+    parsed = urlsplit(str(store.database_url or ""))
+    actual_host = (parsed.hostname or "").lower().rstrip(".")
+    actual_database = parsed.path.lstrip("/").split("?", 1)[0]
+    return bool(
+        store.backend == "postgres"
+        and actual_host in expected_hosts
+        and actual_database == expected_database
+    )
+
+
 @router.get("/health")
 async def dental_health():
     store = get_dental_store()
@@ -848,6 +869,8 @@ async def dental_health():
         "status": "ok",
         "service": "dental-api",
         "database": store.backend,
+        "database_ready": bool(store.healthcheck()),
+        "database_identity_verified": _database_identity_verified(store),
         "uie_configured": bool(os.getenv("UIE_API_URL") and os.getenv("UIE_API_KEY")),
     }
 
