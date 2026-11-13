@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .dental_auth import hash_password, require_doctor, verify_password
 from .dental_store import get_dental_store
@@ -103,10 +103,29 @@ class AssistantPatientCreateIn(BaseModel):
     def trim_text(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("phone")
+    @classmethod
+    def validate_indian_mobile(cls, value: str) -> str:
+        digits = "".join(character for character in value if character.isdigit())
+        valid = (len(digits) == 10 and digits[0] in "6789") or (
+            len(digits) == 12 and digits.startswith("91") and digits[2] in "6789"
+        )
+        if not valid:
+            raise ValueError("Enter a valid 10-digit Indian mobile number")
+        return value
+
 
 class AssistantAppointmentUpdateIn(BaseModel):
     status: Literal["confirmed", "cancelled", "rescheduled"] | None = None
     starts_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def require_reschedule_time(self):
+        if self.status == "rescheduled" and self.starts_at is None:
+            raise ValueError("A new timezone-aware time is required to reschedule")
+        if self.starts_at is not None and self.status not in (None, "rescheduled"):
+            raise ValueError("A new time can only be supplied for a reschedule")
+        return self
 
     @field_validator("starts_at")
     @classmethod
