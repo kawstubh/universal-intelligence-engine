@@ -246,6 +246,29 @@ def test_assistant_can_manage_contact_intake_and_reception_queue(assistant_api):
     }.issubset(audit_actions)
 
 
+def test_assistant_appointment_rejects_unapproved_service(assistant_api):
+    client, _store = assistant_api
+    _create_assistant(client)
+    headers, _login = _assistant_headers(client)
+    patient = client.post(
+        "/v1/dental/assistant/patients",
+        headers=headers,
+        json={"name": "Synthetic catalog probe", "phone": "9000000000"},
+    )
+    assert patient.status_code == 201
+    response = client.post(
+        "/v1/dental/assistant/appointments",
+        headers=headers,
+        json={
+            "patient_id": patient.json()["id"],
+            "starts_at": (datetime.now(UTC) + timedelta(days=3)).isoformat(),
+            "treatment_type": "Unapproved whitening service",
+        },
+    )
+    assert response.status_code == 422
+    assert "approved clinic catalog" in response.text
+
+
 def test_assistant_billing_access_is_read_only_and_redacted(assistant_api):
     client, store = assistant_api
     _create_assistant(client)
