@@ -41,7 +41,7 @@ def test_patient_books_doctor_updates_and_patient_account_routes_are_disabled(e2
             "name": "E2E Synthetic Patient",
             "phone": "9876543210",
             "starts_at": starts_at,
-            "treatment_type": "Dental check-up",
+            "treatment_type": "Dental Check-up & Consultation",
             "intelligence_request": False,
         },
     )
@@ -61,7 +61,7 @@ def test_patient_books_doctor_updates_and_patient_account_routes_are_disabled(e2
     assert seen.status_code == 200
     appointment = next(
         row for row in seen.json()
-        if row["treatment_type"] == "Dental check-up"
+        if row["treatment_type"] == "Dental Check-up & Consultation"
     )
     patient_id = appointment["patient_id"]
 
