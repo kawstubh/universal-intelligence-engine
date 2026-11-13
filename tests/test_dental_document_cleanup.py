@@ -217,6 +217,34 @@ def test_cleanup_never_deletes_a_key_outside_exact_pending_document_prefix(clean
     assert s3.deleted == []
 
 
+def test_cleanup_rejects_filename_mismatch_inside_document_prefix(cleanup_context):
+    store, organisation_id, clinic_id, patient = cleanup_context
+    now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
+    old = now - timedelta(hours=30)
+    document, expected_key = _create_document(
+        store, organisation_id, clinic_id, patient, updated_at=old
+    )
+    mismatched_key = expected_key.replace("scan.pdf", "different.pdf")
+    store._execute(
+        "UPDATE dental_documents SET upload_object_key=? WHERE id=?",
+        (mismatched_key, document["id"]),
+    )
+    s3 = FakeS3()
+    s3.objects.add(mismatched_key)
+
+    result = cleanup_expired_pending_uploads(
+        store, s3, "private-test-bucket", now=now, dry_run=False
+    )
+
+    current = store.get_document(document["id"], clinic_id)
+    assert result["unsafe_keys"] == 1
+    assert result["deleted_count"] == 0
+    assert current["status"] == "rejected"
+    assert current["upload_object_key"] == mismatched_key
+    assert mismatched_key in s3.objects
+    assert s3.deleted == []
+
+
 def test_failed_object_delete_remains_retryable(cleanup_context):
     store, organisation_id, clinic_id, patient = cleanup_context
     now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
