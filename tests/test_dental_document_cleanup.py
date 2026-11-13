@@ -153,9 +153,10 @@ def test_apply_deletes_only_old_quarantine_objects_and_never_verified_objects(cl
     recent_pending, recent_key = _create_document(
         store, organisation_id, clinic_id, patient, updated_at=recent
     )
-    available, verified_key = _create_document(
+    available, available_upload_key = _create_document(
         store, organisation_id, clinic_id, patient, status="available", updated_at=old
     )
+    verified_key = available["object_key"]
     s3 = FakeS3()
     s3.objects.update({pending_key, verifying_key, rejected_key, recent_key, verified_key})
 
