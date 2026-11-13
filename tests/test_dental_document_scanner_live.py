@@ -21,7 +21,7 @@ def _wait_for_clamav(host: str, port: int, timeout_seconds: int = 240) -> None:
         try:
             with socket.create_connection((host, port), timeout=2) as connection:
                 connection.settimeout(2)
-                connection.sendall(b"zPING\\0")
+                connection.sendall(b"zPING" + bytes([0]))
                 response = connection.recv(32)
                 if b"PONG" in response:
                     return
@@ -31,15 +31,15 @@ def _wait_for_clamav(host: str, port: int, timeout_seconds: int = 240) -> None:
     pytest.fail(f"ClamAV did not become ready within {timeout_seconds}s: {last_error}")
 
 
-@pytest.fixture(scope="module", autouse=True)
-def configure_real_clamav() -> None:
+@pytest.fixture(autouse=True)
+def configure_real_clamav(monkeypatch) -> None:
     host = os.getenv("ORALYN_CLAMAV_HOST", "127.0.0.1")
     port = int(os.getenv("ORALYN_CLAMAV_PORT", "3310"))
     _wait_for_clamav(host, port)
-    os.environ["DENTAL_DOCUMENT_SCANNER_HOST"] = host
-    os.environ["DENTAL_DOCUMENT_SCANNER_PORT"] = str(port)
-    os.environ["DENTAL_DOCUMENT_SCANNER_TIMEOUT_SECONDS"] = "20"
-    os.environ["DENTAL_DOCUMENT_SCANNER_PRIVATE"] = "true"
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_HOST", host)
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_PORT", str(port))
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_TIMEOUT_SECONDS", "20")
+    monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_PRIVATE", "true")
 
 
 def test_real_clamav_accepts_a_clean_synthetic_payload() -> None:
@@ -49,7 +49,8 @@ def test_real_clamav_accepts_a_clean_synthetic_payload() -> None:
 
 def test_real_clamav_rejects_the_eicar_test_signature() -> None:
     eicar = (
-        b"X5O!P%@AP[4\\\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+        b"X5O!P%@AP[4" + bytes([92])
+        + b"PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
     )
     with pytest.raises(scanner.DocumentMalwareDetected):
         scanner.scan_document_bytes(eicar)
