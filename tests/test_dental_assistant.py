@@ -625,7 +625,7 @@ def test_assistant_patient_and_appointment_writes_roll_back_if_audit_fails(assis
         "SELECT COUNT(*) AS count FROM dental_patients WHERE clinic_id=?",
         ("clinic-assistant-a",),
     )[0]["count"]
-    monkeypatch.setattr(store, "audit", fail_audit)
+    monkeypatch.setattr(DentalStore, "audit", fail_audit)
 
     with pytest.raises(RuntimeError, match="audit unavailable"):
         client.post(
