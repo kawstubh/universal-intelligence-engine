@@ -99,8 +99,8 @@ def test_patient_books_doctor_updates_and_patient_account_routes_are_disabled(e2
     ]
     for method, path, payload in disabled_routes:
         response = client.request(method, path, json=payload)
+        # Legacy account/link endpoints are not registered; standard FastAPI 404 is expected.
         assert response.status_code == 404, (method, path, response.status_code, response.text)
-        assert response.json()["detail"]["code"] == "PATIENT_ACCOUNT_FREE"
 
     app.dependency_overrides[dental_api.require_doctor] = lambda: {
         "id": "doctor-b",
