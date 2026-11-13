@@ -14,10 +14,10 @@ The public form sends:
 - A cryptographically random idempotency key (16-128 characters).
 - Patient name and contact number (10-digit Indian mobile number (optionally prefixed with +91)).
 - A timezone-aware future appointment time.
-- One of the seven currently approved service labels.
+- One of the 20 service labels in the repository's shared dental service catalogue, or the separate "Other dental concern" fallback.
 - intelligence_request=false and an empty honeypot field.
 
-The API rejects naive/past times, unapproved services, patient-AI requests and
+The API rejects naive/past times, service labels outside the shared 20-service catalogue and fallback, patient-AI requests and
 invalid contact details. The current form uses Asia/Kolkata and includes the
 +05:30 offset in the submitted timestamp.
 
