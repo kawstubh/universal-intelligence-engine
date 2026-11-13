@@ -208,6 +208,26 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     assert confirmed.json()["result"]["status"] == "confirmed"
     assert "patient_id" not in confirmed.json()["result"]
 
+    missing_reschedule_time = client.patch(
+        f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
+        headers=headers,
+        json={"status": "rescheduled"},
+    )
+    assert missing_reschedule_time.status_code == 422
+    naive_reschedule_time = client.patch(
+        f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
+        headers=headers,
+        json={"starts_at": "2026-11-20T10:00:00"},
+    )
+    assert naive_reschedule_time.status_code == 422
+
+    invalid_intake = client.post(
+        "/v1/dental/assistant/patients",
+        headers=headers,
+        json={"name": "Invalid Contact", "phone": "123456"},
+    )
+    assert invalid_intake.status_code == 422
+
     invoices = client.get("/v1/dental/assistant/billing/invoices", headers=headers)
     assert invoices.status_code == 200
     assert len(invoices.json()["result"]) == 1
