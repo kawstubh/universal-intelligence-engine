@@ -6,6 +6,7 @@ billing collection. They cannot use Doctor endpoints or access clinical data.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import secrets
 import time
 import uuid
@@ -49,23 +50,67 @@ def _query(store, postgres_sql: str, sqlite_sql: str, params: tuple, connection=
     return store._execute(sql, params, connection=connection)
 
 
+def _assistant_login_client_ip(request: Request) -> str:
+    """Use Render's Cloudflare-validated client IP, not the shared proxy socket."""
+    forwarded = str(request.headers.get("cf-connecting-ip") or "").strip()
+    if forwarded:
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            pass
+    return str(request.client.host if request.client else "unknown")
+
+
 def _check_login_rate_limit(request: Request) -> None:
-    client_ip = request.client.host if request.client else "unknown"
+    key = (_assistant_login_client_ip(request) or "unknown").strip()[:128] or "unknown"
     now = time.monotonic()
-    attempts = _LOGIN_ATTEMPTS[client_ip]
-    while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
-        attempts.popleft()
+    attempts = _LOGIN_ATTEMPTS.get(key)
+    if attempts is not None:
+        while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
+            attempts.popleft()
+        if not attempts:
+            _LOGIN_ATTEMPTS.pop(key, None)
+            attempts = None
+
+    # Bound memory use if an attacker rotates source IPs. This remains a
+    # single-instance guard; production horizontal scaling needs shared storage
+    # or a trusted edge/WAF rate-limit rule.
+    if attempts is None:
+        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
+            cutoff = now - _LOGIN_WINDOW_SECONDS
+            for stale_key, stale_attempts in list(_LOGIN_ATTEMPTS.items()):
+                while stale_attempts and stale_attempts[0] <= cutoff:
+                    stale_attempts.popleft()
+                if not stale_attempts:
+                    _LOGIN_ATTEMPTS.pop(stale_key, None)
+                if len(_LOGIN_ATTEMPTS) < _LOGIN_MAX_CLIENTS:
+                    break
+        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
+            raise HTTPException(
+                503,
+                detail={
+                    "code": "ASSISTANT_LOGIN_CAPACITY",
+                    "message": "Sign-in is temporarily busy. Please try again shortly.",
+                },
+                headers={"Retry-After": str(_LOGIN_WINDOW_SECONDS)},
+            )
+        attempts = deque()
+        _LOGIN_ATTEMPTS[key] = attempts
+
     if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+        retry_after = max(
+            1,
+            int(_LOGIN_WINDOW_SECONDS - (now - attempts[0])),
+        )
         raise HTTPException(
             429,
             detail={
                 "code": "ASSISTANT_LOGIN_RATE_LIMITED",
                 "message": "Too many sign-in attempts. Please wait before trying again.",
             },
-            headers={"Retry-After": str(_LOGIN_WINDOW_SECONDS)},
+            headers={"Retry-After": str(retry_after)},
         )
     attempts.append(now)
-
 
 class AssistantLoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
