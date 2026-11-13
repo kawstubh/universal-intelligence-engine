@@ -232,7 +232,7 @@ def test_public_booking_requires_timezone_aware_future_time_and_fixed_service_ca
 
     invalid_phone = client.post(
         "/v1/dental/public/appointments",
-        json={**base, "idempotency_key": "public-booking-validation-003", "phone": "123456"},
+        json={**base, "idempotency_key": "public-booking-validation-003", "phone": "1234567890"},
     )
     assert invalid_phone.status_code == 422
 
