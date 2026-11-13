@@ -23,6 +23,7 @@ def test_dental_health_is_public(monkeypatch):
     assert response.json()["status"] == "ok"
     assert response.json()["database_ready"] is True
     assert response.json()["database_identity_verified"] is None
+    assert response.json()["deployment_commit"] is None
 
 
 def test_dental_health_verifies_exact_neon_database_host_and_name(monkeypatch):
