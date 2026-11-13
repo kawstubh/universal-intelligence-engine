@@ -26,6 +26,7 @@ def public_booking_api(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "public-booking.sqlite3"))
     monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
     monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "dr-pranali")
+    monkeypatch.setenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", "synthetic-public-booking-hash-key-32-bytes-minimum")
     monkeypatch.setenv(
         "ALEMBIC_CONFIG",
         str(Path(__file__).resolve().parents[1] / "alembic.ini"),
@@ -319,3 +320,28 @@ def test_public_booking_keeps_other_concern_as_a_safe_fallback(public_booking_ap
     assert response.json()["status"] == "requested"
     assert _count(store, "dental_patients") == 1
     assert _count(store, "dental_appointments") == 1
+
+
+def test_public_booking_fails_closed_without_hash_key(public_booking_api, monkeypatch):
+    client, store = public_booking_api
+    monkeypatch.delenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", raising=False)
+    response = client.post("/v1/dental/public/appointments", json=_payload(key="public-booking-no-hmac-key-001"))
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "PUBLIC_BOOKING_HASH_NOT_CONFIGURED"
+    assert _count(store, "dental_patients") == 0
+    assert _count(store, "dental_appointments") == 0
+    assert _count(store, "dental_public_booking_requests") == 0
+
+
+def test_public_booking_phone_fingerprint_is_keyed(public_booking_api):
+    client, store = public_booking_api
+    payload = _payload(key="public-booking-hmac-check-001")
+    response = client.post("/v1/dental/public/appointments", json=payload)
+    assert response.status_code == 200, response.text
+    row = store._execute(
+        "SELECT phone_hash FROM dental_public_booking_requests",
+    )[0]
+    phone_digits = "".join(character for character in payload["phone"] if character.isdigit())
+    import hashlib
+    assert row["phone_hash"] != hashlib.sha256(phone_digits.encode("utf-8")).hexdigest()
+    assert len(row["phone_hash"]) == 64
