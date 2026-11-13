@@ -17,6 +17,11 @@ The Clinic Assistant is a separate staff principal, not a Doctor account and not
 - Legacy patient-specific API routes return HTTP 403 with `PATIENT_ACCOUNTS_DISABLED` before any Supabase lookup and are omitted from OpenAPI.
 - Clinical records, notes, charts, prescriptions, invoices and private documents are not available through public patient routes.
 - Patient-specific sharing is deferred until random, scoped, expiring and revocable links have server-side authorization and audit logging.
+- Guest booking requires a per-submission idempotency key; only its SHA-256 hash is stored, and retries replay the same opaque receipt.
+- A separate normalized request fingerprint suppresses duplicate contact/slot/service requests within a ten-minute window.
+- Public responses contain a random receipt reference only; internal patient and appointment IDs are never returned.
+- The API enforces future Asia/Kolkata timestamps and the eight published clinic time slots, and rejects public AI requests.
+- A server-side honeypot and an eight-request-per-IP/five-minute limiter protect public intake. The limiter is process-local, so a shared edge/WAF limiter remains a production gate for multi-instance scaling.
 
 ## Allowed Assistant operations
 
