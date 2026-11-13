@@ -98,9 +98,17 @@ class AssistantPatientCreateIn(BaseModel):
     name: str = Field(min_length=2, max_length=200)
     phone: str = Field(min_length=7, max_length=40)
 
-    @field_validator("name", "phone")
+    @field_validator("name")
     @classmethod
-    def trim_text(cls, value: str) -> str:
+    def trim_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("Patient name must contain at least two non-space characters")
+        return normalized
+
+    @field_validator("phone")
+    @classmethod
+    def trim_phone(cls, value: str) -> str:
         return value.strip()
 
     @field_validator("phone")
@@ -238,21 +246,24 @@ async def assistant_login(body: AssistantLoginIn, request: Request):
 
     token = secrets.token_urlsafe(48)
     expires_at = int(time.time()) + ASSISTANT_SESSION_TTL
-    _query(
-        store,
-        "INSERT INTO dental_assistant_sessions(token_hash,assistant_id,clinic_id,expires_at,revoked,created_at) "
-        "VALUES (%s,%s,%s,%s,false,%s)",
-        "INSERT INTO dental_assistant_sessions(token_hash,assistant_id,clinic_id,expires_at,revoked,created_at) "
-        "VALUES (?,?,?,?,0,?)",
-        (_token_hash(token), assistant["id"], assistant["clinic_id"], expires_at, _now()),
-    )
-    store.audit(
-        f"assistant:{assistant['id']}",
-        "session.created",
-        "assistant_session",
-        assistant["id"],
-        assistant["clinic_id"],
-    )
+    with store.transaction() as connection:
+        _query(
+            store,
+            "INSERT INTO dental_assistant_sessions(token_hash,assistant_id,clinic_id,expires_at,revoked,created_at) "
+            "VALUES (%s,%s,%s,%s,false,%s)",
+            "INSERT INTO dental_assistant_sessions(token_hash,assistant_id,clinic_id,expires_at,revoked,created_at) "
+            "VALUES (?,?,?,?,0,?)",
+            (_token_hash(token), assistant["id"], assistant["clinic_id"], expires_at, _now()),
+            connection,
+        )
+        store.audit(
+            f"assistant:{assistant['id']}",
+            "session.created",
+            "assistant_session",
+            assistant["id"],
+            assistant["clinic_id"],
+            connection,
+        )
     return {
         "access_token": token,
         "token_type": "Bearer",
@@ -273,19 +284,22 @@ async def assistant_logout(
 ):
     token = authorization[7:].strip() if authorization else ""
     store = get_dental_store()
-    _query(
-        store,
-        "UPDATE dental_assistant_sessions SET revoked=true WHERE token_hash=%s AND assistant_id=%s",
-        "UPDATE dental_assistant_sessions SET revoked=1 WHERE token_hash=? AND assistant_id=?",
-        (_token_hash(token), actor["id"]),
-    )
-    store.audit(
-        f"assistant:{actor['id']}",
-        "session.revoked",
-        "assistant_session",
-        actor["id"],
-        actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        _query(
+            store,
+            "UPDATE dental_assistant_sessions SET revoked=true WHERE token_hash=%s AND assistant_id=%s",
+            "UPDATE dental_assistant_sessions SET revoked=1 WHERE token_hash=? AND assistant_id=?",
+            (_token_hash(token), actor["id"]),
+            connection,
+        )
+        store.audit(
+            f"assistant:{actor['id']}",
+            "session.revoked",
+            "assistant_session",
+            actor["id"],
+            actor["clinic_id"],
+            connection,
+        )
     return {"ok": True}
 
 
@@ -297,18 +311,21 @@ async def assistant_me(actor: Annotated[dict, Depends(require_assistant)]):
 @router.get("/assistant/patients")
 async def assistant_list_patients(actor: Annotated[dict, Depends(require_assistant)]):
     store = get_dental_store()
-    rows = _query(
-        store,
-        "SELECT name,phone,created_at FROM dental_patients WHERE clinic_id=%s ORDER BY created_at DESC LIMIT 200",
-        "SELECT name,phone,created_at FROM dental_patients WHERE clinic_id=? ORDER BY created_at DESC LIMIT 200",
-        (actor["clinic_id"],),
-    )
-    store.audit(
-        f"assistant:{actor['id']}",
-        "read",
-        "patient_directory",
-        clinic_id=actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        rows = _query(
+            store,
+            "SELECT name,phone,created_at FROM dental_patients WHERE clinic_id=%s ORDER BY created_at DESC LIMIT 200",
+            "SELECT name,phone,created_at FROM dental_patients WHERE clinic_id=? ORDER BY created_at DESC LIMIT 200",
+            (actor["clinic_id"],),
+            connection,
+        )
+        store.audit(
+            f"assistant:{actor['id']}",
+            "read",
+            "patient_directory",
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return _envelope(rows)
 
 
@@ -318,17 +335,20 @@ async def assistant_create_patient(
     actor: Annotated[dict, Depends(require_assistant)],
 ):
     store = get_dental_store()
-    patient = store.create_patient(
-        {"name": body.name, "phone": body.phone, "age": ""},
-        actor["clinic_id"],
-    )
-    store.audit(
-        f"assistant:{actor['id']}",
-        "patient.intake_created",
-        "patient",
-        patient["id"],
-        actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        patient = store.create_patient(
+            {"name": body.name, "phone": body.phone, "age": ""},
+            actor["clinic_id"],
+            connection=connection,
+        )
+        store.audit(
+            f"assistant:{actor['id']}",
+            "patient.intake_created",
+            "patient",
+            patient["id"],
+            actor["clinic_id"],
+            connection,
+        )
     return _envelope(
         {"name": patient["name"], "phone": patient["phone"], "created_at": patient["created_at"]}
     )
@@ -337,28 +357,31 @@ async def assistant_create_patient(
 @router.get("/assistant/appointments")
 async def assistant_list_appointments(actor: Annotated[dict, Depends(require_assistant)]):
     store = get_dental_store()
-    rows = _query(
-        store,
-        "SELECT a.id,p.name AS patient_name,p.phone AS patient_phone,"
-        "a.starts_at,a.treatment_type,a.status,a.created_at "
-        "FROM dental_appointments a JOIN dental_patients p "
-        "ON p.id=a.patient_id AND p.clinic_id=a.clinic_id "
-        "WHERE a.clinic_id=%s AND a.status IN ('requested','confirmed','scheduled','rescheduled') "
-        "ORDER BY a.starts_at ASC LIMIT 200",
-        "SELECT a.id,p.name AS patient_name,p.phone AS patient_phone,"
-        "a.starts_at,a.treatment_type,a.status,a.created_at "
-        "FROM dental_appointments a JOIN dental_patients p "
-        "ON p.id=a.patient_id AND p.clinic_id=a.clinic_id "
-        "WHERE a.clinic_id=? AND a.status IN ('requested','confirmed','scheduled','rescheduled') "
-        "ORDER BY a.starts_at ASC LIMIT 200",
-        (actor["clinic_id"],),
-    )
-    store.audit(
-        f"assistant:{actor['id']}",
-        "read",
-        "appointment_queue",
-        clinic_id=actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        rows = _query(
+            store,
+            "SELECT a.id,p.name AS patient_name,p.phone AS patient_phone,"
+            "a.starts_at,a.treatment_type,a.status,a.created_at "
+            "FROM dental_appointments a JOIN dental_patients p "
+            "ON p.id=a.patient_id AND p.clinic_id=a.clinic_id "
+            "WHERE a.clinic_id=%s AND a.status IN ('requested','confirmed','scheduled','rescheduled') "
+            "ORDER BY a.starts_at ASC LIMIT 200",
+            "SELECT a.id,p.name AS patient_name,p.phone AS patient_phone,"
+            "a.starts_at,a.treatment_type,a.status,a.created_at "
+            "FROM dental_appointments a JOIN dental_patients p "
+            "ON p.id=a.patient_id AND p.clinic_id=a.clinic_id "
+            "WHERE a.clinic_id=? AND a.status IN ('requested','confirmed','scheduled','rescheduled') "
+            "ORDER BY a.starts_at ASC LIMIT 200",
+            (actor["clinic_id"],),
+            connection,
+        )
+        store.audit(
+            f"assistant:{actor['id']}",
+            "read",
+            "appointment_queue",
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return _envelope(rows)
 
 
@@ -375,33 +398,41 @@ async def assistant_update_appointment(
             detail={"code": "APPOINTMENT_CHANGE_REQUIRED", "message": "Provide a status or new time"},
         )
     store = get_dental_store()
-    rows = _query(
-        store,
-        "SELECT id,status FROM dental_appointments WHERE id=%s AND clinic_id=%s",
-        "SELECT id,status FROM dental_appointments WHERE id=? AND clinic_id=?",
-        (appointment_id, actor["clinic_id"]),
-    )
-    if not rows:
-        raise HTTPException(404, detail={"code": "APPOINTMENT_NOT_FOUND", "message": "Appointment not found"})
-    if rows[0]["status"] in {"completed", "cancelled", "no_show"}:
-        raise HTTPException(
-            409,
-            detail={"code": "APPOINTMENT_NOT_EDITABLE", "message": "This appointment can no longer be changed"},
+    with store.transaction() as connection:
+        rows = _query(
+            store,
+            "SELECT id,status FROM dental_appointments WHERE id=%s AND clinic_id=%s",
+            "SELECT id,status FROM dental_appointments WHERE id=? AND clinic_id=?",
+            (appointment_id, actor["clinic_id"]),
+            connection,
         )
-    if body.starts_at is not None:
-        changes["starts_at"] = body.starts_at.isoformat()
-        if body.status is None:
-            changes["status"] = "rescheduled"
-    item = store.update_appointment(appointment_id, changes, actor["clinic_id"])
-    if not item:
-        raise HTTPException(404, detail={"code": "APPOINTMENT_NOT_FOUND", "message": "Appointment not found"})
-    store.audit(
-        f"assistant:{actor['id']}",
-        "appointment.updated",
-        "appointment",
-        appointment_id,
-        actor["clinic_id"],
-    )
+        if not rows:
+            raise HTTPException(404, detail={"code": "APPOINTMENT_NOT_FOUND", "message": "Appointment not found"})
+        if rows[0]["status"] in {"completed", "cancelled", "no_show"}:
+            raise HTTPException(
+                409,
+                detail={"code": "APPOINTMENT_NOT_EDITABLE", "message": "This appointment can no longer be changed"},
+            )
+        if body.starts_at is not None:
+            changes["starts_at"] = body.starts_at.isoformat()
+            if body.status is None:
+                changes["status"] = "rescheduled"
+        item = store.update_appointment(
+            appointment_id,
+            changes,
+            actor["clinic_id"],
+            connection=connection,
+        )
+        if not item:
+            raise HTTPException(404, detail={"code": "APPOINTMENT_NOT_FOUND", "message": "Appointment not found"})
+        store.audit(
+            f"assistant:{actor['id']}",
+            "appointment.updated",
+            "appointment",
+            appointment_id,
+            actor["clinic_id"],
+            connection,
+        )
     return _envelope(
         {
             "id": item["id"],
@@ -415,28 +446,31 @@ async def assistant_update_appointment(
 @router.get("/assistant/billing/invoices")
 async def assistant_list_invoice_balances(actor: Annotated[dict, Depends(require_assistant)]):
     store = get_dental_store()
-    rows = _query(
-        store,
-        "SELECT i.id,i.invoice_number,p.name AS patient_name,i.status,i.total_paise,i.paid_paise,"
-        "(i.total_paise-i.paid_paise) AS balance_paise,i.due_date,i.issued_at,i.created_at "
-        "FROM dental_invoices i JOIN dental_patients p "
-        "ON p.id=i.patient_id AND p.clinic_id=i.clinic_id "
-        "WHERE i.clinic_id=%s AND i.status IN ('issued','partially_paid','paid','overdue') "
-        "ORDER BY i.created_at DESC LIMIT 200",
-        "SELECT i.id,i.invoice_number,p.name AS patient_name,i.status,i.total_paise,i.paid_paise,"
-        "(i.total_paise-i.paid_paise) AS balance_paise,i.due_date,i.issued_at,i.created_at "
-        "FROM dental_invoices i JOIN dental_patients p "
-        "ON p.id=i.patient_id AND p.clinic_id=i.clinic_id "
-        "WHERE i.clinic_id=? AND i.status IN ('issued','partially_paid','paid','overdue') "
-        "ORDER BY i.created_at DESC LIMIT 200",
-        (actor["clinic_id"],),
-    )
-    store.audit(
-        f"assistant:{actor['id']}",
-        "read",
-        "invoice_balances",
-        clinic_id=actor["clinic_id"],
-    )
+    with store.transaction() as connection:
+        rows = _query(
+            store,
+            "SELECT i.id,i.invoice_number,p.name AS patient_name,i.status,i.total_paise,i.paid_paise,"
+            "(i.total_paise-i.paid_paise) AS balance_paise,i.due_date,i.issued_at,i.created_at "
+            "FROM dental_invoices i JOIN dental_patients p "
+            "ON p.id=i.patient_id AND p.clinic_id=i.clinic_id "
+            "WHERE i.clinic_id=%s AND i.status IN ('issued','partially_paid','paid','overdue') "
+            "ORDER BY i.created_at DESC LIMIT 200",
+            "SELECT i.id,i.invoice_number,p.name AS patient_name,i.status,i.total_paise,i.paid_paise,"
+            "(i.total_paise-i.paid_paise) AS balance_paise,i.due_date,i.issued_at,i.created_at "
+            "FROM dental_invoices i JOIN dental_patients p "
+            "ON p.id=i.patient_id AND p.clinic_id=i.clinic_id "
+            "WHERE i.clinic_id=? AND i.status IN ('issued','partially_paid','paid','overdue') "
+            "ORDER BY i.created_at DESC LIMIT 200",
+            (actor["clinic_id"],),
+            connection,
+        )
+        store.audit(
+            f"assistant:{actor['id']}",
+            "read",
+            "invoice_balances",
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     return _envelope(rows)
 
 
@@ -641,12 +675,21 @@ async def list_clinic_assistants(actor: Annotated[dict, Depends(require_doctor)]
             detail={"code": "CLINIC_ADMIN_REQUIRED", "message": "Only a clinic owner or administrator can manage assistants"},
         )
     store = get_dental_store()
-    rows = _query(
-        store,
-        "SELECT id,email,clinic_id,active,created_at,updated_at FROM dental_clinic_assistants WHERE clinic_id=%s ORDER BY created_at DESC",
-        "SELECT id,email,clinic_id,active,created_at,updated_at FROM dental_clinic_assistants WHERE clinic_id=? ORDER BY created_at DESC",
-        (actor["clinic_id"],),
-    )
+    with store.transaction() as connection:
+        rows = _query(
+            store,
+            "SELECT id,email,clinic_id,active,created_at,updated_at FROM dental_clinic_assistants WHERE clinic_id=%s ORDER BY created_at DESC",
+            "SELECT id,email,clinic_id,active,created_at,updated_at FROM dental_clinic_assistants WHERE clinic_id=? ORDER BY created_at DESC",
+            (actor["clinic_id"],),
+            connection,
+        )
+        store.audit(
+            actor["id"],
+            "read",
+            "clinic_assistant_directory",
+            clinic_id=actor["clinic_id"],
+            connection=connection,
+        )
     for row in rows:
         row["role"] = "assistant"
     return _envelope(rows)
