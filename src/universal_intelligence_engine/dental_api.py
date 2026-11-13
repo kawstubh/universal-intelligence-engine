@@ -176,14 +176,28 @@ class PublicAppointmentIn(BaseModel):
     phone: str = Field(min_length=7, max_length=40)
     starts_at: datetime
     treatment_type: Literal[
-        "Dental check-up",
-        "Cleaning & polishing",
-        "Tooth pain consultation",
-        "Root canal treatment",
-        "Braces & aligners",
-        "Dental implants",
+        "Dental Check-up & Consultation",
+        "Scaling & Cleaning",
+        "Teeth Whitening",
+        "Tooth Filling",
+        "Root Canal Treatment (RCT)",
+        "Dental Crowns & Caps",
+        "Dental Implants",
+        "Tooth Extraction",
+        "Braces Treatment",
+        "Clear Aligners (Invisible Braces)",
+        "Dentures (Full / Partial)",
+        "Veneers (Smile Makeover)",
+        "Gum Treatment (Periodontal Care)",
+        "Kids Dentistry (Child Care)",
+        "Emergency Dental Care",
+        "Tooth Sensitivity Treatment",
+        "Dental Sealants (Cavity Prevention)",
+        "Oral Hygiene Education",
+        "Smile Makeover (Cosmetic Dentistry)",
+        "TMJ & Jaw Pain Treatment",
         "Other dental concern",
-    ] = "Dental check-up"
+    ] = "Dental Check-up & Consultation"
     intelligence_request: Literal[False] = False
     website: str = Field(default="", max_length=200)
 
