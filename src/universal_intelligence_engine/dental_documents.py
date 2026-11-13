@@ -60,7 +60,7 @@ def _envelope(result):
     }
 
 
-def _storage_config() -> dict:
+def _storage_config(*, require_lifecycle: bool = True) -> dict:
     endpoint = os.getenv("DENTAL_DOCUMENTS_S3_ENDPOINT", "").strip()
     bucket = os.getenv("DENTAL_DOCUMENTS_S3_BUCKET", "").strip()
     access_key = os.getenv("DENTAL_DOCUMENTS_S3_ACCESS_KEY_ID", "").strip()
@@ -85,7 +85,7 @@ def _storage_config() -> dict:
             },
         )
     cleanup_attestation = os.getenv("DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED", "").strip().lower()
-    if cleanup_attestation != "true":
+    if require_lifecycle and cleanup_attestation != "true":
         raise HTTPException(
             503,
             detail={
