@@ -238,6 +238,7 @@ class DentalStore:
         clinic_id: str,
         idempotency_key_hash: str,
         request_hash: str,
+        duplicate_hash: str,
         public_reference: str,
         duplicate_window_seconds: int = 600,
     ) -> dict[str, Any]:
@@ -249,9 +250,9 @@ class DentalStore:
             else "SELECT * FROM dental_public_booking_requests WHERE clinic_id=? AND idempotency_key_hash=?"
         )
         duplicate_sql = (
-            "SELECT * FROM dental_public_booking_requests WHERE clinic_id=%s AND request_hash=%s AND created_at >= %s ORDER BY created_at DESC LIMIT 1"
+            "SELECT * FROM dental_public_booking_requests WHERE clinic_id=%s AND duplicate_hash=%s AND created_at >= %s ORDER BY created_at DESC LIMIT 1"
             if self.database_url
-            else "SELECT * FROM dental_public_booking_requests WHERE clinic_id=? AND request_hash=? AND created_at >= ? ORDER BY created_at DESC LIMIT 1"
+            else "SELECT * FROM dental_public_booking_requests WHERE clinic_id=? AND duplicate_hash=? AND created_at >= ? ORDER BY created_at DESC LIMIT 1"
         )
         try:
             with self.transaction() as connection:
@@ -290,7 +291,7 @@ class DentalStore:
 
                 duplicate = self._execute(
                     duplicate_sql,
-                    (clinic_id, request_hash, cutoff),
+                    (clinic_id, duplicate_hash, cutoff),
                     connection=connection,
                 )
                 if duplicate:
@@ -322,20 +323,22 @@ class DentalStore:
                     "clinic_id": clinic_id,
                     "idempotency_key_hash": idempotency_key_hash,
                     "request_hash": request_hash,
+                    "duplicate_hash": duplicate_hash,
                     "public_reference": public_reference,
                     "patient_id": patient["id"],
                     "appointment_id": appointment["id"],
                     "created_at": created_at,
                 }
                 self._execute(
-                    "INSERT INTO dental_public_booking_requests(id,clinic_id,idempotency_key_hash,request_hash,public_reference,patient_id,appointment_id,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+                    "INSERT INTO dental_public_booking_requests(id,clinic_id,idempotency_key_hash,request_hash,duplicate_hash,public_reference,patient_id,appointment_id,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)"
                     if self.database_url
-                    else "INSERT INTO dental_public_booking_requests(id,clinic_id,idempotency_key_hash,request_hash,public_reference,patient_id,appointment_id,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                    else "INSERT INTO dental_public_booking_requests(id,clinic_id,idempotency_key_hash,request_hash,duplicate_hash,public_reference,patient_id,appointment_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                     tuple(request[key] for key in (
                         "id",
                         "clinic_id",
                         "idempotency_key_hash",
                         "request_hash",
+                        "duplicate_hash",
                         "public_reference",
                         "patient_id",
                         "appointment_id",
