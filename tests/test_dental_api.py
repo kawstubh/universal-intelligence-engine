@@ -1,8 +1,11 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine import dental_api
+from datetime import UTC, datetime, timedelta
+
+from universal_intelligence_engine import dental_api, dental_store
 from universal_intelligence_engine.dental_api import router
+from universal_intelligence_engine.dental_store import DentalStore
 
 app = FastAPI()
 app.include_router(router)
@@ -34,24 +37,42 @@ def test_chart_tooth_validation(monkeypatch):
 
 def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp_path):
     monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "dental.sqlite3"))
-    dental_api._store = None
+    monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
+    monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "clinic-public-test")
+    monkeypatch.setattr(dental_store, "_store", None)
+    store = DentalStore()
+    store.create_organisation(
+        {"id": "org-public-test", "name": "Synthetic Clinic", "organisation_type": "clinic"}
+    )
+    store.create_clinic(
+        {
+            "id": "clinic-public-test",
+            "organisation_id": "org-public-test",
+            "name": "Synthetic Clinic",
+            "clinic_type": "clinic",
+        }
+    )
     client = TestClient(app)
+    starts_at = (datetime.now(UTC) + timedelta(days=7)).isoformat()
     response = client.post(
         "/v1/dental/public/appointments",
         json={
+            "idempotency_key": "dental-api-public-key-0001",
             "name": "Test Patient",
             "phone": "9876543210",
-            "starts_at": "2026-10-06 10:00 AM",
-            "treatment_type": "Dental Check-up",
-            "note": None,
+            "starts_at": starts_at,
+            "treatment_type": "Dental check-up",
             "intelligence_request": False,
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "requested"
-    assert body["appointment"]["status"] == "requested"
-    assert body["appointment"]["treatment_type"] == "Dental Check-up"
+    assert body["reference"].startswith("ORL-")
+    assert "appointment" not in body
+    assert "patient_id" not in body
+    assert store._execute("SELECT COUNT(*) AS n FROM dental_patients")[0]["n"] == 1
+    assert store._execute("SELECT COUNT(*) AS n FROM dental_appointments")[0]["n"] == 1
 
 
 def test_intelligence_denies_cross_clinic_patient(monkeypatch):
