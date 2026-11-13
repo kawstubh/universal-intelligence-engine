@@ -199,6 +199,7 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     assert appointment["status"] == "requested"
     assert "note" not in appointment
     assert "patient_id" not in appointment
+    assert "treatment_type" not in appointment
 
     confirmed = client.patch(
         f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
@@ -207,6 +208,7 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     )
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["result"]["status"] == "confirmed"
+    assert "treatment_type" not in confirmed.json()["result"]
     assert "patient_id" not in confirmed.json()["result"]
 
     missing_reschedule_time = client.patch(
