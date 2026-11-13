@@ -21,6 +21,47 @@ def test_dental_health_is_public(monkeypatch):
     response = client.get("/v1/dental/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert response.json()["database_ready"] is True
+    assert response.json()["database_identity_verified"] is None
+
+
+def test_dental_health_verifies_exact_neon_database_host_and_name(monkeypatch):
+    class FakeStore:
+        backend = "postgres"
+        database_url = (
+            "postgresql://synthetic:unused@ep-dawn-surf-a10oudjf-c80."
+            "ap-southeast-1.aws.neon.tech/oralyn_staging?sslmode=require"
+        )
+
+        def healthcheck(self):
+            return True
+
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setenv(
+        "DENTAL_EXPECTED_DATABASE_HOSTS",
+        "ep-dawn-surf-a10oudjf-c80.ap-southeast-1.aws.neon.tech,"
+        "ep-dawn-surf-a10oudjf-c80-pooler.ap-southeast-1.aws.neon.tech",
+    )
+    monkeypatch.setenv("DENTAL_EXPECTED_DATABASE_NAME", "oralyn_staging")
+    response = TestClient(app).get("/v1/dental/health")
+    assert response.status_code == 200
+    assert response.json()["database_identity_verified"] is True
+
+
+def test_dental_health_fails_identity_check_on_wrong_host_or_database(monkeypatch):
+    class FakeStore:
+        backend = "postgres"
+        database_url = "postgresql://synthetic:unused@wrong.example/other"
+
+        def healthcheck(self):
+            return True
+
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setenv("DENTAL_EXPECTED_DATABASE_HOSTS", "ep-dawn-surf-a10oudjf.ap-southeast-1.aws.neon.tech")
+    monkeypatch.setenv("DENTAL_EXPECTED_DATABASE_NAME", "oralyn_staging")
+    response = TestClient(app).get("/v1/dental/health")
+    assert response.status_code == 200
+    assert response.json()["database_identity_verified"] is False
 
 
 def test_chart_tooth_validation(monkeypatch):
