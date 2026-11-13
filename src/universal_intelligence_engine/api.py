@@ -17,6 +17,7 @@ from . import __version__
 from .contracts import IntelligenceRequest, KnowledgeProvider
 from .dental_ai import router as dental_ai_router
 from .dental_api import router as dental_router
+from .dental_assistant import router as dental_assistant_router
 from .dental_documents import router as dental_documents_router
 from .dental_patient_care import router as dental_patient_care_router
 from .dental_patient_comms import router as dental_patient_comms_router
@@ -190,6 +191,7 @@ app.include_router(dental_ai_router)
 app.include_router(dental_patient_care_router)
 app.include_router(dental_documents_router)
 app.include_router(dental_patient_comms_router)
+app.include_router(dental_assistant_router)
 
 
 def _doctor_only_openapi():
