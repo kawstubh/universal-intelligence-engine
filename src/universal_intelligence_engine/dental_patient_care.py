@@ -209,29 +209,6 @@ def _bad_request(exc: ValueError):
     ) from exc
 
 
-@router.post("/doctor/patients/{patient_id}/invite")
-def create_patient_invite(
-    patient_id: str,
-    actor: Annotated[dict, Depends(require_doctor)],
-):
-    """Create a one-time clinic invite without routing account linking through AI."""
-    store = get_dental_store()
-    if not store.get_patient(patient_id, actor["clinic_id"]):
-        raise HTTPException(
-            404,
-            detail={
-                "code": "PATIENT_NOT_FOUND",
-                "message": "Patient not found in this workspace",
-            },
-        )
-    code = store.create_patient_invite(patient_id, actor["clinic_id"])
-    return _envelope({
-        "patient_id": patient_id,
-        "invite_code": code,
-        "expires_in": 86400,
-    })
-
-
 @router.post("/doctor/patients/{patient_id}/treatment-plans")
 def create_treatment_plan(
     patient_id: str,
