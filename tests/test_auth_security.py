@@ -24,8 +24,11 @@ DISABLED_PATIENT_AI = {
 
 
 def _is_patient_ai_route(path: str) -> bool:
-    # Only patient AI actions are disabled; public guest booking is account-free.
-    return path.rstrip("/") in DISABLED_PATIENT_AI
+    # The entire patient-account and linked-record surface is disabled.
+    return (
+        path.rstrip("/") in DISABLED_PATIENT_AI
+        or path.startswith((PATIENT_PATH_PREFIX, PATIENT_DATA_PATH_PREFIX))
+    )
 
 
 def _sample_path(path: str) -> str:
@@ -90,6 +93,29 @@ def test_protected_dental_requests_return_401_without_bearer():
             response.status_code,
             response.text,
         )
+
+
+
+def test_patient_account_and_linked_record_routes_are_disabled_and_hidden_from_openapi():
+    client = TestClient(app)
+    disabled = [
+        ("GET", "/v1/dental/patient/linked-records"),
+        ("POST", "/v1/dental/patient/link"),
+        ("GET", "/v1/dental/patient/appointments"),
+        ("GET", "/v1/dental/ai/patient/profile"),
+        ("POST", "/v1/dental/ai/patient/link"),
+        ("POST", "/v1/dental/ai/patient/consent"),
+    ]
+    for method, path in disabled:
+        response = client.request(method, path, json={} if method == "POST" else None)
+        assert response.status_code == 404, (method, path, response.status_code, response.text)
+        assert response.json()["detail"]["code"] == "PATIENT_ACCOUNT_FREE"
+
+    schema = client.get("/openapi.json").json()
+    assert not any(
+        path.startswith(("/v1/dental/patient/", "/v1/dental/ai/patient/"))
+        for path in schema.get("paths", {})
+    )
 
 
 def test_demo_bearer_never_authenticates(monkeypatch):
