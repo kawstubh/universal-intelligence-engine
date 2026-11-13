@@ -208,7 +208,7 @@ class PublicAppointmentIn(BaseModel):
     @classmethod
     def validate_phone(cls, value: str) -> str:
         value = value.strip()
-        digits = re.sub(r"\\D", "", value)
+        digits = re.sub(r"\D", "", value)
         if not 7 <= len(digits) <= 15:
             raise ValueError("Enter a valid contact number")
         return value
@@ -871,7 +871,7 @@ async def create_public_appointment(body: PublicAppointmentIn, request: Request)
     store = get_dental_store()
     master_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
     note = (body.note or "").strip()
-    normalized_phone = re.sub(r"\\D", "", body.phone)
+    normalized_phone = re.sub(r"\D", "", body.phone)
     idempotency_key_hash = hashlib.sha256(body.idempotency_key.encode()).hexdigest()
     request_fingerprint = {
         "name": body.name.casefold(),
