@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
+import json
 import os
+import re
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict, deque
 from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .dental_auth import (
     hash_password,
@@ -167,15 +171,70 @@ class AppointmentUpdateIn(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
 
+PUBLIC_APPOINTMENT_SERVICES = {
+    "Dental check-up",
+    "Cleaning & polishing",
+    "Tooth pain consultation",
+    "Root canal treatment",
+    "Braces & aligners",
+    "Dental implants",
+    "Other dental concern",
+}
+
+
 class PublicAppointmentIn(BaseModel):
-    name: str = Field(min_length=2, max_length=200)
-    phone: str = Field(min_length=7, max_length=40)
-    starts_at: str = Field(min_length=5, max_length=80)
-    treatment_type: str = Field(
-        default="General dental consultation", min_length=1, max_length=120
+    idempotency_key: str = Field(
+        min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
     )
+    name: str = Field(min_length=2, max_length=200)
+    phone: str = Field(
+        min_length=7, max_length=40, pattern=r"^[+0-9 ()-]{7,40}$"
+    )
+    starts_at: str = Field(min_length=20, max_length=80)
+    treatment_type: str = Field(min_length=1, max_length=120)
     note: str | None = Field(default=None, max_length=2000)
     intelligence_request: bool = False
+    website: str | None = Field(default=None, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("Name must contain at least two characters")
+        return value
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        value = value.strip()
+        digits = re.sub(r"\\D", "", value)
+        if not 7 <= len(digits) <= 15:
+            raise ValueError("Enter a valid contact number")
+        return value
+
+    @field_validator("starts_at")
+    @classmethod
+    def validate_starts_at(cls, value: str) -> str:
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("Choose a valid ISO-8601 appointment time") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("Appointment time must include a timezone offset")
+        if parsed.utcoffset() != timedelta(hours=5, minutes=30):
+            raise ValueError("Appointment time must use India Standard Time (Asia/Kolkata)")
+        if parsed.astimezone(timezone.utc) <= datetime.now(timezone.utc):
+            raise ValueError("Appointment time must be in the future")
+        return parsed.isoformat()
+
+    @field_validator("treatment_type")
+    @classmethod
+    def validate_treatment_type(cls, value: str) -> str:
+        value = value.strip()
+        if value not in PUBLIC_APPOINTMENT_SERVICES:
+            raise ValueError("Choose one of the clinic's published services")
+        return value
 
 
 class ChartEntryIn(BaseModel):
@@ -795,31 +854,78 @@ async def create_patient(
 
 @router.post("/public/appointments")
 async def create_public_appointment(body: PublicAppointmentIn, request: Request):
-    """Create a limited single-clinic guest request with per-IP burst protection.
-
-    Public intake does not run AI, expose records, or accept actor/admin identity.
-    The current public form is for the configured master clinic; a multi-clinic
-    public booking directory needs a separate verified clinic-slug contract.
-    """
+    """Create a single-clinic account-free request without exposing internal IDs."""
     _check_public_appointment_rate_limit(_public_appointment_client_ip(request))
+    if (body.website or "").strip():
+        # Server-side honeypot: respond generically without creating any records.
+        return {"status": "received", "message": "Your request has been received."}
+    if body.intelligence_request:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "PUBLIC_AI_DISABLED",
+                "message": "Public appointment requests do not use AI.",
+            },
+        )
+
     store = get_dental_store()
     master_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
-    patient = store.create_patient(
-        {"name": body.name.strip(), "phone": body.phone.strip(), "age": ""},
-        master_clinic,
-    )
-    appointment = store.create_appointment(
-        {
-            "patient_id": patient["id"],
-            "starts_at": body.starts_at.strip(),
-            "treatment_type": body.treatment_type.strip(),
-            "note": (body.note or "").strip(),
-            "status": "requested",
-        },
-        master_clinic,
-    )
-    store.audit("public-intake", "request", "appointment", appointment["id"], clinic_id=master_clinic)
-    return {"status": "requested", "appointment": appointment}
+    note = (body.note or "").strip()
+    normalized_phone = re.sub(r"\\D", "", body.phone)
+    idempotency_key_hash = hashlib.sha256(body.idempotency_key.encode()).hexdigest()
+    request_fingerprint = {
+        "name": body.name.casefold(),
+        "phone": normalized_phone,
+        "starts_at": body.starts_at,
+        "treatment_type": body.treatment_type,
+        "note": note,
+    }
+    duplicate_fingerprint = {
+        "name": body.name.casefold(),
+        "phone": normalized_phone,
+        "starts_at": body.starts_at,
+        "treatment_type": body.treatment_type,
+    }
+    request_hash = hashlib.sha256(
+        json.dumps(request_fingerprint, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    duplicate_hash = hashlib.sha256(
+        json.dumps(duplicate_fingerprint, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    try:
+        result = store.create_public_appointment_request(
+            {
+                "name": body.name,
+                "phone": body.phone,
+                "starts_at": body.starts_at,
+                "treatment_type": body.treatment_type,
+                "note": note,
+            },
+            master_clinic,
+            idempotency_key_hash,
+            request_hash,
+            duplicate_hash,
+            "ORL-" + secrets.token_hex(12).upper(),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "IDEMPOTENCY_KEY_REUSED",
+                "message": "This request key was already used for a different appointment request.",
+            },
+        ) from exc
+
+    if result["outcome"] == "duplicate":
+        return {
+            "status": "already_received",
+            "message": "A similar request for this contact and time has already been received. The clinic will contact you to confirm.",
+        }
+    return {
+        "status": "requested",
+        "reference": result["request"]["public_reference"],
+        "message": "Your appointment request has been received. The clinic will contact you to confirm the date and time.",
+    }
 
 
 @router.post("/scans/screen")
