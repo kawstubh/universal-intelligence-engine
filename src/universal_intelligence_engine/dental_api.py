@@ -862,6 +862,23 @@ def _database_identity_verified(store) -> bool | None:
     )
 
 
+def _database_branch_identity_verified(store) -> bool | None:
+    """Verify the live Neon branch independently of host/database identity."""
+    expected_branch_id = os.getenv("DENTAL_EXPECTED_NEON_BRANCH_ID", "").strip()
+    if not expected_branch_id:
+        return None
+    if store.backend != "postgres":
+        return False
+    try:
+        rows = store._execute(
+            "SELECT current_setting('neon.branch_id', true) AS branch_id"
+        )
+    except Exception:
+        return False
+    actual_branch_id = str(rows[0].get("branch_id") or "").strip() if rows else ""
+    return bool(actual_branch_id and actual_branch_id == expected_branch_id)
+
+
 @router.get("/health")
 async def dental_health():
     store = get_dental_store()
@@ -871,6 +888,7 @@ async def dental_health():
         "database": store.backend,
         "database_ready": bool(store.healthcheck()),
         "database_identity_verified": _database_identity_verified(store),
+        "database_branch_identity_verified": _database_branch_identity_verified(store),
         "deployment_commit": os.getenv("RENDER_GIT_COMMIT") or None,
         "uie_configured": bool(os.getenv("UIE_API_URL") and os.getenv("UIE_API_KEY")),
     }
