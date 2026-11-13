@@ -13,6 +13,7 @@ def e2e_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "e2e.sqlite3"))
     monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
     monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "clinic-a")
+    monkeypatch.setenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", "synthetic-public-booking-hash-key-32-bytes-minimum")
     monkeypatch.setattr(dental_store, "_store", None)
     store = DentalStore()
     store.create_organisation(
