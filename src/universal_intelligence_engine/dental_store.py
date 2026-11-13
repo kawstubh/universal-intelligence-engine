@@ -237,7 +237,7 @@ class DentalStore:
         return item
 
     def update_appointment(
-        self, appointment_id: str, changes: dict[str, Any], clinic_id: str
+        self, appointment_id: str, changes: dict[str, Any], clinic_id: str, connection=None
     ) -> dict[str, Any] | None:
         allowed = {"status", "starts_at", "note"}
         changes = {k: v for k, v in changes.items() if k in allowed}
@@ -254,14 +254,14 @@ class DentalStore:
             + " AND clinic_id="
             + ("%s" if self.database_url else "?")
         )
-        self._execute(sql, tuple(params))
+        self._execute(sql, tuple(params), connection=connection)
         query = (
             "SELECT * FROM dental_appointments WHERE id="
             + ("%s" if self.database_url else "?")
             + " AND clinic_id="
             + ("%s" if self.database_url else "?")
         )
-        found = self._execute(query, (appointment_id, clinic_id))
+        found = self._execute(query, (appointment_id, clinic_id), connection=connection)
         return found[0] if found else None
 
     def chart(self, patient_id: str, clinic_id: str) -> list[dict[str, Any]]:
