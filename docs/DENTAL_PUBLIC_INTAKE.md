@@ -17,6 +17,29 @@ The public form sends:
 - One of the 20 service labels in the repository's shared dental service catalogue, or the separate "Other dental concern" fallback.
 - intelligence_request=false and an empty honeypot field.
 
+The public service labels are:
+- Dental Check-up & Consultation
+- Scaling & Cleaning
+- Teeth Whitening
+- Tooth Filling
+- Root Canal Treatment (RCT)
+- Dental Crowns & Caps
+- Dental Implants
+- Tooth Extraction
+- Braces Treatment
+- Clear Aligners (Invisible Braces)
+- Dentures (Full / Partial)
+- Veneers (Smile Makeover)
+- Gum Treatment (Periodontal Care)
+- Kids Dentistry (Child Care)
+- Emergency Dental Care
+- Tooth Sensitivity Treatment
+- Dental Sealants (Cavity Prevention)
+- Oral Hygiene Education
+- Smile Makeover (Cosmetic Dentistry)
+- TMJ & Jaw Pain Treatment
+- Other dental concern (fallback)
+
 The API rejects naive/past times, service labels outside the shared 20-service catalogue and fallback, patient-AI requests and
 invalid contact details. The current form uses Asia/Kolkata and includes the
 +05:30 offset in the submitted timestamp.
