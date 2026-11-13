@@ -94,6 +94,8 @@ def test_patient_books_doctor_updates_and_patient_account_routes_are_disabled(e2
         ("GET", "/v1/dental/patient/linked-records", None),
         ("GET", "/v1/dental/patient/invoices", None),
         ("GET", "/v1/dental/patient/clinical-notes", None),
+        ("POST", f"/v1/dental/doctor/patients/{patient_id}/invite", None),
+        ("POST", f"/v1/dental/ai/doctor/patients/{patient_id}/invite", None),
     ]
     for method, path, payload in disabled_routes:
         response = client.request(method, path, json=payload)
