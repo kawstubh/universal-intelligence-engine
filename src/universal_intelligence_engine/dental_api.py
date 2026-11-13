@@ -208,8 +208,13 @@ class PublicAppointmentIn(BaseModel):
     def validate_phone(cls, value: str) -> str:
         normalized = value.strip()
         digits = "".join(character for character in normalized if character.isdigit())
-        if len(digits) < 7 or len(digits) > 15:
-            raise ValueError("Enter a valid contact number")
+        indian_mobile = (
+            len(digits) == 10 and digits[0] in "6789"
+        ) or (
+            len(digits) == 12 and digits.startswith("91") and digits[2] in "6789"
+        )
+        if not indian_mobile:
+            raise ValueError("Enter a valid 10-digit Indian mobile number")
         if any(character not in "+0123456789 ()-" for character in normalized):
             raise ValueError("Enter a valid contact number")
         return normalized
