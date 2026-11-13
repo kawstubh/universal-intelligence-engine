@@ -391,3 +391,131 @@ def test_assistant_cannot_reuse_a_revoked_session_after_logout(assistant_api):
     assert logout.status_code == 200
     denied = client.get("/v1/dental/assistant/me", headers=headers)
     assert denied.status_code == 401
+
+
+def test_assistant_cannot_read_private_care_documents_messages_or_owner_billing(assistant_api):
+    context = assistant_api
+    client = context["client"]
+    headers = _assistant_headers(context)
+    patient_id = context["patient_a"]["id"]
+
+    denied_gets = [
+        f"/v1/dental/doctor/patients/{patient_id}/clinical-notes",
+        f"/v1/dental/doctor/patients/{patient_id}/treatment-plans",
+        f"/v1/dental/doctor/patients/{patient_id}/documents",
+        f"/v1/dental/doctor/patients/{patient_id}/messages",
+        "/v1/dental/billing/membership",
+        "/v1/dental/auth/workspaces",
+        "/v1/dental/organisations/org-assistant-a/workspaces",
+    ]
+    for path in denied_gets:
+        response = client.get(path, headers=headers)
+        assert response.status_code == 403, (path, response.status_code, response.text)
+
+    invite = client.post(
+        f"/v1/dental/doctor/patients/{patient_id}/invite",
+        headers=headers,
+    )
+    assert invite.status_code == 403, invite.text
+
+    workspace_switch = client.post(
+        "/v1/dental/auth/workspace/switch",
+        headers=headers,
+        json={"clinic_id": "clinic-assistant-b"},
+    )
+    assert workspace_switch.status_code == 403, workspace_switch.text
+
+    membership_create = client.post(
+        "/v1/dental/workspaces/clinic-assistant-a/memberships",
+        headers=headers,
+        json={"doctor_id": "doctor-assistant-owner", "role": "doctor"},
+    )
+    assert membership_create.status_code == 403, membership_create.text
+
+    openapi_paths = client.get("/openapi.json").json()["paths"]
+    assert not any("prescription" in path.lower() for path in openapi_paths), (
+        "No prescription signing route should be exposed in this release."
+    )
+
+
+def test_non_admin_doctor_cannot_manage_clinic_assistants(assistant_api):
+    context = assistant_api
+    client = context["client"]
+    store = context["store"]
+    store.create_doctor(
+        {
+            "id": "doctor-assistant-staff",
+            "email": "staff@example.test",
+            "password_hash": hash_password("StaffPassword!123"),
+            "role": "doctor",
+            "clinic_id": "clinic-assistant-a",
+        }
+    )
+    store.create_doctor_membership(
+        "doctor-assistant-staff", "clinic-assistant-a", "doctor"
+    )
+    login = client.post(
+        "/v1/dental/auth/password/login",
+        json={"email": "staff@example.test", "password": "StaffPassword!123"},
+    )
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    listed = client.get("/v1/dental/clinic-assistants", headers=headers)
+    assert listed.status_code == 403, listed.text
+    created = client.post(
+        "/v1/dental/clinic-assistants",
+        headers=headers,
+        json={"email": "not-allowed@example.test", "password": "NotAllowedPassword!123"},
+    )
+    assert created.status_code == 403, created.text
+
+
+def test_clinic_assistant_account_management_is_tenant_scoped(assistant_api):
+    context = assistant_api
+    client = context["client"]
+    store = context["store"]
+
+    store.create_doctor(
+        {
+            "id": "doctor-assistant-owner-b",
+            "email": "owner-b@example.test",
+            "password_hash": hash_password("OwnerBPassword!123"),
+            "role": "admin",
+            "clinic_id": "clinic-assistant-b",
+        }
+    )
+    store.create_doctor_membership(
+        "doctor-assistant-owner-b", "clinic-assistant-b", "owner"
+    )
+    owner_b_login = client.post(
+        "/v1/dental/auth/password/login",
+        json={"email": "owner-b@example.test", "password": "OwnerBPassword!123"},
+    )
+    assert owner_b_login.status_code == 200, owner_b_login.text
+    owner_b_headers = {
+        "Authorization": f"Bearer {owner_b_login.json()['access_token']}"
+    }
+    created = client.post(
+        "/v1/dental/clinic-assistants",
+        headers=owner_b_headers,
+        json={"email": "reception-b@example.test", "password": "ReceptionBPassword!123"},
+    )
+    assert created.status_code == 201, created.text
+    assistant_b_id = created.json()["result"]["id"]
+
+    owner_a_list = client.get(
+        "/v1/dental/clinic-assistants",
+        headers=_owner_headers(context),
+    )
+    assert owner_a_list.status_code == 200, owner_a_list.text
+    assert assistant_b_id not in {
+        item["id"] for item in owner_a_list.json()["result"]
+    }
+
+    cross_tenant_deactivation = client.patch(
+        f"/v1/dental/clinic-assistants/{assistant_b_id}",
+        headers=_owner_headers(context),
+        json={"active": False},
+    )
+    assert cross_tenant_deactivation.status_code == 404, cross_tenant_deactivation.text
