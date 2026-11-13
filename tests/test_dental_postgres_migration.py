@@ -40,7 +40,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
         monkeypatch.delenv("DENTAL_SQLITE_PATH", raising=False)
         config = Config(str(ROOT / "alembic.ini"))
         assert ScriptDirectory.from_config(config).get_heads() == [
-            "0013_public_booking_idempotency"
+            "0014_document_quarantine_cleanup"
         ]
         command.upgrade(config, "0005_password_auth")
 
@@ -101,6 +101,12 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 for column in inspector.get_columns("dental_documents")
             }
             assert {"reviewed_by_doctor_id", "reviewed_at"}.issubset(document_columns)
+            upload_key_column = next(
+                column
+                for column in inspector.get_columns("dental_documents")
+                if column["name"] == "upload_object_key"
+            )
+            assert upload_key_column["nullable"] is True
             receipt_columns = {
                 column["name"]: column
                 for column in inspector.get_columns("dental_receipts")
