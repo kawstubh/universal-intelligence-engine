@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -88,8 +88,8 @@ def test_public_appointment_rate_limit_blocks_bursts_and_returns_retry_after(mon
     dental_api._check_public_appointment_rate_limit("203.0.113.10")
 
 
-def test_public_appointment_rate_limit_isolated_per_client_ip():
-    dental_api._PUBLIC_APPOINTMENT_MAX_ATTEMPTS = 1
+def test_public_appointment_rate_limit_isolated_per_client_ip(monkeypatch):
+    monkeypatch.setattr(dental_api, "_PUBLIC_APPOINTMENT_MAX_ATTEMPTS", 1)
     dental_api._check_public_appointment_rate_limit("203.0.113.11")
     dental_api._check_public_appointment_rate_limit("203.0.113.12")
     with pytest.raises(HTTPException) as limited:
