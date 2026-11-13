@@ -40,7 +40,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
         monkeypatch.delenv("DENTAL_SQLITE_PATH", raising=False)
         config = Config(str(ROOT / "alembic.ini"))
         assert ScriptDirectory.from_config(config).get_heads() == [
-            "0012_clinic_assistant_role"
+            "0013_public_booking_idempotency"
         ]
         command.upgrade(config, "0005_password_auth")
 
@@ -87,6 +87,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 "dental_documents",
                 "dental_clinical_notes",
                 "dental_patient_messages",
+                "dental_public_booking_requests",
             }.issubset(tables)
             audit_columns = {
                 column["name"]
@@ -137,6 +138,55 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             "DATABASE_URL", psycopg_url.render_as_string(hide_password=False)
         )
         store = DentalStore()
+        public_payload = {
+            "name": "Synthetic Public Patient",
+            "phone": "+919999000009",
+            "starts_at": "2026-12-01T10:00:00+05:30",
+            "treatment_type": "Dental check-up",
+            "note": "",
+        }
+        patient_count_before = store._execute(
+            "SELECT COUNT(*) AS total FROM dental_patients WHERE clinic_id=%s",
+            ("legacy-pg-clinic",),
+        )[0]["total"]
+        created = store.create_public_appointment_request(
+            public_payload,
+            "legacy-pg-clinic",
+            "a" * 64,
+            "b" * 64,
+            "ORL-" + "c" * 24,
+        )
+        assert created["outcome"] == "created"
+        assert created["request"]["public_reference"] == "ORL-" + "c" * 24
+        replayed = store.create_public_appointment_request(
+            public_payload,
+            "legacy-pg-clinic",
+            "a" * 64,
+            "b" * 64,
+            "ORL-" + "d" * 24,
+        )
+        assert replayed["outcome"] == "replayed"
+        assert replayed["request"]["public_reference"] == "ORL-" + "c" * 24
+        duplicate = store.create_public_appointment_request(
+            public_payload,
+            "legacy-pg-clinic",
+            "e" * 64,
+            "b" * 64,
+            "ORL-" + "f" * 24,
+        )
+        assert duplicate["outcome"] == "duplicate"
+        assert store._execute(
+            "SELECT COUNT(*) AS total FROM dental_patients WHERE clinic_id=%s",
+            ("legacy-pg-clinic",),
+        )[0]["total"] == patient_count_before + 1
+        with pytest.raises(ValueError, match="Idempotency key"):
+            store.create_public_appointment_request(
+                {**public_payload, "phone": "+919999000010"},
+                "legacy-pg-clinic",
+                "a" * 64,
+                "f" * 64,
+                "ORL-" + "1" * 24,
+            )
         home_workspace = store._execute(
             "SELECT organisation_id FROM dental_clinics WHERE id=%s",
             ("legacy-pg-clinic",),
