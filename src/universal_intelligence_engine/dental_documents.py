@@ -84,6 +84,15 @@ def _storage_config() -> dict:
                 "message": "A verified private object-storage bucket and dedicated branch-scoped credentials are required.",
             },
         )
+    cleanup_attestation = os.getenv("DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED", "").strip().lower()
+    if cleanup_attestation != "true":
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_STORAGE_LIFECYCLE_NOT_VERIFIED",
+                "message": "A tested server-side cleanup process for expired pending uploads is required before document storage can be enabled.",
+            },
+        )
     upload_ttl = int(os.getenv("DENTAL_DOCUMENTS_UPLOAD_TTL_SECONDS", "300"))
     download_ttl = int(os.getenv("DENTAL_DOCUMENTS_DOWNLOAD_TTL_SECONDS", "120"))
     if not 60 <= upload_ttl <= 600 or not 30 <= download_ttl <= 300:
