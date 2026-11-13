@@ -413,11 +413,12 @@ def test_assistant_cannot_read_private_care_documents_messages_or_owner_billing(
         response = client.get(path, headers=headers)
         assert response.status_code == 403, (path, response.status_code, response.text)
 
+    # Patient-account invitation routes are intentionally absent from the public/account-free release.
     invite = client.post(
         f"/v1/dental/doctor/patients/{patient_id}/invite",
         headers=headers,
     )
-    assert invite.status_code == 403, invite.text
+    assert invite.status_code == 404, invite.text
 
     workspace_switch = client.post(
         "/v1/dental/auth/workspace/switch",
