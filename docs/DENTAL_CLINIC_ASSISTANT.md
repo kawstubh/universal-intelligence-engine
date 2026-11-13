@@ -8,9 +8,9 @@ sessions live in their own tables and use a dedicated bearer dependency.
 
 | Capability | Assistant API | Scope |
 |---|---|---|
-| Patient intake | GET/POST /v1/dental/assistant/patients | Name, phone and created time only; current clinic |
+| Patient intake | GET/POST /v1/dental/assistant/patients | Name, validated Indian mobile number and created time only; current clinic |
 | Appointment queue | GET /v1/dental/assistant/appointments | Patient contact, requested time, service label and status; current clinic |
-| Confirm/reschedule/cancel | PATCH /v1/dental/assistant/appointments/{id} | Status and timezone-aware future start only; no notes |
+| Confirm/reschedule/cancel | PATCH /v1/dental/assistant/appointments/{id} | Status and timezone-aware future start only; reschedule requires a new time; no notes |
 | Billing desk | GET /v1/dental/assistant/billing/invoices | Issued invoice balance summary; no line items or clinical notes |
 | Record payment | POST /v1/dental/assistant/billing/invoices/{id}/receipts | Cash, UPI, bank transfer or other payment already received; idempotent |
 | Assistant account administration | /v1/dental/clinic-assistants | Owner/admin only; one active clinic |
