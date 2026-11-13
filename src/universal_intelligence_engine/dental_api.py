@@ -871,6 +871,7 @@ async def dental_health():
         "database": store.backend,
         "database_ready": bool(store.healthcheck()),
         "database_identity_verified": _database_identity_verified(store),
+        "deployment_commit": os.getenv("RENDER_GIT_COMMIT") or None,
         "uie_configured": bool(os.getenv("UIE_API_URL") and os.getenv("UIE_API_KEY")),
     }
 
