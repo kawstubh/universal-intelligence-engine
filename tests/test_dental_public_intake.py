@@ -216,11 +216,16 @@ def test_public_booking_requires_future_ist_datetime_and_approved_service(public
         "/v1/dental/public/appointments",
         json=_payload(key="m" * 32, treatment_type="Dental consultation"),
     )
+    invalid_time_slot = public_client.post(
+        "/v1/dental/public/appointments",
+        json=_payload(key="p" * 32, starts_at=_future_ist_time().split("T")[0] + "T16:00:00+05:30"),
+    )
 
     assert missing_timezone.status_code == 422
     assert utc_time.status_code == 422
     assert past_time.status_code == 422
     assert unknown_service.status_code == 422
+    assert invalid_time_slot.status_code == 422
 
 
 def test_public_booking_rejects_patient_ai_requests(public_client):
