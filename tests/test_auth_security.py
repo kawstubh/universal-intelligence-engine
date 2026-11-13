@@ -5,12 +5,14 @@ from universal_intelligence_engine.api import app
 PUBLIC_PATHS = {
     "/v1/dental/health",
     "/v1/dental/auth/password/login",
+    "/v1/dental/assistant/auth/login",
     "/v1/dental/public/appointments",
     "/v1/dental/billing/plans",
     "/v1/dental/billing/razorpay/webhook",
 }
 PATIENT_PATH_PREFIX = "/v1/dental/ai/patient/"
 PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
+ASSISTANT_PATH_PREFIX = "/v1/dental/assistant/"
 DISABLED_PATIENT_AI = {
     "/v1/dental/ai/patient/chat",
     "/v1/dental/ai/patient/triage",
@@ -22,14 +24,16 @@ DISABLED_PATIENT_AI = {
 
 
 def _is_patient_ai_route(path: str) -> bool:
-    # Only patient AI actions are disabled; account, appointment and chart routes
-    # remain available behind Supabase patient authentication.
+    # Only patient AI actions are disabled; public guest booking is account-free.
     return path.rstrip("/") in DISABLED_PATIENT_AI
 
 
 def _sample_path(path: str) -> str:
-    return path.replace("{appointment_id}", "missing-appointment").replace(
-        "{patient_id}", "missing-patient"
+    return (
+        path.replace("{appointment_id}", "missing-appointment")
+        .replace("{patient_id}", "missing-patient")
+        .replace("{assistant_id}", "missing-assistant")
+        .replace("{invoice_id}", "missing-invoice")
     )
 
 
@@ -60,7 +64,9 @@ def test_protected_dental_routes_require_the_correct_auth_dependency():
             getattr(dep.call, "__name__", "")
             for dep in getattr(route, "dependant", None).dependencies
         }
-        if path.startswith((PATIENT_PATH_PREFIX, PATIENT_DATA_PATH_PREFIX)):
+        if path.startswith(ASSISTANT_PATH_PREFIX):
+            assert "require_assistant" in dependency_calls, f"missing assistant auth on {path}"
+        elif path.startswith((PATIENT_PATH_PREFIX, PATIENT_DATA_PATH_PREFIX)):
             assert "require_patient" in dependency_calls, f"missing patient auth on {path}"
         else:
             assert "require_doctor" in dependency_calls, f"missing doctor auth on {path}"
