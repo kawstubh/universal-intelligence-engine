@@ -87,6 +87,6 @@ def test_disabled_patient_ai_response_is_also_not_cacheable():
     client = TestClient(app)
     response = client.post("/v1/dental/ai/patient/chat", json={})
     assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "PATIENT_AI_DISABLED"
+    assert response.json()["detail"]["code"] == "PATIENT_ACCOUNT_FREE"
     assert response.headers["cache-control"] == "no-store, private"
     assert response.headers["x-content-type-options"] == "nosniff"
