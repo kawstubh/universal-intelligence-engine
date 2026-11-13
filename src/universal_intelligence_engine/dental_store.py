@@ -148,16 +148,21 @@ class DentalStore:
             (clinic_id,),
         )
 
-    def get_patient(self, patient_id: str, clinic_id: str) -> dict[str, Any] | None:
+    def get_patient(
+        self, patient_id: str, clinic_id: str, connection=None
+    ) -> dict[str, Any] | None:
         rows = self._execute(
             "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=%s AND clinic_id=%s"
             if self.database_url
             else "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=? AND clinic_id=?",
             (patient_id, clinic_id),
+            connection=connection,
         )
         return rows[0] if rows else None
 
-    def create_patient(self, data: dict[str, Any], clinic_id: str) -> dict[str, Any]:
+    def create_patient(
+        self, data: dict[str, Any], clinic_id: str, connection=None
+    ) -> dict[str, Any]:
         item = {
             "id": _id(),
             "name": data.get("name", "").strip(),
@@ -174,6 +179,7 @@ class DentalStore:
                 item[k]
                 for k in ("id", "name", "phone", "age", "clinic_id", "created_at")
             ),
+            connection=connection,
         )
         return item
 
@@ -195,9 +201,9 @@ class DentalStore:
         )
 
     def create_appointment(
-        self, data: dict[str, Any], clinic_id: str
+        self, data: dict[str, Any], clinic_id: str, connection=None
     ) -> dict[str, Any]:
-        if not self.get_patient(str(data["patient_id"]), clinic_id):
+        if not self.get_patient(str(data["patient_id"]), clinic_id, connection=connection):
             raise ValueError("Patient not found in clinic")
         item = {
             "id": _id(),
@@ -226,6 +232,7 @@ class DentalStore:
                     "created_at",
                 )
             ),
+            connection=connection,
         )
         return item
 
