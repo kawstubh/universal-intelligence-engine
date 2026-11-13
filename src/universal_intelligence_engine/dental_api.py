@@ -181,6 +181,11 @@ PUBLIC_APPOINTMENT_SERVICES = {
     "Other dental concern",
 }
 
+PUBLIC_APPOINTMENT_TIME_SLOTS = {
+    "10:00", "11:00", "12:00", "13:00",
+    "17:00", "18:00", "19:00", "20:00",
+}
+
 
 class PublicAppointmentIn(BaseModel):
     idempotency_key: str = Field(
@@ -226,6 +231,8 @@ class PublicAppointmentIn(BaseModel):
             raise ValueError("Appointment time must use India Standard Time (Asia/Kolkata)")
         if parsed.astimezone(timezone.utc) <= datetime.now(timezone.utc):
             raise ValueError("Appointment time must be in the future")
+        if parsed.strftime("%H:%M") not in PUBLIC_APPOINTMENT_TIME_SLOTS:
+            raise ValueError("Choose one of the clinic's published appointment times")
         return parsed.isoformat()
 
     @field_validator("treatment_type")
