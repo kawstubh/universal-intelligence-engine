@@ -230,15 +230,21 @@ def test_public_booking_requires_timezone_aware_future_time_and_fixed_service_ca
     )
     assert expired.status_code == 422
 
+    invalid_phone = client.post(
+        "/v1/dental/public/appointments",
+        json={**base, "idempotency_key": "public-booking-validation-003", "phone": "123456"},
+    )
+    assert invalid_phone.status_code == 422
+
     unapproved_service = client.post(
         "/v1/dental/public/appointments",
-        json={**base, "idempotency_key": "public-booking-validation-003", "treatment_type": "Invented service"},
+        json={**base, "idempotency_key": "public-booking-validation-005", "treatment_type": "Invented service"},
     )
     assert unapproved_service.status_code == 422
 
     patient_ai = client.post(
         "/v1/dental/public/appointments",
-        json={**base, "idempotency_key": "public-booking-validation-004", "intelligence_request": True},
+        json={**base, "idempotency_key": "public-booking-validation-006", "intelligence_request": True},
     )
     assert patient_ai.status_code == 422
     assert _count(store, "dental_patients") == 0
