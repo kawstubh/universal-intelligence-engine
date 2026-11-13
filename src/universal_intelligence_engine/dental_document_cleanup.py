@@ -44,7 +44,8 @@ def _safe_pending_object_key(document: dict[str, Any]) -> bool:
         f"patients/{document.get('patient_id')}/{document.get('id')}/"
     )
     file_name = key[len(expected_prefix):] if key.startswith(expected_prefix) else ""
-    return bool(file_name) and "/" not in file_name and file_name not in {".", ".."}
+    expected_name = str(document.get("file_name") or "")
+    return bool(file_name) and file_name == expected_name and "/" not in file_name and file_name not in {".", ".."}
 
 
 def _key_fingerprint(key: str) -> str:
@@ -54,7 +55,7 @@ def _key_fingerprint(key: str) -> str:
 def _expired_documents(store, cutoff: str, limit: int, *, claim: bool) -> list[dict[str, Any]]:
     """Select old quarantine rows and atomically reject active pending states."""
     select_sql = (
-        "SELECT id,organisation_id,clinic_id,patient_id,upload_object_key,object_key,status,updated_at "
+        "SELECT id,organisation_id,clinic_id,patient_id,file_name,upload_object_key,object_key,status,updated_at "
         "FROM dental_documents WHERE status IN ('pending_upload','verifying','rejected') "
         "AND object_key IS NULL AND upload_object_key IS NOT NULL AND updated_at < %s "
         "ORDER BY updated_at ASC,id ASC LIMIT %s"
