@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, feat/dental-production-stack-v1, feat/oralyn-clinic-assistant-rbac]
+    branches: [main, feat/dental-production-stack-v1]
 
 jobs:
   test:

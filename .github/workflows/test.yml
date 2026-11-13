@@ -2,7 +2,7 @@ name: Engine Tests
 
 on:
   push:
-    branches: [main, feat/oralyn-clinic-assistant-rbac]
+    branches: [main]
   pull_request:
 
 jobs:
