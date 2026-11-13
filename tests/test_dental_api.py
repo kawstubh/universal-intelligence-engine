@@ -23,6 +23,7 @@ def test_dental_health_is_public(monkeypatch):
     assert response.json()["status"] == "ok"
     assert response.json()["database_ready"] is True
     assert response.json()["database_identity_verified"] is None
+    assert response.json()["database_branch_identity_verified"] is None
     assert response.json()["deployment_commit"] is None
 
 
@@ -47,6 +48,43 @@ def test_dental_health_verifies_exact_neon_database_host_and_name(monkeypatch):
     response = TestClient(app).get("/v1/dental/health")
     assert response.status_code == 200
     assert response.json()["database_identity_verified"] is True
+
+
+def test_dental_health_verifies_exact_neon_branch(monkeypatch):
+    class FakeStore:
+        backend = "postgres"
+        database_url = "postgresql://synthetic:unused@ep-crimson-flower-a1q8qd6k.ap-southeast-1.aws.neon.tech/oralyn_staging"
+
+        def healthcheck(self):
+            return True
+
+        def _execute(self, sql, params=(), connection=None):
+            assert sql == "SELECT current_setting('neon.branch_id', true) AS branch_id"
+            return [{"branch_id": "br-steep-bonus-a1yqarg7"}]
+
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setenv("DENTAL_EXPECTED_NEON_BRANCH_ID", "br-steep-bonus-a1yqarg7")
+    response = TestClient(app).get("/v1/dental/health")
+    assert response.status_code == 200
+    assert response.json()["database_branch_identity_verified"] is True
+
+
+def test_dental_health_fails_closed_on_wrong_neon_branch(monkeypatch):
+    class FakeStore:
+        backend = "postgres"
+        database_url = "postgresql://synthetic:unused@ep-dawn-surf-a10oudjf.ap-southeast-1.aws.neon.tech/oralyn_staging"
+
+        def healthcheck(self):
+            return True
+
+        def _execute(self, sql, params=(), connection=None):
+            return [{"branch_id": "br-proud-scene-a1g7g3qo"}]
+
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setenv("DENTAL_EXPECTED_NEON_BRANCH_ID", "br-steep-bonus-a1yqarg7")
+    response = TestClient(app).get("/v1/dental/health")
+    assert response.status_code == 200
+    assert response.json()["database_branch_identity_verified"] is False
 
 
 def test_dental_health_fails_identity_check_on_wrong_host_or_database(monkeypatch):
