@@ -407,13 +407,13 @@ async def assistant_list_appointments(actor: Annotated[dict, Depends(require_ass
         rows = _query(
             store,
             "SELECT a.id,p.name AS patient_name,p.phone AS patient_phone,"
-            "a.starts_at,a.treatment_type,a.status,a.created_at "
+            "a.starts_at,a.status,a.created_at "
             "FROM dental_appointments a JOIN dental_patients p "
             "ON p.id=a.patient_id AND p.clinic_id=a.clinic_id "
             "WHERE a.clinic_id=%s AND a.status IN ('requested','confirmed','scheduled','rescheduled') "
             "ORDER BY a.starts_at ASC LIMIT 200",
             "SELECT a.id,p.name AS patient_name,p.phone AS patient_phone,"
-            "a.starts_at,a.treatment_type,a.status,a.created_at "
+            "a.starts_at,a.status,a.created_at "
             "FROM dental_appointments a JOIN dental_patients p "
             "ON p.id=a.patient_id AND p.clinic_id=a.clinic_id "
             "WHERE a.clinic_id=? AND a.status IN ('requested','confirmed','scheduled','rescheduled') "
@@ -483,7 +483,6 @@ async def assistant_update_appointment(
         {
             "id": item["id"],
             "starts_at": item["starts_at"],
-            "treatment_type": item["treatment_type"],
             "status": item["status"],
         }
     )
