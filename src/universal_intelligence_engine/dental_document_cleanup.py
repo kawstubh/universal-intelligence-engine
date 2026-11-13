@@ -61,7 +61,7 @@ def _expired_documents(store, cutoff: str, limit: int, *, claim: bool) -> list[d
         "ORDER BY updated_at ASC,id ASC LIMIT %s"
         if store.database_url
         else
-        "SELECT id,organisation_id,clinic_id,patient_id,upload_object_key,object_key,status,updated_at "
+        "SELECT id,organisation_id,clinic_id,patient_id,file_name,upload_object_key,object_key,status,updated_at "
         "FROM dental_documents WHERE status IN ('pending_upload','verifying','rejected') "
         "AND object_key IS NULL AND upload_object_key IS NOT NULL AND updated_at < ? "
         "ORDER BY updated_at ASC,id ASC LIMIT ?"
