@@ -326,7 +326,7 @@ async def assistant_list_appointments(actor: Annotated[dict, Depends(require_ass
         "ON p.id=a.patient_id AND p.clinic_id=a.clinic_id "
         "WHERE a.clinic_id=%s AND a.status IN ('requested','confirmed','scheduled','rescheduled') "
         "ORDER BY a.starts_at ASC LIMIT 200",
-        "SELECT a.id,a.patient_id,p.name AS patient_name,p.phone AS patient_phone,"
+        "SELECT a.id,p.name AS patient_name,p.phone AS patient_phone,"
         "a.starts_at,a.treatment_type,a.status,a.created_at "
         "FROM dental_appointments a JOIN dental_patients p "
         "ON p.id=a.patient_id AND p.clinic_id=a.clinic_id "
