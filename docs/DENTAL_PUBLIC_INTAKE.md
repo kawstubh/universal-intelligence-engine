@@ -80,3 +80,8 @@ therefore targets only the configured master clinic. Do not use this endpoint
 as a multi-tenant clinic directory. A future multi-clinic public booking flow
 must resolve a clinic through a verified, non-secret public slug and apply
 per-clinic abuse controls before creating patient rows.
+
+
+## Required privacy key
+
+Configure `DENTAL_PUBLIC_BOOKING_HASH_KEY` with at least 32 cryptographically random bytes in every environment that accepts public booking. The API fails closed with HTTP 503 if the key is absent or too short. The key is used as an HMAC-SHA-256 secret for the idempotency key, canonical request fingerprint and phone duplicate-detection fingerprint; plain SHA-256 of a 10-digit phone number is not safe because the input space can be enumerated. Keep the value stable across deploys and instances so replay and duplicate detection remain consistent. Treat rotation as a data-compatibility operation and do not silently replace it.
