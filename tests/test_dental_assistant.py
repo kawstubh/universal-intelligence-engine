@@ -224,7 +224,7 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     invalid_intake = client.post(
         "/v1/dental/assistant/patients",
         headers=headers,
-        json={"name": "Invalid Contact", "phone": "123456"},
+        json={"name": "Invalid Contact", "phone": "1234567890"},
     )
     assert invalid_intake.status_code == 422
 
