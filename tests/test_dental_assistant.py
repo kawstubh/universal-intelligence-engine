@@ -520,3 +520,84 @@ def test_clinic_assistant_account_management_is_tenant_scoped(assistant_api):
         json={"active": False},
     )
     assert cross_tenant_deactivation.status_code == 404, cross_tenant_deactivation.text
+
+
+
+def test_assistant_cannot_mutate_clinical_notes_plans_billing_documents_or_use_clinical_ai(assistant_api):
+    context = assistant_api
+    client = context["client"]
+    headers = _assistant_headers(context)
+    patient_id = context["patient_a"]["id"]
+    invoice_id = context["invoice_a"]["id"]
+    document_id = "assistant-denied-document"
+    note_id = "assistant-denied-note"
+    plan_id = "assistant-denied-plan"
+
+    denied = [
+        ("POST", f"/v1/dental/doctor/patients/{patient_id}/clinical-notes", {
+            "title": "Not allowed",
+            "content": "Synthetic denied write",
+        }),
+        ("PATCH", f"/v1/dental/doctor/clinical-notes/{note_id}", {
+            "content": "Synthetic denied update",
+            "expected_version": 1,
+        }),
+        ("POST", f"/v1/dental/doctor/patients/{patient_id}/messages", {
+            "body": "Synthetic denied clinical message",
+        }),
+        ("PATCH", f"/v1/dental/doctor/treatment-plans/{plan_id}", {
+            "status": "accepted",
+            "expected_version": 1,
+        }),
+        ("POST", f"/v1/dental/doctor/patients/{patient_id}/invoices", {
+            "idempotency_key": "assistant-denied-invoice-001",
+            "items": [{
+                "description": "Not allowed",
+                "quantity_milli": 1000,
+                "unit_price_paise": 1000,
+                "tax_rate_bps": 0,
+            }],
+        }),
+        ("POST", f"/v1/dental/doctor/invoices/{invoice_id}/issue", {
+            "due_date": "2026-12-01",
+        }),
+        ("POST", f"/v1/dental/doctor/invoices/{invoice_id}/void", None),
+        ("POST", f"/v1/dental/doctor/patients/{patient_id}/documents/upload-intent", {
+            "file_name": "not-allowed.pdf",
+            "content_type": "application/pdf",
+            "size_bytes": 1024,
+            "checksum_sha256": "a" * 64,
+        }),
+        ("POST", f"/v1/dental/doctor/documents/{document_id}/review", None),
+        ("PATCH", f"/v1/dental/doctor/documents/{document_id}", {
+            "patient_visible": True,
+        }),
+        ("POST", "/v1/dental/ai/doctor/patient-summary", {"patient_id": patient_id}),
+        ("POST", "/v1/dental/ai/doctor/treatment-plan", {"patient_id": patient_id}),
+        ("POST", "/v1/dental/ai/doctor/chart-insights", {"patient_id": patient_id}),
+        ("POST", "/v1/dental/ai/doctor/clinical-note", {
+            "patient_id": patient_id,
+            "visit_context": "Synthetic denied AI request",
+        }),
+        ("POST", "/v1/dental/ai/doctor/follow-up", {"patient_id": patient_id}),
+        ("POST", "/v1/dental/ai/doctor/daily-summary", None),
+        ("POST", "/v1/dental/ai/doctor/scan-analysis", {
+            "patient_id": patient_id,
+            "scan_reference": "synthetic-denied-scan",
+        }),
+        ("POST", "/v1/dental/ai/doctor/approve", {
+            "patient_id": patient_id,
+            "capability": "clinical_note",
+            "action": "accepted",
+            "content": {"text": "not allowed"},
+        }),
+    ]
+
+    for method, path, payload in denied:
+        kwargs = {"headers": headers}
+        if payload is not None:
+            kwargs["json"] = payload
+        response = client.request(method, path, **kwargs)
+        assert response.status_code == 403, (
+            method, path, response.status_code, response.text
+        )
