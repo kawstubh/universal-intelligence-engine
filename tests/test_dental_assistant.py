@@ -601,3 +601,57 @@ def test_assistant_cannot_mutate_clinical_notes_plans_billing_documents_or_use_c
         assert response.status_code == 403, (
             method, path, response.status_code, response.text
         )
+
+def test_assistant_intake_rejects_whitespace_only_patient_names(assistant_api):
+    context = assistant_api
+    response = context["client"].post(
+        "/v1/dental/assistant/patients",
+        headers=_assistant_headers(context),
+        json={"name": "  ", "phone": "9000000011"},
+    )
+    assert response.status_code == 422
+
+
+def test_assistant_patient_and_appointment_writes_roll_back_if_audit_fails(assistant_api, monkeypatch):
+    context = assistant_api
+    client = context["client"]
+    store = context["store"]
+    headers = _assistant_headers(context)
+
+    def fail_audit(*args, **kwargs):
+        raise RuntimeError("audit unavailable")
+
+    before_patients = store._execute(
+        "SELECT COUNT(*) AS count FROM dental_patients WHERE clinic_id=?",
+        ("clinic-assistant-a",),
+    )[0]["count"]
+    monkeypatch.setattr(store, "audit", fail_audit)
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        client.post(
+            "/v1/dental/assistant/patients",
+            headers=headers,
+            json={"name": "Synthetic Rollback Patient", "phone": "9000000011"},
+        )
+
+    after_patients = store._execute(
+        "SELECT COUNT(*) AS count FROM dental_patients WHERE clinic_id=?",
+        ("clinic-assistant-a",),
+    )[0]["count"]
+    assert after_patients == before_patients
+
+    before_status = store._execute(
+        "SELECT status FROM dental_appointments WHERE id=?",
+        (context["appointment_a"]["id"],),
+    )[0]["status"]
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        client.patch(
+            f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
+            headers=headers,
+            json={"status": "confirmed"},
+        )
+    after_status = store._execute(
+        "SELECT status FROM dental_appointments WHERE id=?",
+        (context["appointment_a"]["id"],),
+    )[0]["status"]
+    assert after_status == before_status == "requested"
