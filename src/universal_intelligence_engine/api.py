@@ -142,22 +142,17 @@ service = build_service()
 @app.middleware("http")
 async def disable_patient_ai(request: Request, call_next):
     path = request.url.path.rstrip("/")
-    disabled_patient_ai = {
-        "/v1/dental/ai/patient/chat",
-        "/v1/dental/ai/patient/triage",
-        "/v1/dental/ai/patient/treatment-explanation",
-        "/v1/dental/ai/patient/aftercare",
-        # Consent and stored AI history are part of the patient AI surface too.
-        "/v1/dental/ai/patient/consent",
-        "/v1/dental/ai/patient/history",
-    }
-    if path in disabled_patient_ai:
+    disabled_patient_prefixes = (
+        "/v1/dental/patient/",
+        "/v1/dental/ai/patient/",
+    )
+    if path.startswith(disabled_patient_prefixes):
         return JSONResponse(
             status_code=404,
             content={
                 "detail": {
-                    "code": "PATIENT_AI_DISABLED",
-                    "message": "Patient-facing AI is not available.",
+                    "code": "PATIENT_ACCOUNT_FREE",
+                    "message": "Patient accounts and linked-record access are disabled. Use the public guest appointment request; private patient records are not available through this route.",
                 }
             },
         )
@@ -206,14 +201,10 @@ def _doctor_only_openapi():
     schema["paths"] = {
         path: operations
         for path, operations in schema.get("paths", {}).items()
-        if path.rstrip("/") not in {
-            "/v1/dental/ai/patient/chat",
-            "/v1/dental/ai/patient/triage",
-            "/v1/dental/ai/patient/treatment-explanation",
-            "/v1/dental/ai/patient/aftercare",
-            "/v1/dental/ai/patient/consent",
-            "/v1/dental/ai/patient/history",
-        }
+        if not path.startswith((
+            "/v1/dental/patient/",
+            "/v1/dental/ai/patient/",
+        ))
     }
     app.openapi_schema = schema
     return schema
