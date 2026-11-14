@@ -40,7 +40,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
         monkeypatch.delenv("DENTAL_SQLITE_PATH", raising=False)
         config = Config(str(ROOT / "alembic.ini"))
         assert ScriptDirectory.from_config(config).get_heads() == [
-            "0011_document_clinical_review"
+            "0013_public_booking_idempotency"
         ]
         command.upgrade(config, "0005_password_auth")
 
@@ -87,6 +87,9 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 "dental_documents",
                 "dental_clinical_notes",
                 "dental_patient_messages",
+                "dental_clinic_assistants",
+                "dental_assistant_sessions",
+                "dental_public_booking_requests",
             }.issubset(tables)
             audit_columns = {
                 column["name"]
@@ -98,6 +101,25 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 for column in inspector.get_columns("dental_documents")
             }
             assert {"reviewed_by_doctor_id", "reviewed_at"}.issubset(document_columns)
+            receipt_columns = {
+                column["name"]: column
+                for column in inspector.get_columns("dental_receipts")
+            }
+            assert "created_by_assistant_id" in receipt_columns
+            assert receipt_columns["created_by_doctor_id"]["nullable"] is True
+            public_booking_columns = {
+                column["name"]
+                for column in inspector.get_columns("dental_public_booking_requests")
+            }
+            assert {
+                "idempotency_key_hash",
+                "payload_hash",
+                "phone_hash",
+                "starts_at_utc",
+                "public_reference",
+                "patient_id",
+                "appointment_id",
+            }.issubset(public_booking_columns)
 
             workspaces = connection.execute(
                 sa.text("SELECT id FROM dental_clinics")

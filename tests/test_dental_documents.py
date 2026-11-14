@@ -98,7 +98,6 @@ def document_api(tmp_path: Path, monkeypatch):
     app = FastAPI()
     app.include_router(dental_documents.router)
     app.dependency_overrides[dental_documents.require_doctor] = lambda: actor
-    app.dependency_overrides[dental_documents.require_patient] = lambda: patient_actor
     client = TestClient(app)
     return client, store, actor, patient_actor, patient_a, patient_b, fake_s3
 
@@ -121,7 +120,7 @@ def _upload_intent(
     return response, content, checksum
 
 
-def test_private_document_upload_verify_share_and_patient_download(document_api):
+def test_private_document_upload_verify_and_doctor_download_only(document_api):
     client, store, _actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
     intent, content, checksum = _upload_intent(client, patient_a["id"])
     assert intent.status_code == 200, intent.text
@@ -172,9 +171,8 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
         f"/v1/dental/doctor/documents/{document_id}",
         json={"patient_visible": True},
     )
-    assert premature_share.status_code == 409
-    assert premature_share.json()["detail"]["code"] == "DOCUMENT_REVIEW_REQUIRED"
-    assert client.get("/v1/dental/patient/documents").json()["result"] == []
+    assert premature_share.status_code == 404
+    assert client.get("/v1/dental/patient/documents").status_code == 404
 
     reviewed = client.post(f"/v1/dental/doctor/documents/{document_id}/review")
     assert reviewed.status_code == 200, reviewed.text
@@ -182,31 +180,20 @@ def test_private_document_upload_verify_share_and_patient_download(document_api)
     assert review_result["reviewed_by_doctor_id"] == "doctor-a"
     assert review_result["reviewed_at"]
     assert review_result["patient_visible"] is False
-    assert client.get("/v1/dental/patient/documents").json()["result"] == []
+    assert client.get("/v1/dental/patient/documents").status_code == 404
 
     shared = client.patch(
         f"/v1/dental/doctor/documents/{document_id}",
         json={"patient_visible": True},
     )
-    assert shared.status_code == 200, shared.text
+    assert shared.status_code == 404
 
     patient_documents = client.get("/v1/dental/patient/documents")
-    assert patient_documents.status_code == 200
-    visible = patient_documents.json()["result"]
-    assert len(visible) == 1
-    assert visible[0]["file_name"] == "scan-16.pdf"
-    assert "object_key" not in visible[0]
-    assert "organisation_id" not in visible[0]
-    assert "clinic_id" not in visible[0]
-    assert "checksum_sha256" not in visible[0]
-    assert "reviewed_at" not in visible[0]
-    assert "reviewed_by_doctor_id" not in visible[0]
-
+    assert patient_documents.status_code == 404
     patient_download = client.post(
         f"/v1/dental/patient/documents/{document_id}/download-intent"
     )
-    assert patient_download.status_code == 200, patient_download.text
-    assert patient_download.json()["result"]["expires_in_seconds"] == 120
+    assert patient_download.status_code == 404
 
     doctor_download = client.post(
         f"/v1/dental/doctor/documents/{document_id}/download-intent"
@@ -243,36 +230,17 @@ def test_patient_identity_cannot_call_doctor_document_review_route(document_api)
     assert response.status_code == 401
 
 
-def test_patient_cannot_access_unshared_or_another_patients_document(document_api):
-    client, store, _actor, patient_actor, patient_a, _patient_b, fake_s3 = document_api
-    intent, content, checksum = _upload_intent(client, patient_a["id"])
-    document_id = intent.json()["result"]["document"]["id"]
-    stored = store.get_document(document_id, "clinic-a")
-    fake_s3.objects[stored["upload_object_key"]] = {
-        "ContentLength": len(content),
-        "ContentType": "application/pdf",
-        "Metadata": {"sha256": checksum},
-        "Body": content,
-    }
-    assert client.post(f"/v1/dental/doctor/documents/{document_id}/complete").status_code == 200
-
-    # A legacy or bypassed visibility flag must never expose an unreviewed document.
-    store._execute("UPDATE dental_documents SET patient_visible=1 WHERE id=?", (document_id,))
-    assert store.documents("clinic-a", patient_a["id"], patient_visible_only=True) == []
-    assert store.get_document(
-        document_id, "clinic-a", patient_id=patient_a["id"], patient_visible_only=True
-    ) is None
-    assert client.get("/v1/dental/patient/documents").json()["result"] == []
-    hidden_download = client.post(f"/v1/dental/patient/documents/{document_id}/download-intent")
-    assert hidden_download.status_code == 404
-
-    patient_actor["user_id"] = "supabase-user-b"
-    assert client.get("/v1/dental/patient/documents").json()["result"] == []
-    other_patient_download = client.post(
-        f"/v1/dental/patient/documents/{document_id}/download-intent"
-    )
-    assert other_patient_download.status_code == 404
-
+def test_patient_document_routes_are_disabled_even_for_legacy_links(document_api):
+    client, _store, _actor, _patient_actor, patient_a, _patient_b, _fake_s3 = document_api
+    headers = {"Authorization": "Bearer synthetic-legacy-patient-token"}
+    cases = [
+        ("GET", "/v1/dental/patient/documents"),
+        ("GET", f"/v1/dental/patient/documents?patient_id={patient_a['id']}"),
+        ("POST", "/v1/dental/patient/documents/legacy-document/download-intent"),
+    ]
+    for method, path in cases:
+        response = client.request(method, path, headers=headers)
+        assert response.status_code == 404, f"{method} {path} must remain unavailable"
 
 def test_doctor_document_routes_are_workspace_scoped(document_api):
     client, store, actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
@@ -300,7 +268,7 @@ def test_doctor_document_routes_are_workspace_scoped(document_api):
     ).status_code == 404
 
 
-def test_mismatched_upload_is_rejected_and_never_patient_visible(document_api):
+def test_mismatched_upload_is_rejected_and_never_patient_accessible(document_api):
     client, store, _actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
     intent, content, _checksum = _upload_intent(client, patient_a["id"])
     document_id = intent.json()["result"]["document"]["id"]
@@ -316,7 +284,7 @@ def test_mismatched_upload_is_rejected_and_never_patient_visible(document_api):
     assert response.json()["detail"]["code"] == "DOCUMENT_UPLOAD_VERIFICATION_FAILED"
     assert store.get_document(document_id, "clinic-a")["status"] == "rejected"
     assert stored["upload_object_key"] not in fake_s3.objects
-    assert client.get("/v1/dental/patient/documents").json()["result"] == []
+    assert client.get("/v1/dental/patient/documents").status_code == 404
 
 
 def test_invalid_path_filename_is_rejected(document_api):
@@ -352,11 +320,11 @@ def test_document_storage_missing_configuration_returns_503_without_record(docum
     assert store.documents("clinic-a", patient_a["id"]) == []
 
 
-def test_document_routes_require_doctor_or_patient_authentication():
+def test_document_routes_require_doctor_auth_and_exclude_patient_routes():
     app = FastAPI()
     app.include_router(dental_documents.router)
     client = TestClient(app)
-    assert client.get("/v1/dental/patient/documents").status_code == 401
+    assert client.get("/v1/dental/patient/documents").status_code == 404
     assert client.get("/v1/dental/doctor/patients/missing/documents").status_code == 401
 
 
@@ -378,7 +346,7 @@ def test_document_checksum_is_verified_against_actual_object_bytes(document_api)
     assert stored["upload_object_key"] not in fake_s3.objects
 
 
-def test_replayed_upload_url_cannot_mutate_verified_patient_document(document_api):
+def test_replayed_upload_url_cannot_mutate_verified_document(document_api):
     client, store, _actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
     intent, content, checksum = _upload_intent(client, patient_a["id"])
     document_id = intent.json()["result"]["document"]["id"]
@@ -413,9 +381,11 @@ def test_replayed_upload_url_cannot_mutate_verified_patient_document(document_ap
         f"/v1/dental/doctor/documents/{document_id}",
         json={"patient_visible": True},
     )
-    assert shared.status_code == 200, shared.text
-    download = client.post(f"/v1/dental/patient/documents/{document_id}/download-intent")
-    assert download.status_code == 200, download.text
+    assert shared.status_code == 404
+    patient_download = client.post(f"/v1/dental/patient/documents/{document_id}/download-intent")
+    assert patient_download.status_code == 404
+    doctor_download = client.post(f"/v1/dental/doctor/documents/{document_id}/download-intent")
+    assert doctor_download.status_code == 200, doctor_download.text
     assert fake_s3.presign_calls[-1]["params"]["Key"] == final_key
     assert fake_s3.objects[final_key]["Body"] == content
     assert fake_s3.objects[upload_key]["Body"] == replayed_bytes
@@ -445,6 +415,7 @@ def test_storage_config_requires_explicit_private_bucket_attestation(monkeypatch
         "DENTAL_DOCUMENTS_S3_ACCESS_KEY_ID",
         "DENTAL_DOCUMENTS_S3_SECRET_ACCESS_KEY",
         "DENTAL_DOCUMENTS_STORAGE_PRIVATE",
+        "DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED",
     ):
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(HTTPException) as missing:
@@ -461,6 +432,13 @@ def test_storage_config_requires_explicit_private_bucket_attestation(monkeypatch
     assert not_private.value.status_code == 503
 
     monkeypatch.setenv("DENTAL_DOCUMENTS_STORAGE_PRIVATE", "true")
+    monkeypatch.setenv("DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED", "false")
+    with pytest.raises(HTTPException) as cleanup_not_verified:
+        dental_documents._storage_config()
+    assert cleanup_not_verified.value.status_code == 503
+    assert cleanup_not_verified.value.detail["code"] == "DOCUMENT_STORAGE_LIFECYCLE_NOT_VERIFIED"
+
+    monkeypatch.setenv("DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED", "true")
     assert dental_documents._storage_config()["bucket"] == "private-documents"
 
 
@@ -478,66 +456,26 @@ def test_s3_client_failure_rejects_the_pending_upload(document_api, monkeypatch)
     assert documents[0]["status"] == "rejected"
 
 
-def test_patient_with_multiple_clinic_links_selects_only_the_requested_record(document_api):
-    client, store, actor, patient_actor, patient_a, patient_b, fake_s3 = document_api
+def test_patient_document_routes_do_not_select_between_legacy_clinic_links(document_api):
+    client, store, _actor, _patient_actor, patient_a, patient_b, _fake_s3 = document_api
     store._execute(
         "UPDATE dental_patients SET user_id=? WHERE id=?",
         ("supabase-user-a", patient_b["id"]),
     )
-    actor["clinic_id"] = "clinic-b"
-    intent, content, checksum = _upload_intent(client, patient_b["id"])
-    document_id = intent.json()["result"]["document"]["id"]
-    stored = store.get_document(document_id, "clinic-b")
-    fake_s3.objects[stored["upload_object_key"]] = {
-        "ContentLength": len(content),
-        "ContentType": "application/pdf",
-        "Metadata": {"sha256": checksum},
-        "Body": content,
-    }
-    assert client.post(f"/v1/dental/doctor/documents/{document_id}/complete").status_code == 200
-    assert client.post(f"/v1/dental/doctor/documents/{document_id}/review").status_code == 200
-    assert client.patch(
-        f"/v1/dental/doctor/documents/{document_id}",
-        json={"patient_visible": True},
-    ).status_code == 200
-
-    ambiguous = client.get("/v1/dental/patient/documents")
-    assert ambiguous.status_code == 409
-    assert ambiguous.json()["detail"]["code"] == "PATIENT_RECORD_SELECTION_REQUIRED"
-
-    clinic_a_docs = client.get(
-        "/v1/dental/patient/documents",
-        params={"patient_id": patient_a["id"]},
-    )
-    clinic_b_docs = client.get(
-        "/v1/dental/patient/documents",
-        params={"patient_id": patient_b["id"]},
-    )
-    assert clinic_a_docs.status_code == 200
-    assert clinic_a_docs.json()["result"] == []
-    assert clinic_b_docs.status_code == 200
-    assert [item["id"] for item in clinic_b_docs.json()["result"]] == [document_id]
-
-    ambiguous_download = client.post(
-        f"/v1/dental/patient/documents/{document_id}/download-intent"
-    )
-    assert ambiguous_download.status_code == 409
-    selected_download = client.post(
-        f"/v1/dental/patient/documents/{document_id}/download-intent",
-        params={"patient_id": patient_b["id"]},
-    )
-    assert selected_download.status_code == 200
-
-    patient_actor["user_id"] = "supabase-user-b"
-    denied = client.get(
-        "/v1/dental/patient/documents",
-        params={"patient_id": patient_a["id"]},
-    )
-    assert denied.status_code == 403
-    assert denied.json()["detail"]["code"] == "PATIENT_IDENTITY_MISMATCH"
-
-
-
+    headers = {"Authorization": "Bearer synthetic-legacy-patient-token"}
+    for patient in (patient_a, patient_b):
+        listed = client.get(
+            "/v1/dental/patient/documents",
+            params={"patient_id": patient["id"]},
+            headers=headers,
+        )
+        downloaded = client.post(
+            "/v1/dental/patient/documents/legacy-document/download-intent",
+            params={"patient_id": patient["id"]},
+            headers=headers,
+        )
+        assert listed.status_code == 404
+        assert downloaded.status_code == 404
 
 def test_declared_pdf_with_non_pdf_bytes_is_rejected_and_quarantined(document_api):
     client, store, _actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
@@ -665,4 +603,4 @@ def test_document_with_detected_malware_is_never_published_or_shared(
     assert rejected["patient_visible"] in (False, 0)
     assert upload_key not in fake_s3.objects
     assert not any(key.startswith("verified/") for key in fake_s3.objects)
-    assert client.get("/v1/dental/patient/documents").json()["result"] == []
+    assert client.get("/v1/dental/patient/documents").status_code == 404

@@ -148,16 +148,21 @@ class DentalStore:
             (clinic_id,),
         )
 
-    def get_patient(self, patient_id: str, clinic_id: str) -> dict[str, Any] | None:
+    def get_patient(
+        self, patient_id: str, clinic_id: str, connection=None
+    ) -> dict[str, Any] | None:
         rows = self._execute(
             "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=%s AND clinic_id=%s"
             if self.database_url
             else "SELECT id,name,phone,age,clinic_id,user_id,created_at FROM dental_patients WHERE id=? AND clinic_id=?",
             (patient_id, clinic_id),
+            connection=connection,
         )
         return rows[0] if rows else None
 
-    def create_patient(self, data: dict[str, Any], clinic_id: str) -> dict[str, Any]:
+    def create_patient(
+        self, data: dict[str, Any], clinic_id: str, connection=None
+    ) -> dict[str, Any]:
         item = {
             "id": _id(),
             "name": data.get("name", "").strip(),
@@ -174,6 +179,7 @@ class DentalStore:
                 item[k]
                 for k in ("id", "name", "phone", "age", "clinic_id", "created_at")
             ),
+            connection=connection,
         )
         return item
 
@@ -195,9 +201,9 @@ class DentalStore:
         )
 
     def create_appointment(
-        self, data: dict[str, Any], clinic_id: str
+        self, data: dict[str, Any], clinic_id: str, connection=None
     ) -> dict[str, Any]:
-        if not self.get_patient(str(data["patient_id"]), clinic_id):
+        if not self.get_patient(str(data["patient_id"]), clinic_id, connection=connection):
             raise ValueError("Patient not found in clinic")
         item = {
             "id": _id(),
@@ -226,11 +232,12 @@ class DentalStore:
                     "created_at",
                 )
             ),
+            connection=connection,
         )
         return item
 
     def update_appointment(
-        self, appointment_id: str, changes: dict[str, Any], clinic_id: str
+        self, appointment_id: str, changes: dict[str, Any], clinic_id: str, connection=None
     ) -> dict[str, Any] | None:
         allowed = {"status", "starts_at", "note"}
         changes = {k: v for k, v in changes.items() if k in allowed}
@@ -247,14 +254,14 @@ class DentalStore:
             + " AND clinic_id="
             + ("%s" if self.database_url else "?")
         )
-        self._execute(sql, tuple(params))
+        self._execute(sql, tuple(params), connection=connection)
         query = (
             "SELECT * FROM dental_appointments WHERE id="
             + ("%s" if self.database_url else "?")
             + " AND clinic_id="
             + ("%s" if self.database_url else "?")
         )
-        found = self._execute(query, (appointment_id, clinic_id))
+        found = self._execute(query, (appointment_id, clinic_id), connection=connection)
         return found[0] if found else None
 
     def chart(self, patient_id: str, clinic_id: str) -> list[dict[str, Any]]:
@@ -784,11 +791,12 @@ class DentalStore:
     def update_treatment_plan(
         self, plan_id: str, clinic_id: str, doctor_id: str, changes: dict[str, Any]
     ) -> dict[str, Any] | None:
-        allowed = {"title", "summary", "status", "patient_visible", "items"}
+        allowed = {"title", "summary", "status", "items"}
         expected_version = changes.pop("expected_version", None)
         changes = {key: value for key, value in changes.items() if key in allowed}
         if not changes:
             return None
+        changes["patient_visible"] = False
         with self.transaction() as connection:
             lock = " FOR UPDATE" if self.database_url else ""
             sql = (
@@ -813,8 +821,6 @@ class DentalStore:
             }
             if next_status != current["status"] and next_status not in transitions.get(current["status"], set()):
                 raise ValueError(f"Treatment plan cannot transition from {current['status']} to {next_status}")
-            if changes.get("patient_visible") is True and next_status in {"draft", "cancelled"}:
-                raise ValueError("A treatment plan must be proposed before it can be shared")
             items = changes.pop("items", None)
             if items is not None and current["status"] != "draft":
                 raise ValueError("Treatment plan items can only be edited while the plan is a draft")
@@ -1076,9 +1082,9 @@ class DentalStore:
             if rows[0]["status"] != "draft":
                 raise ValueError("Only a draft invoice can be issued")
             update_sql = (
-                "UPDATE dental_invoices SET status='issued',patient_visible=true,due_date=%s,issued_at=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
+                "UPDATE dental_invoices SET status='issued',patient_visible=false,due_date=%s,issued_at=%s,updated_at=%s WHERE id=%s AND clinic_id=%s"
                 if self.database_url
-                else "UPDATE dental_invoices SET status='issued',patient_visible=1,due_date=?,issued_at=?,updated_at=? WHERE id=? AND clinic_id=?"
+                else "UPDATE dental_invoices SET status='issued',patient_visible=0,due_date=?,issued_at=?,updated_at=? WHERE id=? AND clinic_id=?"
             )
             self._execute(update_sql, (due_date, now, now, invoice_id, clinic_id), connection=connection)
             self.audit(doctor_id, "invoice.issued", "invoice", invoice_id, clinic_id, connection)
