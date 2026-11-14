@@ -64,7 +64,7 @@ Configure only on the isolated synthetic staging backend:
 - Neon project: `silent-king-54610898`.
 - Branch: `br-steep-bonus-a1yqarg7`.
 - Private bucket: `oralyn-private-documents`, created 13 November 2026.
-- The bucket is empty. No storage credential has been issued or installed in Render. Uploads remain disabled.
+- The bucket is empty. A branch-scoped Neon object-storage credential with storage:read and storage:write scopes exists; its secret was not retrieved and it has not been installed in Render. The restored default branch has no corresponding bucket. Uploads remain disabled.
 - Neon Free includes up to 5 GB of object storage per project; keep this synthetic-only and within the included allowance.
 
 Neon storage credentials are branch-scoped, not bucket/prefix-scoped. The `storage:write` scope includes object reads/writes, object deletion and bucket creation. Keep the staging branch/project isolated with only this dedicated private bucket. Do not reuse its credential in production or across unrelated buckets. If production requires bucket/prefix-scoped credentials, use a provider that supports those scopes or a separate isolated storage project.
