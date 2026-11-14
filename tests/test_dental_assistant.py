@@ -688,3 +688,57 @@ def test_assistant_login_rate_limit_uses_validated_client_ip(assistant_api):
     second_ip = {"CF-Connecting-IP": "198.51.100.11"}
     other_client = client.post(path, headers=second_ip, json=payload)
     assert other_client.status_code == 401
+
+
+def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(assistant_api, monkeypatch):
+    """Guest intake, Assistant reception and Doctor schedule share one clinic record."""
+    context = assistant_api
+    client = context["client"]
+    monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "clinic-assistant-a")
+    monkeypatch.setenv(
+        "DENTAL_PUBLIC_BOOKING_HASH_KEY",
+        "synthetic-public-booking-hash-key-32-bytes-minimum",
+    )
+    starts_at = (datetime.now(UTC) + timedelta(days=14)).isoformat()
+    guest_response = client.post(
+        "/v1/dental/public/appointments",
+        json={
+            "idempotency_key": "oralyn-cross-app-booking-00001",
+            "name": "Synthetic Guest Patient",
+            "phone": "9876543210",
+            "starts_at": starts_at,
+            "treatment_type": "Dental Check-up & Consultation",
+            "intelligence_request": False,
+        },
+    )
+    assert guest_response.status_code == 200, guest_response.text
+    assert guest_response.json()["status"] == "requested"
+    assert "patient_id" not in guest_response.json()
+    assert "appointment" not in guest_response.json()
+
+    assistant_response = client.get(
+        "/v1/dental/assistant/appointments",
+        headers=_assistant_headers(context),
+    )
+    assert assistant_response.status_code == 200, assistant_response.text
+    assistant_rows = assistant_response.json()["result"]
+    guest_row = next(
+        row for row in assistant_rows
+        if row["patient_name"] == "Synthetic Guest Patient"
+    )
+    assert guest_row["status"] == "requested"
+    assert "note" not in guest_row
+    assert "patient_id" not in guest_row
+
+    doctor_response = client.get(
+        "/v1/dental/appointments",
+        headers=_owner_headers(context),
+    )
+    assert doctor_response.status_code == 200, doctor_response.text
+    doctor_rows = doctor_response.json()
+    doctor_row = next(
+        row for row in doctor_rows
+        if row["patient_name"] == "Synthetic Guest Patient"
+    )
+    assert doctor_row["status"] == "requested"
+    assert doctor_row["patient_phone"] == "9876543210"
