@@ -713,6 +713,32 @@ def test_doctor_login_rate_limit_uses_validated_client_ip(assistant_api):
     assert other_client.status_code == 401
 
 
+def test_doctor_login_rate_limit_bounds_client_buckets(assistant_api, monkeypatch):
+    context = assistant_api
+    client = context["client"]
+    dental_auth._LOGIN_ATTEMPTS.clear()
+    monkeypatch.setattr(dental_auth, "_LOGIN_MAX_CLIENTS", 1)
+    path = "/v1/dental/auth/password/login"
+    payload = {"email": "missing@example.test", "password": "not-the-password"}
+
+    first = client.post(
+        path,
+        headers={"CF-Connecting-IP": "198.51.100.30"},
+        json=payload,
+    )
+    assert first.status_code == 401
+
+    at_capacity = client.post(
+        path,
+        headers={"CF-Connecting-IP": "198.51.100.31"},
+        json=payload,
+    )
+    assert at_capacity.status_code == 503
+    assert at_capacity.json()["detail"]["code"] == "LOGIN_RATE_LIMIT_CAPACITY"
+    assert at_capacity.headers["retry-after"]
+    assert len(dental_auth._LOGIN_ATTEMPTS) == 1
+
+
 def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(assistant_api, monkeypatch):
     """Guest intake, Assistant reception and Doctor schedule share one clinic record."""
     context = assistant_api
