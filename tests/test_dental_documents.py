@@ -634,6 +634,57 @@ def test_document_with_detected_malware_is_never_published_or_shared(
     assert not any(key.startswith("verified/") for key in fake_s3.objects)
     assert client.get("/v1/dental/patient/documents").status_code == 404
 
+
+def test_malware_audit_failure_still_rejects_and_deletes_quarantine_upload(
+    document_api, monkeypatch
+):
+    client, store, actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
+    intent, content, checksum = _upload_intent(client, patient_a["id"])
+    document_id = intent.json()["result"]["document"]["id"]
+    pending = store.get_document(document_id, actor["clinic_id"])
+    upload_key = pending["upload_object_key"]
+    fake_s3.objects[upload_key] = {
+        "ContentLength": len(content),
+        "ContentType": "application/pdf",
+        "Metadata": {"sha256": checksum},
+        "Body": content,
+    }
+
+    def infected(_payload):
+        raise DocumentMalwareDetected("synthetic EICAR detection")
+
+    monkeypatch.setattr(dental_documents, "scan_document_bytes", infected)
+    original_audit = store.audit
+
+    def fail_malware_event_once(
+        actor_id, action, resource_type, resource_id=None, clinic_id=None, connection=None
+    ):
+        if action == "document.malware_detected":
+            raise RuntimeError("synthetic audit outage")
+        return original_audit(
+            actor_id, action, resource_type, resource_id, clinic_id, connection
+        )
+
+    monkeypatch.setattr(store, "audit", fail_malware_event_once)
+    response = client.post(f"/v1/dental/doctor/documents/{document_id}/complete")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DOCUMENT_MALWARE_AUDIT_UNAVAILABLE"
+    rejected = store.get_document(document_id, actor["clinic_id"])
+    assert rejected["status"] == "rejected"
+    assert upload_key not in fake_s3.objects
+    assert not any(key.startswith("verified/") for key in fake_s3.objects)
+    actions = [
+        row["action"]
+        for row in store._execute(
+            "SELECT action FROM dental_audit_events WHERE resource_id=?",
+            (document_id,),
+        )
+    ]
+    assert "document.upload_rejected" in actions
+    assert "document.malware_detected" not in actions
+
+
 @pytest.mark.parametrize(
     ("setting", "value"),
     [
