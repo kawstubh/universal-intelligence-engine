@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 import time
@@ -153,6 +154,22 @@ def _bootstrap_admin() -> None:
         )
 
 
+def _login_client_ip(request: Request) -> str:
+    """Return Render's Cloudflare-validated client IP for per-client login limits.
+
+    Render routes public web-service traffic through Cloudflare, which supplies
+    CF-Connecting-IP. Validate the value before using it; fall back to the
+    connection peer when the header is absent or malformed.
+    """
+    forwarded = str(request.headers.get("cf-connecting-ip") or "").strip()
+    if forwarded:
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            pass
+    return str(request.client.host if request.client else "unknown")
+
+
 def _check_login_rate_limit(ip: str) -> None:
     now = time.monotonic()
     attempts = _LOGIN_ATTEMPTS[ip]
@@ -170,7 +187,7 @@ def _check_login_rate_limit(ip: str) -> None:
 
 
 async def login_password(email: str, password: str, request: Request) -> dict:
-    _check_login_rate_limit(request.client.host if request.client else "unknown")
+    _check_login_rate_limit(_login_client_ip(request))
     _bootstrap_admin()
     normalized_email = email.strip().lower()
     store = get_dental_store()
