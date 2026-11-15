@@ -633,3 +633,27 @@ def test_document_with_detected_malware_is_never_published_or_shared(
     assert upload_key not in fake_s3.objects
     assert not any(key.startswith("verified/") for key in fake_s3.objects)
     assert client.get("/v1/dental/patient/documents").status_code == 404
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [
+        ("DENTAL_DOCUMENTS_UPLOAD_TTL_SECONDS", "not-an-integer"),
+        ("DENTAL_DOCUMENTS_DOWNLOAD_TTL_SECONDS", "not-an-integer"),
+    ],
+)
+def test_storage_config_rejects_malformed_url_lifetimes_with_503(
+    monkeypatch, setting: str, value: str
+):
+    monkeypatch.setenv("DENTAL_DOCUMENTS_S3_ENDPOINT", "https://storage.example")
+    monkeypatch.setenv("DENTAL_DOCUMENTS_S3_BUCKET", "private-documents")
+    monkeypatch.setenv("DENTAL_DOCUMENTS_S3_ACCESS_KEY_ID", "scoped-access")
+    monkeypatch.setenv("DENTAL_DOCUMENTS_S3_SECRET_ACCESS_KEY", "scoped-secret")
+    monkeypatch.setenv("DENTAL_DOCUMENTS_STORAGE_PRIVATE", "true")
+    monkeypatch.setenv("DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED", "true")
+    monkeypatch.setenv(setting, value)
+
+    with pytest.raises(HTTPException) as invalid:
+        dental_documents._storage_config()
+
+    assert invalid.value.status_code == 503
+    assert invalid.value.detail["code"] == "DOCUMENT_STORAGE_CONFIG_INVALID"
