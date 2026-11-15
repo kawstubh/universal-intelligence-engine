@@ -10,6 +10,8 @@ Clinical documents are private to the authenticated Doctor workspace. Patient-sp
 
 Document bytes are uploaded directly from the authorised Doctor client to a **private S3-compatible object-storage bucket** using a short-lived presigned PUT URL. The FastAPI service stores metadata in PostgreSQL and never writes files to the Render filesystem.
 
+Before an upload intent is created, the backend requires the configured private ClamAV service to answer a `PING`/`PONG` readiness probe. If the scanner is missing, unsafe, or unavailable, the request returns HTTP 503 before creating a document row or issuing a presigned PUT URL. This readiness check is not malware clearance: finalization still scans the exact uploaded bytes with ClamAV `INSTREAM` and requires a clean result plus an audit record before publishing a verified object.
+
 The backend verifies the object before marking it available:
 
 1. The Doctor creates an upload intent for a patient in the active workspace.
@@ -45,7 +47,8 @@ The upload key is never used for downloads. The application derives organisation
 - Doctor download URL lifetime: default 120 seconds, allowed 30–300.
 - No local filesystem fallback.
 - Malware scanning is mandatory; signature/checksum validation and Doctor review are not substitutes for antivirus.
-- Missing/unavailable scanner configuration fails closed with HTTP 503. A malware finding returns HTTP 409. No unscanned object can become available.
+- Upload-intent creation requires a successful private ClamAV PING/PONG readiness check; missing, unsafe or unavailable scanner configuration returns HTTP 503 before a pending row or presigned PUT URL is created.
+- Finalization performs a fresh bounded INSTREAM scan of the verified bytes and requires a clean result plus audit record. Missing/unavailable scanner or audit fails closed with HTTP 503; a malware finding returns HTTP 409. No unscanned object can become available.
 - Patient sharing and patient download URLs are disabled.
 
 ## Required staging configuration

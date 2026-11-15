@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from universal_intelligence_engine import dental_documents
 from universal_intelligence_engine.dental_document_scanner import (
     DocumentMalwareDetected,
+    DocumentScannerConfigurationError,
     DocumentScannerNotConfigured,
     DocumentScannerUnavailable,
 )
@@ -88,6 +89,7 @@ def document_api(tmp_path: Path, monkeypatch):
     }
     monkeypatch.setattr(dental_documents, "get_dental_store", lambda: store)
     monkeypatch.setattr(dental_documents, "_storage_config", lambda: config)
+    monkeypatch.setattr(dental_documents, "verify_document_scanner_ready", lambda: {"engine": "clamav", "status": "ready"})
     monkeypatch.setattr(dental_documents, "_get_s3_client", lambda _config: fake_s3)
     monkeypatch.setattr(
         dental_documents,
@@ -118,6 +120,33 @@ def _upload_intent(
         },
     )
     return response, content, checksum
+
+
+@pytest.mark.parametrize(
+    ("scanner_error", "expected_code"),
+    [
+        (DocumentScannerNotConfigured, "DOCUMENT_SCAN_NOT_CONFIGURED"),
+        (DocumentScannerConfigurationError, "DOCUMENT_SCAN_CONFIGURATION_INVALID"),
+        (DocumentScannerUnavailable, "DOCUMENT_SCAN_UNAVAILABLE"),
+    ],
+)
+def test_upload_intent_fails_closed_before_creating_row_or_presigned_url(
+    document_api, monkeypatch, scanner_error, expected_code
+):
+    client, store, _actor, _patient_actor, patient_a, _patient_b, fake_s3 = document_api
+
+    def fail_scanner_readiness():
+        raise scanner_error("synthetic scanner readiness failure")
+
+    monkeypatch.setattr(
+        dental_documents, "verify_document_scanner_ready", fail_scanner_readiness
+    )
+    response, _content, _checksum = _upload_intent(client, patient_a["id"])
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == expected_code
+    assert store.documents("clinic-a", patient_a["id"], patient_visible_only=False) == []
+    assert fake_s3.presign_calls == []
 
 
 def test_private_document_upload_verify_and_doctor_download_only(document_api):

@@ -28,6 +28,7 @@ from .dental_document_scanner import (
     DocumentScannerNotConfigured,
     DocumentScannerUnavailable,
     scan_document_bytes,
+    verify_document_scanner_ready,
 )
 from .dental_store import get_dental_store
 
@@ -195,6 +196,7 @@ def create_document_upload_intent(
     actor: Annotated[dict, Depends(require_doctor)],
 ):
     config = _storage_config()
+    _require_document_scanner_ready()
     store = get_dental_store()
     patient = store.get_patient(patient_id, actor["clinic_id"])
     if not patient:
@@ -287,6 +289,36 @@ def _delete_object_safely(s3, bucket: str, key: str) -> None:
             "Could not remove private dental document object (key fingerprint %s)",
             key_fingerprint,
         )
+
+
+def _require_document_scanner_ready() -> None:
+    """Do not create pending uploads or signed PUT URLs unless ClamAV is reachable."""
+    try:
+        verify_document_scanner_ready()
+    except DocumentScannerNotConfigured as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_NOT_CONFIGURED",
+                "message": "Private malware scanning is not configured; document uploads are disabled.",
+            },
+        ) from exc
+    except DocumentScannerConfigurationError as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_CONFIGURATION_INVALID",
+                "message": "The private document scanner configuration is invalid.",
+            },
+        ) from exc
+    except DocumentScannerUnavailable as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_UNAVAILABLE",
+                "message": "The clinic security scanner is unavailable; document uploads are disabled.",
+            },
+        ) from exc
 
 
 def _scan_document_or_raise(payload: bytes, store, actor: dict, document_id: str) -> None:
