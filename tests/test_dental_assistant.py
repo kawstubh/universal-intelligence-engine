@@ -690,6 +690,29 @@ def test_assistant_login_rate_limit_uses_validated_client_ip(assistant_api):
     assert other_client.status_code == 401
 
 
+def test_doctor_login_rate_limit_uses_validated_client_ip(assistant_api):
+    context = assistant_api
+    client = context["client"]
+    dental_auth._LOGIN_ATTEMPTS.clear()
+    path = "/v1/dental/auth/password/login"
+    payload = {"email": "missing@example.test", "password": "not-the-password"}
+    first_ip = {"CF-Connecting-IP": "198.51.100.20"}
+
+    for _ in range(10):
+        response = client.post(path, headers=first_ip, json=payload)
+        assert response.status_code == 401
+
+    blocked = client.post(path, headers=first_ip, json=payload)
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"]
+
+    # Render's proxy socket is shared; a different validated Cloudflare
+    # client IP must have an independent Doctor sign-in rate-limit bucket.
+    second_ip = {"CF-Connecting-IP": "198.51.100.21"}
+    other_client = client.post(path, headers=second_ip, json=payload)
+    assert other_client.status_code == 401
+
+
 def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(assistant_api, monkeypatch):
     """Guest intake, Assistant reception and Doctor schedule share one clinic record."""
     context = assistant_api
