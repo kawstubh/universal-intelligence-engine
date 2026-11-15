@@ -42,6 +42,11 @@ def configure_real_clamav(monkeypatch) -> None:
     monkeypatch.setenv("DENTAL_DOCUMENT_SCANNER_PRIVATE", "true")
 
 
+def test_real_clamav_answers_private_readiness_probe() -> None:
+    result = scanner.verify_document_scanner_ready()
+    assert result == {"engine": "clamav", "status": "ready"}
+
+
 def test_real_clamav_accepts_a_clean_synthetic_payload() -> None:
     result = scanner.scan_document_bytes(b"Oralyn synthetic clean document scan integration test")
     assert result == {"engine": "clamav", "status": "clean"}
