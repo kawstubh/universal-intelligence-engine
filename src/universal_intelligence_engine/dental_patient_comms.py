@@ -1,9 +1,7 @@
-"""Tenant-scoped clinical notes and secure patient/clinic communication.
+"""Tenant-scoped Doctor clinical notes and clinic contact records.
 
-Clinical notes are private by default and become patient-visible only after an
-explicit doctor action. Messages are shared only between the authenticated
-clinic workspace and the linked patient record. No AI or clinical decision
-support is exposed to patients here.
+Clinical notes remain clinic-only. Patient-account note and messaging routes
+are not mounted; no patient login or patient sharing is supported here.
 """
 
 from __future__ import annotations
@@ -13,9 +11,8 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from .dental_ai import require_patient
 from .dental_auth import require_doctor
 from .dental_store import get_dental_store
 
@@ -28,9 +25,9 @@ class ClinicalNoteCreateIn(BaseModel):
 
 
 class ClinicalNoteUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     title: str | None = Field(default=None, min_length=2, max_length=160)
     content: str | None = Field(default=None, min_length=1, max_length=10000)
-    patient_visible: bool | None = None
     expected_version: int = Field(ge=1)
 
 
@@ -48,42 +45,6 @@ def _id() -> str:
 
 def _envelope(result):
     return {"result": result, "confidence": 1.0, "sources": [], "request_id": str(uuid.uuid4())}
-
-
-def _patient_for_actor(actor: dict, patient_id: str | None = None) -> dict:
-    store = get_dental_store()
-    if patient_id:
-        patient = store.patient_by_user_id(actor["user_id"], patient_id)
-        if not patient:
-            raise HTTPException(
-                403,
-                detail={
-                    "code": "PATIENT_IDENTITY_MISMATCH",
-                    "message": "The selected clinic record is not linked to this patient account.",
-                },
-            )
-        return patient
-    linked = store.patients_by_user_id(actor["user_id"])
-    if len(linked) > 1:
-        raise HTTPException(
-            409,
-            detail={
-                "code": "PATIENT_RECORD_SELECTION_REQUIRED",
-                "message": "Choose the clinic record you want to view.",
-            },
-        )
-    if not linked:
-        raise HTTPException(
-            404,
-            detail={
-                "code": "PATIENT_RECORD_NOT_LINKED",
-                "message": "No clinic record is linked to this patient account.",
-            },
-        )
-    patient = store.patient_by_user_id(actor["user_id"], linked[0]["patient_id"])
-    if not patient:
-        raise HTTPException(404, detail={"code": "PATIENT_RECORD_NOT_LINKED", "message": "No clinic record is linked to this patient account."})
-    return patient
 
 
 def _note_public(row: dict, patient_view: bool = False) -> dict:
@@ -230,7 +191,7 @@ def update_doctor_clinical_note(
             raise HTTPException(409, detail={"code": "CLINICAL_NOTE_VERSION_CONFLICT", "message": "This note changed elsewhere. Refresh before saving."})
         title = changes.get("title", current["title"])
         content = changes.get("content", current["content"])
-        patient_visible = changes.get("patient_visible", current["patient_visible"])
+        patient_visible = False
         if title is None or content is None or len(str(title).strip()) < 2 or not str(content).strip():
             raise HTTPException(422, detail={"code": "CLINICAL_NOTE_INVALID", "message": "A note title of at least two characters and non-empty content are required."})
         version = int(current["version"]) + 1
@@ -245,22 +206,6 @@ def update_doctor_clinical_note(
         store.audit(actor["id"], "clinical_note.updated", "clinical_note", note_id, actor["clinic_id"], connection)
         updated = {**current, "title": str(title).strip(), "content": str(content).strip(), "patient_visible": patient_visible, "version": version, "updated_at": now}
     return _envelope(_note_public(updated))
-
-
-@router.get("/patient/clinical-notes")
-def list_patient_clinical_notes(
-    actor: Annotated[dict, Depends(require_patient)],
-    patient_id: str | None = None,
-):
-    patient = _patient_for_actor(actor, patient_id)
-    store = get_dental_store()
-    rows = _query(
-        store,
-        "SELECT * FROM dental_clinical_notes WHERE clinic_id=%s AND patient_id=%s AND patient_visible=true ORDER BY created_at DESC,id DESC",
-        "SELECT * FROM dental_clinical_notes WHERE clinic_id=? AND patient_id=? AND patient_visible=1 ORDER BY created_at DESC,id DESC",
-        (patient["clinic_id"], patient["id"]),
-    )
-    return _envelope([_note_public(row, patient_view=True) for row in rows])
 
 
 @router.get("/doctor/patients/{patient_id}/messages")
@@ -281,29 +226,3 @@ def send_doctor_patient_message(
     if not store.get_patient(patient_id, actor["clinic_id"]):
         raise HTTPException(404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found in this workspace."})
     return _envelope(_create_message(store, actor["clinic_id"], patient_id, "doctor", actor["id"], body.body))
-
-
-@router.get("/patient/messages")
-def list_patient_messages(
-    actor: Annotated[dict, Depends(require_patient)],
-    patient_id: str | None = None,
-):
-    patient = _patient_for_actor(actor, patient_id)
-    return _envelope(_messages_for(get_dental_store(), patient["clinic_id"], patient["id"]))
-
-
-@router.post("/patient/messages")
-def send_patient_message(
-    body: MessageCreateIn,
-    actor: Annotated[dict, Depends(require_patient)],
-    patient_id: str | None = None,
-):
-    patient = _patient_for_actor(actor, patient_id)
-    return _envelope(_create_message(
-        get_dental_store(),
-        patient["clinic_id"],
-        patient["id"],
-        "patient",
-        actor["user_id"],
-        body.body,
-    ))

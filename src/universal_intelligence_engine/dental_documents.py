@@ -1,8 +1,9 @@
-"""Private, tenant-scoped dental document API.
+"""Doctor-only, tenant-scoped private dental document API.
 
 The API never proxies file bytes through the application server. It issues
 short-lived S3-compatible signed URLs for a verified private bucket. Storage
-must be explicitly configured; there is no Render filesystem fallback.
+must be explicitly configured; there is no Render filesystem fallback. Patient
+document routes and patient-sharing controls are intentionally not mounted.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .dental_ai import require_patient
 from .dental_auth import require_doctor
 from .dental_document_scanner import (
     DocumentMalwareDetected,
@@ -28,8 +28,9 @@ from .dental_document_scanner import (
     DocumentScannerNotConfigured,
     DocumentScannerUnavailable,
     scan_document_bytes,
+    verify_document_scanner_ready,
 )
-from .dental_store import DocumentReviewRequiredError, get_dental_store
+from .dental_store import get_dental_store
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +50,6 @@ class DocumentUploadIntentIn(BaseModel):
     content_type: Literal["application/pdf", "image/jpeg", "image/png", "image/webp"]
     size_bytes: int = Field(gt=0, le=MAX_FILE_BYTES)
     checksum_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
-
-
-class DocumentVisibilityIn(BaseModel):
-    patient_visible: bool
 
 
 def _envelope(result):
@@ -85,11 +82,29 @@ def _storage_config() -> dict:
             503,
             detail={
                 "code": "DOCUMENT_STORAGE_NOT_CONFIGURED",
-                "message": "A verified private object-storage bucket and scoped credentials are required.",
+                "message": "A verified private object-storage bucket and dedicated branch-scoped credentials are required.",
             },
         )
-    upload_ttl = int(os.getenv("DENTAL_DOCUMENTS_UPLOAD_TTL_SECONDS", "300"))
-    download_ttl = int(os.getenv("DENTAL_DOCUMENTS_DOWNLOAD_TTL_SECONDS", "120"))
+    cleanup_attestation = os.getenv("DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED", "").strip().lower()
+    if cleanup_attestation != "true":
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_STORAGE_LIFECYCLE_NOT_VERIFIED",
+                "message": "A tested server-side cleanup process for expired pending uploads is required before document storage can be enabled.",
+            },
+        )
+    try:
+        upload_ttl = int(os.getenv("DENTAL_DOCUMENTS_UPLOAD_TTL_SECONDS", "300"))
+        download_ttl = int(os.getenv("DENTAL_DOCUMENTS_DOWNLOAD_TTL_SECONDS", "120"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_STORAGE_CONFIG_INVALID",
+                "message": "Document URL lifetime must be a valid integer.",
+            },
+        ) from exc
     if not 60 <= upload_ttl <= 600 or not 30 <= download_ttl <= 300:
         raise HTTPException(
             503,
@@ -164,50 +179,6 @@ def _doctor_document(document: dict) -> dict:
     }
 
 
-def _patient_document(document: dict) -> dict:
-    return {
-        "id": document["id"],
-        "file_name": document["file_name"],
-        "content_type": document["content_type"],
-        "size_bytes": int(document["size_bytes"]),
-        "created_at": document["created_at"],
-        "uploaded_at": document["uploaded_at"],
-    }
-
-
-def _patient_for_actor(actor: dict, patient_id: str | None = None) -> dict:
-    store = get_dental_store()
-    if patient_id:
-        patient = store.patient_by_user_id(actor["user_id"], patient_id)
-        if not patient:
-            raise HTTPException(
-                403,
-                detail={
-                    "code": "PATIENT_IDENTITY_MISMATCH",
-                    "message": "The selected clinic record is not linked to this patient account.",
-                },
-            )
-        return patient
-    linked = store.patients_by_user_id(actor["user_id"])
-    if len(linked) > 1:
-        raise HTTPException(
-            409,
-            detail={
-                "code": "PATIENT_RECORD_SELECTION_REQUIRED",
-                "message": "Choose the clinic record you want to view.",
-            },
-        )
-    if linked:
-        return store.patient_by_user_id(actor["user_id"], linked[0]["patient_id"])
-    raise HTTPException(
-        404,
-        detail={
-            "code": "PATIENT_RECORD_NOT_LINKED",
-            "message": "No clinic record is linked to this patient account.",
-        },
-    )
-
-
 def _presigned_download(document: dict, config: dict, s3) -> dict:
     if document["status"] != "available" or not document.get("object_key"):
         raise HTTPException(409, detail={"code": "DOCUMENT_NOT_AVAILABLE", "message": "Document is not available for download."})
@@ -234,6 +205,7 @@ def create_document_upload_intent(
     actor: Annotated[dict, Depends(require_doctor)],
 ):
     config = _storage_config()
+    _require_document_scanner_ready()
     store = get_dental_store()
     patient = store.get_patient(patient_id, actor["clinic_id"])
     if not patient:
@@ -328,6 +300,36 @@ def _delete_object_safely(s3, bucket: str, key: str) -> None:
         )
 
 
+def _require_document_scanner_ready() -> None:
+    """Do not create pending uploads or signed PUT URLs unless ClamAV is reachable."""
+    try:
+        verify_document_scanner_ready()
+    except DocumentScannerNotConfigured as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_NOT_CONFIGURED",
+                "message": "Private malware scanning is not configured; document uploads are disabled.",
+            },
+        ) from exc
+    except DocumentScannerConfigurationError as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_CONFIGURATION_INVALID",
+                "message": "The private document scanner configuration is invalid.",
+            },
+        ) from exc
+    except DocumentScannerUnavailable as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_SCAN_UNAVAILABLE",
+                "message": "The clinic security scanner is unavailable; document uploads are disabled.",
+            },
+        ) from exc
+
+
 def _scan_document_or_raise(payload: bytes, store, actor: dict, document_id: str) -> None:
     """Require a clean private ClamAV result before publishing document bytes."""
     try:
@@ -341,8 +343,15 @@ def _scan_document_or_raise(payload: bytes, store, actor: dict, document_id: str
                 document_id,
                 actor["clinic_id"],
             )
-        except Exception:
+        except Exception as audit_exc:
             logger.exception("Could not record a blocked document malware scan")
+            raise HTTPException(
+                503,
+                detail={
+                    "code": "DOCUMENT_MALWARE_AUDIT_UNAVAILABLE",
+                    "message": "The malware detection could not be recorded; the uploaded document was rejected.",
+                },
+            ) from audit_exc
         raise HTTPException(
             409,
             detail={
@@ -569,28 +578,6 @@ def review_document(
     return _envelope(_doctor_document(result))
 
 
-@router.patch("/doctor/documents/{document_id}")
-def set_document_visibility(
-    document_id: str,
-    body: DocumentVisibilityIn,
-    actor: Annotated[dict, Depends(require_doctor)],
-):
-    try:
-        result = get_dental_store().set_document_visibility(
-            document_id, actor["clinic_id"], actor["id"], body.patient_visible
-        )
-    except DocumentReviewRequiredError as exc:
-        raise HTTPException(
-            409,
-            detail={"code": "DOCUMENT_REVIEW_REQUIRED", "message": str(exc)},
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(409, detail={"code": "DOCUMENT_NOT_SHAREABLE", "message": str(exc)}) from exc
-    if not result:
-        raise HTTPException(404, detail={"code": "DOCUMENT_NOT_FOUND", "message": "Document not found in this workspace"})
-    return _envelope(_doctor_document(result))
-
-
 @router.post("/doctor/documents/{document_id}/download-intent")
 def create_doctor_document_download_intent(
     document_id: str,
@@ -604,40 +591,4 @@ def create_doctor_document_download_intent(
     s3 = _get_s3_client(config)
     result = _presigned_download(document, config, s3)
     store.audit(actor["id"], "document.download_intent_created", "document", document_id, actor["clinic_id"])
-    return _envelope(result)
-
-
-@router.get("/patient/documents")
-def list_patient_documents(
-    actor: Annotated[dict, Depends(require_patient)],
-    patient_id: str | None = None,
-):
-    patient = _patient_for_actor(actor, patient_id)
-    documents = get_dental_store().documents(
-        patient["clinic_id"], patient["id"], patient_visible_only=True
-    )
-    return _envelope([_patient_document(item) for item in documents])
-
-
-@router.post("/patient/documents/{document_id}/download-intent")
-def create_patient_document_download_intent(
-    document_id: str,
-    actor: Annotated[dict, Depends(require_patient)],
-    patient_id: str | None = None,
-):
-    config = _storage_config()
-    patient = _patient_for_actor(actor, patient_id)
-    document = get_dental_store().get_document(
-        document_id,
-        patient["clinic_id"],
-        patient_id=patient["id"],
-        patient_visible_only=True,
-    )
-    if not document:
-        raise HTTPException(404, detail={"code": "DOCUMENT_NOT_FOUND", "message": "Document not found"})
-    result = _presigned_download(document, config, _get_s3_client(config))
-    get_dental_store().audit(
-        actor["user_id"], "document.patient_download_intent_created",
-        "document", document_id, patient["clinic_id"],
-    )
     return _envelope(result)

@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
+import json
 import os
 import secrets
 import time
 from collections import defaultdict, deque
-from typing import Annotated, Any
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .dental_auth import (
     hash_password,
@@ -53,6 +58,26 @@ def _public_appointment_client_ip(request: Request) -> str:
         except ValueError:
             pass
     return str(request.client.host if request.client else "unknown")
+
+
+def _public_booking_hmac(value: str, purpose: str) -> str:
+    """Keyed digest for low-entropy contact data and request fingerprints.
+
+    Plain SHA-256 is not suitable for phone numbers because the input space is
+    enumerable. Keep this key stable across deploys so duplicate detection and
+    idempotency remain consistent.
+    """
+    key = os.getenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", "").strip()
+    if len(key.encode("utf-8")) < 32:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "PUBLIC_BOOKING_HASH_NOT_CONFIGURED",
+                "message": "Online appointment requests are temporarily unavailable. Please call the clinic.",
+            },
+        )
+    message = (purpose + ":" + value).encode("utf-8")
+    return hmac.new(key.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
 def _check_public_appointment_rate_limit(client_ip: str) -> None:
@@ -168,14 +193,77 @@ class AppointmentUpdateIn(BaseModel):
 
 
 class PublicAppointmentIn(BaseModel):
+    idempotency_key: str = Field(min_length=16, max_length=128)
     name: str = Field(min_length=2, max_length=200)
     phone: str = Field(min_length=7, max_length=40)
-    starts_at: str = Field(min_length=5, max_length=80)
-    treatment_type: str = Field(
-        default="General dental consultation", min_length=1, max_length=120
-    )
-    note: str | None = Field(default=None, max_length=2000)
-    intelligence_request: bool = False
+    starts_at: datetime
+    treatment_type: Literal[
+        "Dental Check-up & Consultation",
+        "Scaling & Cleaning",
+        "Teeth Whitening",
+        "Tooth Filling",
+        "Root Canal Treatment (RCT)",
+        "Dental Crowns & Caps",
+        "Dental Implants",
+        "Tooth Extraction",
+        "Braces Treatment",
+        "Clear Aligners (Invisible Braces)",
+        "Dentures (Full / Partial)",
+        "Veneers (Smile Makeover)",
+        "Gum Treatment (Periodontal Care)",
+        "Kids Dentistry (Child Care)",
+        "Emergency Dental Care",
+        "Tooth Sensitivity Treatment",
+        "Dental Sealants (Cavity Prevention)",
+        "Oral Hygiene Education",
+        "Smile Makeover (Cosmetic Dentistry)",
+        "TMJ & Jaw Pain Treatment",
+        "Other dental concern",
+    ] = "Dental Check-up & Consultation"
+    intelligence_request: Literal[False] = False
+    website: str = Field(default="", max_length=200)
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def normalize_idempotency_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 16:
+            raise ValueError("A secure idempotency key is required")
+        return normalized
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("Enter your name")
+        return normalized
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        normalized = value.strip()
+        digits = "".join(character for character in normalized if character.isdigit())
+        indian_mobile = (
+            len(digits) == 10 and digits[0] in "6789"
+        ) or (
+            len(digits) == 12 and digits.startswith("91") and digits[2] in "6789"
+        )
+        if not indian_mobile:
+            raise ValueError("Enter a valid 10-digit Indian mobile number")
+        if any(character not in "+0123456789 ()-" for character in normalized):
+            raise ValueError("Enter a valid contact number")
+        return normalized
+
+    @field_validator("starts_at")
+    @classmethod
+    def require_future_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Appointment time must include a timezone")
+        normalized = value.astimezone(UTC)
+        if normalized <= datetime.now(UTC):
+            raise ValueError("Appointment time must be in the future")
+        return normalized
 
 
 class ChartEntryIn(BaseModel):
@@ -754,6 +842,43 @@ async def doctor_logout(
     return {"ok": True}
 
 
+def _database_identity_verified(store) -> bool | None:
+    expected_hosts = {
+        value.strip().lower().rstrip(".")
+        for value in os.getenv("DENTAL_EXPECTED_DATABASE_HOSTS", "").split(",")
+        if value.strip()
+    }
+    expected_database = os.getenv("DENTAL_EXPECTED_DATABASE_NAME", "").strip()
+    if not expected_hosts or not expected_database:
+        return None
+
+    parsed = urlsplit(str(store.database_url or ""))
+    actual_host = (parsed.hostname or "").lower().rstrip(".")
+    actual_database = parsed.path.lstrip("/").split("?", 1)[0]
+    return bool(
+        store.backend == "postgres"
+        and actual_host in expected_hosts
+        and actual_database == expected_database
+    )
+
+
+def _database_branch_identity_verified(store) -> bool | None:
+    """Verify the live Neon branch independently of host/database identity."""
+    expected_branch_id = os.getenv("DENTAL_EXPECTED_NEON_BRANCH_ID", "").strip()
+    if not expected_branch_id:
+        return None
+    if store.backend != "postgres":
+        return False
+    try:
+        rows = store._execute(
+            "SELECT current_setting('neon.branch_id', true) AS branch_id"
+        )
+    except Exception:
+        return False
+    actual_branch_id = str(rows[0].get("branch_id") or "").strip() if rows else ""
+    return bool(actual_branch_id and actual_branch_id == expected_branch_id)
+
+
 @router.get("/health")
 async def dental_health():
     store = get_dental_store()
@@ -761,6 +886,10 @@ async def dental_health():
         "status": "ok",
         "service": "dental-api",
         "database": store.backend,
+        "database_ready": bool(store.healthcheck()),
+        "database_identity_verified": _database_identity_verified(store),
+        "database_branch_identity_verified": _database_branch_identity_verified(store),
+        "deployment_commit": os.getenv("RENDER_GIT_COMMIT") or None,
         "uie_configured": bool(os.getenv("UIE_API_URL") and os.getenv("UIE_API_KEY")),
     }
 
@@ -795,31 +924,165 @@ async def create_patient(
 
 @router.post("/public/appointments")
 async def create_public_appointment(body: PublicAppointmentIn, request: Request):
-    """Create a limited single-clinic guest request with per-IP burst protection.
+    """Create a privacy-minimised, idempotent guest request for the master clinic.
 
-    Public intake does not run AI, expose records, or accept actor/admin identity.
-    The current public form is for the configured master clinic; a multi-clinic
-    public booking directory needs a separate verified clinic-slug contract.
+    No patient account, clinical note, AI request, patient ID or appointment ID
+    is exposed. A public reference is a receipt only; it is not an access token.
     """
     _check_public_appointment_rate_limit(_public_appointment_client_ip(request))
+    if body.website.strip():
+        # Honeypot submissions receive a neutral response but never persist.
+        return {
+            "status": "received",
+            "message": "Your request has been received. The clinic team will contact you.",
+        }
+
     store = get_dental_store()
     master_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
-    patient = store.create_patient(
-        {"name": body.name.strip(), "phone": body.phone.strip(), "age": ""},
-        master_clinic,
+    phone_digits = "".join(character for character in body.phone if character.isdigit())
+    starts_at_utc = body.starts_at.astimezone(UTC).isoformat()
+    payload = {
+        "name": body.name,
+        "phone": phone_digits,
+        "starts_at": starts_at_utc,
+        "treatment_type": body.treatment_type,
+    }
+    payload_hash = _public_booking_hmac(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        "payload",
     )
-    appointment = store.create_appointment(
-        {
-            "patient_id": patient["id"],
-            "starts_at": body.starts_at.strip(),
-            "treatment_type": body.treatment_type.strip(),
-            "note": (body.note or "").strip(),
-            "status": "requested",
-        },
-        master_clinic,
-    )
-    store.audit("public-intake", "request", "appointment", appointment["id"], clinic_id=master_clinic)
-    return {"status": "requested", "appointment": appointment}
+    idempotency_hash = _public_booking_hmac(body.idempotency_key, "idempotency")
+    phone_hash = _public_booking_hmac(phone_digits, "phone")
+    now = datetime.now(UTC).isoformat()
+    public_reference = "ORL-" + secrets.token_hex(8).upper()
+
+    with store.transaction() as connection:
+        clinic_rows = store._execute(
+            "SELECT id FROM dental_clinics WHERE id=%s AND active=true"
+            if store.database_url
+            else "SELECT id FROM dental_clinics WHERE id=? AND active=1",
+            (master_clinic,),
+            connection=connection,
+        )
+        if not clinic_rows:
+            raise HTTPException(
+                503,
+                detail={
+                    "code": "PUBLIC_BOOKING_UNAVAILABLE",
+                    "message": "Online appointment requests are temporarily unavailable. Please call the clinic.",
+                },
+            )
+
+        inserted = store._execute(
+            "INSERT INTO dental_public_booking_requests("
+            "id,clinic_id,idempotency_key_hash,payload_hash,phone_hash,starts_at_utc,public_reference,created_at"
+            ") VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING id"
+            if store.database_url
+            else "INSERT INTO dental_public_booking_requests("
+            "id,clinic_id,idempotency_key_hash,payload_hash,phone_hash,starts_at_utc,public_reference,created_at"
+            ") VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
+            (
+                secrets.token_hex(16),
+                master_clinic,
+                idempotency_hash,
+                payload_hash,
+                phone_hash,
+                starts_at_utc,
+                public_reference,
+                now,
+            ),
+            connection=connection,
+        )
+        if not inserted:
+            existing_key = store._execute(
+                "SELECT payload_hash,public_reference,appointment_id "
+                "FROM dental_public_booking_requests WHERE clinic_id=%s AND idempotency_key_hash=%s"
+                if store.database_url
+                else "SELECT payload_hash,public_reference,appointment_id "
+                "FROM dental_public_booking_requests WHERE clinic_id=? AND idempotency_key_hash=?",
+                (master_clinic, idempotency_hash),
+                connection=connection,
+            )
+            if existing_key:
+                existing = existing_key[0]
+                if existing["payload_hash"] != payload_hash or not existing["appointment_id"]:
+                    raise HTTPException(
+                        409,
+                        detail={
+                            "code": "IDEMPOTENCY_KEY_REUSED",
+                            "message": "This request key was already used. Refresh the form before sending a changed request.",
+                        },
+                    )
+                return {
+                    "status": "already_received",
+                    "message": "This appointment request was already received. The clinic will contact you to confirm.",
+                    "reference": existing["public_reference"],
+                }
+
+            duplicate = store._execute(
+                "SELECT id FROM dental_public_booking_requests "
+                "WHERE clinic_id=%s AND phone_hash=%s AND starts_at_utc=%s"
+                if store.database_url
+                else "SELECT id FROM dental_public_booking_requests "
+                "WHERE clinic_id=? AND phone_hash=? AND starts_at_utc=?",
+                (master_clinic, phone_hash, starts_at_utc),
+                connection=connection,
+            )
+            if duplicate:
+                raise HTTPException(
+                    409,
+                    detail={
+                        "code": "DUPLICATE_APPOINTMENT_REQUEST",
+                        "message": "A request for this contact number and time was already received. Please choose another time or call the clinic.",
+                    },
+                )
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "BOOKING_REQUEST_CONFLICT",
+                    "message": "We could not safely confirm this request. Please refresh and try again.",
+                },
+            )
+
+        patient = store.create_patient(
+            {"name": body.name, "phone": body.phone, "age": ""},
+            master_clinic,
+            connection=connection,
+        )
+        appointment = store.create_appointment(
+            {
+                "patient_id": patient["id"],
+                "starts_at": starts_at_utc,
+                "treatment_type": body.treatment_type,
+                "note": "",
+                "status": "requested",
+            },
+            master_clinic,
+            connection=connection,
+        )
+        store._execute(
+            "UPDATE dental_public_booking_requests SET patient_id=%s,appointment_id=%s "
+            "WHERE clinic_id=%s AND idempotency_key_hash=%s"
+            if store.database_url
+            else "UPDATE dental_public_booking_requests SET patient_id=?,appointment_id=? "
+            "WHERE clinic_id=? AND idempotency_key_hash=?",
+            (patient["id"], appointment["id"], master_clinic, idempotency_hash),
+            connection=connection,
+        )
+        store.audit(
+            "public-intake",
+            "request",
+            "appointment",
+            appointment["id"],
+            clinic_id=master_clinic,
+            connection=connection,
+        )
+
+    return {
+        "status": "requested",
+        "message": "Your appointment request has been received. The clinic team will contact you to confirm.",
+        "reference": public_reference,
+    }
 
 
 @router.post("/scans/screen")

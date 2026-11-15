@@ -568,23 +568,6 @@ async def patient_link(
     }
 
 
-@router.post("/doctor/patients/{patient_id}/invite")
-async def create_patient_invite(
-    patient_id: str, actor: Annotated[dict, Depends(require_doctor)]
-):
-    clinic_id = actor["clinic_id"]
-    if not get_dental_store().get_patient(patient_id, clinic_id):
-        raise HTTPException(404, "Patient not found")
-    code = get_dental_store().create_patient_invite(patient_id, clinic_id)
-    return {
-        "result": {"patient_id": patient_id, "invite_code": code, "expires_in": 86400},
-        "confidence": 1.0,
-        "sources": [],
-        "disclaimers": [DISCLAIMER_DOCTOR],
-        "request_id": str(uuid.uuid4()),
-    }
-
-
 @router.post("/patient/consent")
 async def patient_consent(
     body: ConsentIn, actor: Annotated[dict, Depends(require_patient)]

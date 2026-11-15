@@ -94,6 +94,43 @@ def _private_target(host: str, port: int) -> tuple[int, int, int, tuple]:
     return targets[0]
 
 
+def verify_document_scanner_ready() -> dict[str, str]:
+    """Require a healthy private ClamAV daemon before issuing upload URLs."""
+    host, port, timeout = _configuration()
+    family, socktype, protocol, sockaddr = _private_target(host, port)
+    connection = None
+    try:
+        connection = socket.socket(family, socktype, protocol)
+        connection.settimeout(timeout)
+        connection.connect(sockaddr)
+        connection.sendall(b"zPING\0")
+
+        response = bytearray()
+        while len(response) < MAX_RESPONSE_BYTES:
+            chunk = connection.recv(min(256, MAX_RESPONSE_BYTES - len(response)))
+            if not chunk:
+                break
+            response.extend(chunk)
+            if b"\0" in response or b"\n" in response:
+                break
+
+        reply_bytes = bytes(response).split(b"\0", 1)[0].split(b"\n", 1)[0]
+        reply = reply_bytes.decode("utf-8", errors="replace").strip()
+        if reply != "PONG":
+            raise DocumentScannerUnavailable("ClamAV did not return a valid PONG readiness response.")
+        return {"engine": "clamav", "status": "ready"}
+    except DocumentScannerError:
+        raise
+    except (OSError, TimeoutError) as exc:
+        raise DocumentScannerUnavailable("Private document scanner is unavailable.") from exc
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+
 def scan_document_bytes(payload: bytes | bytearray | memoryview) -> dict[str, str]:
     """Scan one bounded document using ClamAV's INSTREAM protocol.
 

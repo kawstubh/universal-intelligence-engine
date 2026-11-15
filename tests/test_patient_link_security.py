@@ -18,6 +18,8 @@ def test_legacy_patient_account_and_link_routes_are_disabled_without_supabase_au
         ("GET", "/v1/dental/patient/linked-records", None),
         ("GET", "/v1/dental/patient/invoices", None),
         ("GET", "/v1/dental/patient/clinical-notes", None),
+        ("GET", "/v1/dental/patient/documents", None),
+        ("POST", "/v1/dental/patient/documents/legacy-document/download-intent", None),
     ]
     for method, path, payload in cases:
         response = client.request(method, path, json=payload)

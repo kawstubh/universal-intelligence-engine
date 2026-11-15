@@ -1,8 +1,11 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine import dental_api
+from datetime import UTC, datetime, timedelta
+
+from universal_intelligence_engine import dental_api, dental_store
 from universal_intelligence_engine.dental_api import router
+from universal_intelligence_engine.dental_store import DentalStore
 
 app = FastAPI()
 app.include_router(router)
@@ -18,6 +21,86 @@ def test_dental_health_is_public(monkeypatch):
     response = client.get("/v1/dental/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert response.json()["database_ready"] is True
+    assert response.json()["database_identity_verified"] is None
+    assert response.json()["database_branch_identity_verified"] is None
+    assert response.json()["deployment_commit"] is None
+
+
+def test_dental_health_verifies_exact_neon_database_host_and_name(monkeypatch):
+    class FakeStore:
+        backend = "postgres"
+        database_url = (
+            "postgresql://synthetic:unused@ep-dawn-surf-a10oudjf-c80."
+            "ap-southeast-1.aws.neon.tech/oralyn_staging?sslmode=require"
+        )
+
+        def healthcheck(self):
+            return True
+
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setenv(
+        "DENTAL_EXPECTED_DATABASE_HOSTS",
+        "ep-dawn-surf-a10oudjf-c80.ap-southeast-1.aws.neon.tech,"
+        "ep-dawn-surf-a10oudjf-c80-pooler.ap-southeast-1.aws.neon.tech",
+    )
+    monkeypatch.setenv("DENTAL_EXPECTED_DATABASE_NAME", "oralyn_staging")
+    response = TestClient(app).get("/v1/dental/health")
+    assert response.status_code == 200
+    assert response.json()["database_identity_verified"] is True
+
+
+def test_dental_health_verifies_exact_neon_branch(monkeypatch):
+    class FakeStore:
+        backend = "postgres"
+        database_url = "postgresql://synthetic:unused@ep-crimson-flower-a1q8qd6k.ap-southeast-1.aws.neon.tech/oralyn_staging"
+
+        def healthcheck(self):
+            return True
+
+        def _execute(self, sql, params=(), connection=None):
+            assert sql == "SELECT current_setting('neon.branch_id', true) AS branch_id"
+            return [{"branch_id": "br-steep-bonus-a1yqarg7"}]
+
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setenv("DENTAL_EXPECTED_NEON_BRANCH_ID", "br-steep-bonus-a1yqarg7")
+    response = TestClient(app).get("/v1/dental/health")
+    assert response.status_code == 200
+    assert response.json()["database_branch_identity_verified"] is True
+
+
+def test_dental_health_fails_closed_on_wrong_neon_branch(monkeypatch):
+    class FakeStore:
+        backend = "postgres"
+        database_url = "postgresql://synthetic:unused@ep-dawn-surf-a10oudjf.ap-southeast-1.aws.neon.tech/oralyn_staging"
+
+        def healthcheck(self):
+            return True
+
+        def _execute(self, sql, params=(), connection=None):
+            return [{"branch_id": "br-proud-scene-a1g7g3qo"}]
+
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setenv("DENTAL_EXPECTED_NEON_BRANCH_ID", "br-steep-bonus-a1yqarg7")
+    response = TestClient(app).get("/v1/dental/health")
+    assert response.status_code == 200
+    assert response.json()["database_branch_identity_verified"] is False
+
+
+def test_dental_health_fails_identity_check_on_wrong_host_or_database(monkeypatch):
+    class FakeStore:
+        backend = "postgres"
+        database_url = "postgresql://synthetic:unused@wrong.example/other"
+
+        def healthcheck(self):
+            return True
+
+    monkeypatch.setattr(dental_api, "get_dental_store", lambda: FakeStore())
+    monkeypatch.setenv("DENTAL_EXPECTED_DATABASE_HOSTS", "ep-dawn-surf-a10oudjf.ap-southeast-1.aws.neon.tech")
+    monkeypatch.setenv("DENTAL_EXPECTED_DATABASE_NAME", "oralyn_staging")
+    response = TestClient(app).get("/v1/dental/health")
+    assert response.status_code == 200
+    assert response.json()["database_identity_verified"] is False
 
 
 def test_chart_tooth_validation(monkeypatch):
@@ -34,24 +117,43 @@ def test_chart_tooth_validation(monkeypatch):
 
 def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp_path):
     monkeypatch.setenv("DENTAL_SQLITE_PATH", str(tmp_path / "dental.sqlite3"))
-    dental_api._store = None
+    monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
+    monkeypatch.setenv("DENTAL_MASTER_CLINIC_ID", "clinic-public-test")
+    monkeypatch.setenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", "synthetic-public-booking-hash-key-32-bytes-minimum")
+    monkeypatch.setattr(dental_store, "_store", None)
+    store = DentalStore()
+    store.create_organisation(
+        {"id": "org-public-test", "name": "Synthetic Clinic", "organisation_type": "clinic"}
+    )
+    store.create_clinic(
+        {
+            "id": "clinic-public-test",
+            "organisation_id": "org-public-test",
+            "name": "Synthetic Clinic",
+            "clinic_type": "clinic",
+        }
+    )
     client = TestClient(app)
+    starts_at = (datetime.now(UTC) + timedelta(days=7)).isoformat()
     response = client.post(
         "/v1/dental/public/appointments",
         json={
+            "idempotency_key": "dental-api-public-key-0001",
             "name": "Test Patient",
             "phone": "9876543210",
-            "starts_at": "2026-10-06 10:00 AM",
-            "treatment_type": "Dental Check-up",
-            "note": None,
+            "starts_at": starts_at,
+            "treatment_type": "Dental Check-up & Consultation",
             "intelligence_request": False,
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "requested"
-    assert body["appointment"]["status"] == "requested"
-    assert body["appointment"]["treatment_type"] == "Dental Check-up"
+    assert body["reference"].startswith("ORL-")
+    assert "appointment" not in body
+    assert "patient_id" not in body
+    assert store._execute("SELECT COUNT(*) AS n FROM dental_patients")[0]["n"] == 1
+    assert store._execute("SELECT COUNT(*) AS n FROM dental_appointments")[0]["n"] == 1
 
 
 def test_intelligence_denies_cross_clinic_patient(monkeypatch):
