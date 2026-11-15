@@ -94,8 +94,17 @@ def _storage_config() -> dict:
                 "message": "A tested server-side cleanup process for expired pending uploads is required before document storage can be enabled.",
             },
         )
-    upload_ttl = int(os.getenv("DENTAL_DOCUMENTS_UPLOAD_TTL_SECONDS", "300"))
-    download_ttl = int(os.getenv("DENTAL_DOCUMENTS_DOWNLOAD_TTL_SECONDS", "120"))
+    try:
+        upload_ttl = int(os.getenv("DENTAL_DOCUMENTS_UPLOAD_TTL_SECONDS", "300"))
+        download_ttl = int(os.getenv("DENTAL_DOCUMENTS_DOWNLOAD_TTL_SECONDS", "120"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "DOCUMENT_STORAGE_CONFIG_INVALID",
+                "message": "Document URL lifetime must be a valid integer.",
+            },
+        ) from exc
     if not 60 <= upload_ttl <= 600 or not 30 <= download_ttl <= 300:
         raise HTTPException(
             503,
