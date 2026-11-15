@@ -343,8 +343,15 @@ def _scan_document_or_raise(payload: bytes, store, actor: dict, document_id: str
                 document_id,
                 actor["clinic_id"],
             )
-        except Exception:
+        except Exception as audit_exc:
             logger.exception("Could not record a blocked document malware scan")
+            raise HTTPException(
+                503,
+                detail={
+                    "code": "DOCUMENT_MALWARE_AUDIT_UNAVAILABLE",
+                    "message": "The malware detection could not be recorded; the uploaded document was rejected.",
+                },
+            ) from audit_exc
         raise HTTPException(
             409,
             detail={
