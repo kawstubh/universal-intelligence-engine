@@ -103,7 +103,7 @@ def verify_document_scanner_ready() -> dict[str, str]:
         connection = socket.socket(family, socktype, protocol)
         connection.settimeout(timeout)
         connection.connect(sockaddr)
-        connection.sendall(b"zPING\\0")
+        connection.sendall(b"zPING\0")
 
         response = bytearray()
         while len(response) < MAX_RESPONSE_BYTES:
@@ -111,10 +111,10 @@ def verify_document_scanner_ready() -> dict[str, str]:
             if not chunk:
                 break
             response.extend(chunk)
-            if b"\\0" in response or b"\\n" in response:
+            if b"\0" in response or b"\n" in response:
                 break
 
-        reply_bytes = bytes(response).split(b"\\0", 1)[0].split(b"\\n", 1)[0]
+        reply_bytes = bytes(response).split(b"\0", 1)[0].split(b"\n", 1)[0]
         reply = reply_bytes.decode("utf-8", errors="replace").strip()
         if reply != "PONG":
             raise DocumentScannerUnavailable("ClamAV did not return a valid PONG readiness response.")

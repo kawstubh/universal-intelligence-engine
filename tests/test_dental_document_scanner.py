@@ -58,13 +58,13 @@ def _configure_private_scanner(monkeypatch, fake_socket: FakeScannerSocket):
 
 
 def test_scanner_readiness_requires_a_private_clamav_ping(monkeypatch):
-    fake_socket = FakeScannerSocket(b"PONG\\0")
+    fake_socket = FakeScannerSocket(b"PONG\0")
     connected = _configure_private_scanner(monkeypatch, fake_socket)
 
     result = scanner.verify_document_scanner_ready()
 
     assert result == {"engine": "clamav", "status": "ready"}
-    assert bytes(fake_socket.sent) == b"zPING\\0"
+    assert bytes(fake_socket.sent) == b"zPING\0"
     assert connected["socket_args"] == (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
     assert fake_socket.address == ("10.20.30.40", 3310)
     assert fake_socket.timeout == 20
@@ -72,7 +72,7 @@ def test_scanner_readiness_requires_a_private_clamav_ping(monkeypatch):
 
 
 def test_scanner_readiness_rejects_anything_other_than_pong(monkeypatch):
-    fake_socket = FakeScannerSocket(b"not-ready\\0")
+    fake_socket = FakeScannerSocket(b"not-ready\0")
     _configure_private_scanner(monkeypatch, fake_socket)
 
     with pytest.raises(scanner.DocumentScannerUnavailable):
