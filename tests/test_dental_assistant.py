@@ -791,3 +791,31 @@ def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(a
     )
     assert doctor_row["status"] == "requested"
     assert doctor_row["patient_phone"] == "9876543210"
+
+def test_doctor_login_rate_limit_falls_back_for_missing_or_malformed_forwarded_ip(assistant_api):
+    """Untrusted/malformed forwarding values share the connection-peer bucket."""
+    client = assistant_api["client"]
+    dental_auth._LOGIN_ATTEMPTS.clear()
+    path = "/v1/dental/auth/password/login"
+    payload = {"email": "missing@example.test", "password": "not-the-password"}
+
+    try:
+        for attempt in range(10):
+            headers = (
+                {"CF-Connecting-IP": "not-an-ip"}
+                if attempt % 2 == 0
+                else {}
+            )
+            response = client.post(path, headers=headers, json=payload)
+            assert response.status_code == 401
+
+        blocked = client.post(
+            path,
+            headers={"CF-Connecting-IP": "still-not-an-ip"},
+            json=payload,
+        )
+        assert blocked.status_code == 429
+        assert blocked.headers["retry-after"]
+        assert len(dental_auth._LOGIN_ATTEMPTS) == 1
+    finally:
+        dental_auth._LOGIN_ATTEMPTS.clear()
