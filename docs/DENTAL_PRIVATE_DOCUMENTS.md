@@ -10,7 +10,7 @@ Clinical documents are private to the authenticated Doctor workspace. Patient-sp
 
 Document bytes are uploaded directly from the authorised Doctor client to a **private S3-compatible object-storage bucket** using a short-lived presigned PUT URL. The FastAPI service stores metadata in PostgreSQL and never writes files to the Render filesystem.
 
-Before an upload intent is created, the backend requires the configured private ClamAV service to answer a `PING`/`PONG` readiness probe. If the scanner is missing, unsafe, or unavailable, the request returns HTTP 503 before creating a document row or issuing a presigned PUT URL. This readiness check is not malware clearance: finalization still scans the exact uploaded bytes with ClamAV `INSTREAM` and requires a clean result plus an audit record before publishing a verified object.
+Before an upload intent is created, the backend requires the configured private ClamAV service to answer a `PING`/`PONG` readiness probe. If the scanner is missing, unsafe, or unavailable, the request returns HTTP 503 before creating a document row or issuing a presigned PUT URL. The probe sends the NUL-terminated ClamAV `zPING` command and requires an exact `PONG` response. This readiness check is not malware clearance: finalization still scans the exact uploaded bytes with ClamAV `INSTREAM` and requires a clean result plus an audit record before publishing a verified object.
 
 The backend verifies the object before marking it available:
 
