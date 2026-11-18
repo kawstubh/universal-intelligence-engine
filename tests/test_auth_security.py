@@ -5,20 +5,38 @@ from universal_intelligence_engine.api import app
 PUBLIC_PATHS = {
     "/v1/dental/health",
     "/v1/dental/auth/password/login",
+    "/v1/dental/assistant/auth/login",
     "/v1/dental/public/appointments",
     "/v1/dental/billing/plans",
     "/v1/dental/billing/razorpay/webhook",
 }
+PATIENT_PATH_PREFIX = "/v1/dental/ai/patient/"
+PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
+ASSISTANT_PATH_PREFIX = "/v1/dental/assistant/"
+DISABLED_PATIENT_AI = {
+    "/v1/dental/ai/patient/chat",
+    "/v1/dental/ai/patient/triage",
+    "/v1/dental/ai/patient/treatment-explanation",
+    "/v1/dental/ai/patient/aftercare",
+    "/v1/dental/ai/patient/consent",
+    "/v1/dental/ai/patient/history",
+}
 
 
 def _is_patient_ai_route(path: str) -> bool:
-    # Patient-facing AI is deliberately disabled and separately tested.
-    return path.startswith("/v1/dental/ai/patient/")
+    # The entire patient-account and linked-record surface is disabled.
+    return (
+        path.rstrip("/") in DISABLED_PATIENT_AI
+        or path.startswith((PATIENT_PATH_PREFIX, PATIENT_DATA_PATH_PREFIX))
+    )
 
 
 def _sample_path(path: str) -> str:
-    return path.replace("{appointment_id}", "missing-appointment").replace(
-        "{patient_id}", "missing-patient"
+    return (
+        path.replace("{appointment_id}", "missing-appointment")
+        .replace("{patient_id}", "missing-patient")
+        .replace("{assistant_id}", "missing-assistant")
+        .replace("{invoice_id}", "missing-invoice")
     )
 
 
@@ -31,10 +49,14 @@ def test_no_demo_or_otp_release_auth_symbols():
     assert not hasattr(auth, "request_otp")
     assert not hasattr(auth, "verify_otp")
     assert not hasattr(auth, "login_google")
+    assert not any(
+        getattr(route, "path", "") == "/v1/dental/auth/google"
+        for route in app.routes
+    )
     assert "otp/request" not in api.__dict__.get("router").routes.__repr__().lower()
 
 
-def test_protected_dental_routes_require_auth_dependency():
+def test_protected_dental_routes_require_the_correct_auth_dependency():
     for route in app.routes:
         path = getattr(route, "path", "")
         if not path.startswith("/v1/dental/"):
@@ -45,7 +67,12 @@ def test_protected_dental_routes_require_auth_dependency():
             getattr(dep.call, "__name__", "")
             for dep in getattr(route, "dependant", None).dependencies
         }
-        assert "require_doctor" in dependency_calls, f"missing auth on {path}"
+        if path.startswith(ASSISTANT_PATH_PREFIX):
+            assert "require_assistant" in dependency_calls, f"missing assistant auth on {path}"
+        elif path.startswith((PATIENT_PATH_PREFIX, PATIENT_DATA_PATH_PREFIX)):
+            assert "require_patient" in dependency_calls, f"missing patient auth on {path}"
+        else:
+            assert "require_doctor" in dependency_calls, f"missing doctor auth on {path}"
 
 
 def test_protected_dental_requests_return_401_without_bearer():
@@ -66,6 +93,29 @@ def test_protected_dental_requests_return_401_without_bearer():
             response.status_code,
             response.text,
         )
+
+
+
+def test_patient_account_and_linked_record_routes_are_disabled_and_hidden_from_openapi():
+    client = TestClient(app)
+    disabled = [
+        ("GET", "/v1/dental/patient/linked-records"),
+        ("POST", "/v1/dental/patient/link"),
+        ("GET", "/v1/dental/patient/appointments"),
+        ("GET", "/v1/dental/ai/patient/profile"),
+        ("POST", "/v1/dental/ai/patient/link"),
+        ("POST", "/v1/dental/ai/patient/consent"),
+    ]
+    for method, path in disabled:
+        response = client.request(method, path, json={} if method == "POST" else None)
+        assert response.status_code == 404, (method, path, response.status_code, response.text)
+        assert response.json()["detail"]["code"] == "PATIENT_ACCOUNT_FREE"
+
+    schema = client.get("/openapi.json").json()
+    assert not any(
+        path.startswith(("/v1/dental/patient/", "/v1/dental/ai/patient/"))
+        for path in schema.get("paths", {})
+    )
 
 
 def test_demo_bearer_never_authenticates(monkeypatch):

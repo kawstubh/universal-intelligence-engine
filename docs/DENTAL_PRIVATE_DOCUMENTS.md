@@ -1,0 +1,110 @@
+# Doctor-only private dental document storage
+
+## Product boundary
+
+The Oralyn patient journey is public and account-free. It has no patient accounts, password, OTP, signup/login, Supabase patient authentication, linked-record access, or patient document downloads.
+
+Clinical documents are private to the authenticated Doctor workspace. Patient-specific no-login sharing is deferred until a separate design uses random, scoped, expiring and revocable links with server authorization and audit logging. A public booking reference is never a document-access token.
+
+## Architecture
+
+Document bytes are uploaded directly from the authorised Doctor client to a **private S3-compatible object-storage bucket** using a short-lived presigned PUT URL. The FastAPI service stores metadata in PostgreSQL and never writes files to the Render filesystem.
+
+Before an upload intent is created, the backend requires the configured private ClamAV service to answer a `PING`/`PONG` readiness probe. If the scanner is missing, unsafe, or unavailable, the request returns HTTP 503 before creating a document row or issuing a presigned PUT URL. The probe sends the NUL-terminated ClamAV `zPING` command and requires an exact `PONG` response. This readiness check is not malware clearance: finalization still scans the exact uploaded bytes with ClamAV `INSTREAM` and requires a clean result plus an audit record before publishing a verified object.
+
+The backend verifies the object before marking it available:
+
+1. The Doctor creates an upload intent for a patient in the active workspace.
+2. The server generates a tenant-scoped object key and presigned PUT URL.
+3. The client uploads with the exact signed `Content-Type` and `x-amz-meta-sha256` headers.
+4. The Doctor completes the upload.
+5. The server checks size, content type and declared metadata, atomically claims the pending upload, then streams the object in bounded chunks while verifying the actual SHA-256 checksum.
+6. The server checks the file signature against the declared PDF/JPEG/PNG/WebP media type.
+7. The server scans the verified bytes with private ClamAV using the bounded `INSTREAM` protocol.
+8. Only a clean scan may be copied to a separate `verified/` object key. The server confirms final size, content type and checksum metadata before storing that final key.
+9. The pending/quarantine object is deleted best-effort. Doctor downloads always use the separate verified key, so replay of the original upload URL cannot mutate a published document.
+10. A Doctor may record an internal clinical review with Doctor ID and timestamp. This is not a patient-sharing permission.
+
+No public bucket, permanent public URL, patient document endpoint or patient download-intent route is mounted. No patient AI or document interpretation is performed.
+
+## Tenant isolation
+
+Quarantine upload keys use:
+
+`pending/organisations/{organisation_id}/clinics/{clinic_id}/patients/{patient_id}/{document_id}/{safe_file_name}`
+
+Verified download keys use a separate prefix:
+
+`verified/organisations/{organisation_id}/clinics/{clinic_id}/patients/{patient_id}/{document_id}/{safe_file_name}`
+
+The upload key is never used for downloads. The application derives organisation and clinic IDs from the authenticated Doctor workspace; the client cannot choose another clinic. The database status transition (`pending_upload` → `verifying` → `available`) is claimed atomically so only one completion request can publish a verified object.
+
+## Limits and supported files
+
+- Maximum file size: 10 MiB.
+- Accepted media types: PDF, JPEG, PNG and WebP, with server-side signature validation.
+- Upload URL lifetime: default 300 seconds, allowed 60–600.
+- Doctor download URL lifetime: default 120 seconds, allowed 30–300.
+- No local filesystem fallback.
+- Malware scanning is mandatory; signature/checksum validation and Doctor review are not substitutes for antivirus.
+- Upload-intent creation requires a successful private ClamAV PING/PONG readiness check; missing, unsafe or unavailable scanner configuration returns HTTP 503 before a pending row or presigned PUT URL is created.
+- Finalization performs a fresh bounded INSTREAM scan of the verified bytes and requires a clean result plus audit record. Missing/unavailable scanner or audit fails closed with HTTP 503; a malware finding returns HTTP 409. No unscanned object can become available.
+- Patient sharing and patient download URLs are disabled.
+
+## Required staging configuration
+
+Configure only on the isolated synthetic staging backend:
+
+- `DENTAL_DOCUMENTS_S3_ENDPOINT`: HTTPS S3-compatible endpoint.
+- `DENTAL_DOCUMENTS_S3_REGION`: storage region.
+- `DENTAL_DOCUMENTS_S3_BUCKET`: dedicated private bucket.
+- `DENTAL_DOCUMENTS_S3_ACCESS_KEY_ID` and `DENTAL_DOCUMENTS_S3_SECRET_ACCESS_KEY`: dedicated staging credential; never commit, log or paste it into chat.
+- `DENTAL_DOCUMENTS_STORAGE_PRIVATE=true`: set only after independently verifying the bucket is private.
+- Optional upload/download TTL settings.
+
+### Current isolated staging bucket
+
+- Neon project: `silent-king-54610898`.
+- Branch: `br-steep-bonus-a1yqarg7`.
+- Private bucket: `oralyn-private-documents`, created 13 November 2026.
+- The bucket is empty. A branch-scoped Neon object-storage credential with storage:read and storage:write scopes exists; its secret was not retrieved and it has not been installed in Render. The restored default branch has no corresponding bucket. Uploads remain disabled.
+- Neon Free includes up to 5 GB of object storage per project; keep this synthetic-only and within the included allowance.
+
+Neon storage credentials are branch-scoped, not bucket/prefix-scoped. The `storage:write` scope includes object reads/writes, object deletion and bucket creation. Keep the staging branch/project isolated with only this dedicated private bucket. Do not reuse its credential in production or across unrelated buckets. If production requires bucket/prefix-scoped credentials, use a provider that supports those scopes or a separate isolated storage project.
+
+**Neon Object Storage lifecycle rules are not currently enforced. The backend includes a bounded server-side cleanup command in module universal_intelligence_engine.dental_document_cleanup. It selects only rows whose verified object key is null, whose quarantine upload key is present, whose status is pending_upload, verifying or rejected, and whose last update is at least 24 hours old. It atomically rejects stale pending/verifying rows, then deletes only an object key matching the exact pending/organisations/{organisation}/clinics/{clinic}/patients/{patient}/{document}/filename path. It never deletes a verified/ key. The database quarantine key is cleared only after object deletion succeeds; failed deletions release their lease and remain retryable. Each worker atomically claims rows with a random token and a four-hour expiry; active leases are excluded from other workers, and stale leases can be reclaimed after a crashed worker. Logs contain aggregate counts and a short key fingerprint, never patient names, phone numbers or object keys.
+
+The command defaults to a read-only dry run. It requires DENTAL_DOCUMENTS_CLEANUP_ENABLED=true, private storage configuration and an explicit --apply flag before deleting anything. Run python -m universal_intelligence_engine.dental_document_cleanup for a dry run, then python -m universal_intelligence_engine.dental_document_cleanup --apply only after reviewing the synthetic staging result. The minimum cleanup age is 24 hours and each run is capped at 500 objects.
+
+The cleanup command uses a durable database lease to prevent overlapping workers from deleting the same quarantine object. CI includes a two-worker concurrency regression and stale-lease recovery test. The command is implemented and unit-tested, but no persistent Render Cron job is provisioned or independently verified yet. Before setting DENTAL_DOCUMENTS_LIFECYCLE_CLEANUP_VERIFIED=true, deploy a dedicated synthetic-only scheduled job with the same database and private-bucket environment, run both dry-run and apply against disposable synthetic pending uploads, verify failed-delete retry and prove that verified objects are untouched. Until the schedule and its runtime are verified, keep the attestation false and uploads disabled.
+
+When storage configuration is absent or private-bucket attestation is false, Doctor upload/download-intent endpoints return `503 DOCUMENT_STORAGE_NOT_CONFIGURED`. When lifecycle cleanup has not been independently verified, they return `503 DOCUMENT_STORAGE_LIFECYCLE_NOT_VERIFIED`. The application never falls back to Render's ephemeral filesystem.
+
+## Mandatory private ClamAV scanning
+
+Configure only after a dedicated scanner is reachable on the backend's private network:
+
+- `DENTAL_DOCUMENT_SCANNER_HOST`: internal hostname or private IP.
+- `DENTAL_DOCUMENT_SCANNER_PORT=3310`.
+- `DENTAL_DOCUMENT_SCANNER_TIMEOUT_SECONDS=20` (allowed range 1–60).
+- `DENTAL_DOCUMENT_SCANNER_PRIVATE=true`: explicit private-network attestation.
+
+The backend resolves the scanner host and rejects public, multicast, unspecified and link-local addresses before connecting to the resolved private address. It sends no file bytes to a public scanning vendor. Set ClamAV `StreamMaxLength` to at least 10 MiB, keep virus definitions current, and monitor scanner freshness and availability.
+
+The CI suite includes an isolated official ClamAV 1.5.4 service and tests a clean payload plus the EICAR test signature. This verifies the application protocol against a real scanner in CI; it does **not** provision or attest a staging or production scanner.
+
+No ClamAV service is currently provisioned in Render staging. The upload pipeline remains fail-closed until a private scanner is independently deployed and verified.
+
+## Doctor API
+
+- `POST /v1/dental/doctor/patients/{patient_id}/documents/upload-intent`
+- `POST /v1/dental/doctor/documents/{document_id}/complete`
+- `GET /v1/dental/doctor/patients/{patient_id}/documents`
+- `POST /v1/dental/doctor/documents/{document_id}/review` (internal clinical review)
+- `POST /v1/dental/doctor/documents/{document_id}/download-intent`
+
+There are no `/v1/dental/patient/documents` routes. The Doctor visibility/share route is not mounted. Patient sharing requires a future scoped, expiring and revocable-link design and separate release approval.
+
+## Migration and rollback
+
+Alembic revision `0009_private_dental_documents` follows `0008_patient_billing_plans`. Revision `0011_document_clinical_review` follows `0010_clinical_notes_messaging` and adds nullable review-provenance columns. Revision `0014_document_quarantine_cleanup` follows `0013_public_booking_idempotency` and makes only `upload_object_key` nullable so a successfully deleted quarantine key can be cleared without changing verified document metadata. Revision `0015_document_cleanup_leases` adds nullable claim-token and claim-time fields plus a lease lookup index; its forward-only migration preserves existing documents. Existing metadata is preserved. Patient visibility fields remain inert for compatibility and are not exposed through a patient API. Downgrades are intentionally no-ops to avoid deleting clinical document history during application rollback.

@@ -523,7 +523,21 @@ async def _patient_record(
                 },
             )
         return row
-    return store.patient_by_user_id(actor["user_id"])
+    list_linked = getattr(store, "patients_by_user_id", None)
+    if list_linked is None:
+        return store.patient_by_user_id(actor["user_id"])
+    linked = list_linked(actor["user_id"])
+    if len(linked) > 1:
+        raise HTTPException(
+            409,
+            detail={
+                "message": "Choose the clinic record you want to view.",
+                "code": "PATIENT_RECORD_SELECTION_REQUIRED",
+            },
+        )
+    if linked:
+        return store.patient_by_user_id(actor["user_id"], linked[0]["patient_id"])
+    return None
 
 
 @router.post("/patient/link")
@@ -550,23 +564,6 @@ async def patient_link(
         "confidence": 1.0,
         "sources": [],
         "disclaimers": [DISCLAIMER_PATIENT],
-        "request_id": str(uuid.uuid4()),
-    }
-
-
-@router.post("/doctor/patients/{patient_id}/invite")
-async def create_patient_invite(
-    patient_id: str, actor: Annotated[dict, Depends(require_doctor)]
-):
-    clinic_id = actor["clinic_id"]
-    if not get_dental_store().get_patient(patient_id, clinic_id):
-        raise HTTPException(404, "Patient not found")
-    code = get_dental_store().create_patient_invite(patient_id, clinic_id)
-    return {
-        "result": {"patient_id": patient_id, "invite_code": code, "expires_in": 86400},
-        "confidence": 1.0,
-        "sources": [],
-        "disclaimers": [DISCLAIMER_DOCTOR],
         "request_id": str(uuid.uuid4()),
     }
 
@@ -803,9 +800,34 @@ async def patient_delete_history(actor: Annotated[dict, Depends(require_patient)
     }
 
 
+@router.get("/patient/profile")
+async def patient_profile(
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = await _patient_record(actor, patient_id)
+    safe_patient = None
+    if patient:
+        safe_patient = {
+            "id": str(patient["id"]),
+            "name": str(patient.get("name") or "Patient"),
+            "clinic_id": str(patient["clinic_id"]),
+        }
+    return {
+        "result": {"linked": bool(patient), "patient": safe_patient},
+        "confidence": 1.0,
+        "sources": [],
+        "disclaimers": [DISCLAIMER_PATIENT],
+        "request_id": str(uuid.uuid4()),
+    }
+
+
 @router.get("/patient/appointments")
-async def patient_appointments(actor: Annotated[dict, Depends(require_patient)]):
-    patient = await _patient_record(actor)
+async def patient_appointments(
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = await _patient_record(actor, patient_id)
     if not patient:
         return {
             "result": [],
@@ -834,8 +856,11 @@ async def patient_appointments(actor: Annotated[dict, Depends(require_patient)])
 
 
 @router.get("/patient/chart")
-async def patient_chart(actor: Annotated[dict, Depends(require_patient)]):
-    patient = await _patient_record(actor)
+async def patient_chart(
+    actor: Annotated[dict, Depends(require_patient)],
+    patient_id: str | None = None,
+):
+    patient = await _patient_record(actor, patient_id)
     if not patient:
         return {
             "result": [],

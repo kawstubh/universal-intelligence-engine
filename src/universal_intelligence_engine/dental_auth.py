@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 import time
@@ -23,6 +24,9 @@ _SCRYPT_N = 2**14
 _SCRYPT_R = 8
 _SCRYPT_P = 1
 _LOGIN_ATTEMPTS: dict[str, deque[float]] = defaultdict(deque)
+_LOGIN_WINDOW_SECONDS = 300
+_LOGIN_MAX_ATTEMPTS = 10
+_LOGIN_MAX_CLIENTS = 10_000
 
 
 def _hash(value: str) -> str:
@@ -153,24 +157,76 @@ def _bootstrap_admin() -> None:
         )
 
 
+def _login_client_ip(request: Request) -> str:
+    """Return Render's Cloudflare-validated client IP for per-client login limits.
+
+    Render routes public web-service traffic through Cloudflare, which supplies
+    CF-Connecting-IP. Validate the value before using it; fall back to the
+    connection peer when the header is absent or malformed.
+    """
+    forwarded = str(request.headers.get("cf-connecting-ip") or "").strip()
+    if forwarded:
+        try:
+            return str(ipaddress.ip_address(forwarded))
+        except ValueError:
+            pass
+    return str(request.client.host if request.client else "unknown")
+
+
 def _check_login_rate_limit(ip: str) -> None:
+    key = (ip or "unknown").strip()[:128] or "unknown"
     now = time.monotonic()
-    attempts = _LOGIN_ATTEMPTS[ip]
-    while attempts and now - attempts[0] > 300:
-        attempts.popleft()
-    if len(attempts) >= 10:
+    attempts = _LOGIN_ATTEMPTS.get(key)
+    if attempts is not None:
+        while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
+            attempts.popleft()
+        if not attempts:
+            _LOGIN_ATTEMPTS.pop(key, None)
+            attempts = None
+
+    # Bound memory if clients rotate source IPs. This process-local guard is
+    # suitable only for the current single-instance staging service; production
+    # horizontal scaling still requires a shared limiter or trusted edge policy.
+    if attempts is None:
+        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
+            cutoff = now - _LOGIN_WINDOW_SECONDS
+            for stale_key, stale_attempts in list(_LOGIN_ATTEMPTS.items()):
+                while stale_attempts and stale_attempts[0] <= cutoff:
+                    stale_attempts.popleft()
+                if not stale_attempts:
+                    _LOGIN_ATTEMPTS.pop(stale_key, None)
+                if len(_LOGIN_ATTEMPTS) < _LOGIN_MAX_CLIENTS:
+                    break
+        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
+            raise HTTPException(
+                503,
+                detail={
+                    "code": "LOGIN_RATE_LIMIT_CAPACITY",
+                    "message": "Sign-in is temporarily busy. Please try again shortly.",
+                },
+                headers={"Retry-After": str(_LOGIN_WINDOW_SECONDS)},
+            )
+        attempts = deque()
+        _LOGIN_ATTEMPTS[key] = attempts
+
+    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+        retry_after = max(
+            1,
+            int(_LOGIN_WINDOW_SECONDS - (now - attempts[0])),
+        )
         raise HTTPException(
             429,
             detail={
                 "code": "LOGIN_RATE_LIMITED",
                 "message": "Too many login attempts; try again in five minutes",
             },
+            headers={"Retry-After": str(retry_after)},
         )
     attempts.append(now)
 
 
 async def login_password(email: str, password: str, request: Request) -> dict:
-    _check_login_rate_limit(request.client.host if request.client else "unknown")
+    _check_login_rate_limit(_login_client_ip(request))
     _bootstrap_admin()
     normalized_email = email.strip().lower()
     store = get_dental_store()
@@ -257,6 +313,34 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
         or int(float(row["expires_at"])) < int(time.time())
         or row.get("revoked")
     ):
+        # A valid Clinic Assistant session is deliberately not a Doctor session.
+        assistant_rows = store._execute(
+            "SELECT s.expires_at,s.revoked,a.active,c.active AS clinic_active "
+            "FROM dental_assistant_sessions s "
+            "JOIN dental_clinic_assistants a ON a.id=s.assistant_id AND a.clinic_id=s.clinic_id "
+            "JOIN dental_clinics c ON c.id=s.clinic_id WHERE s.token_hash=%s"
+            if store.database_url
+            else "SELECT s.expires_at,s.revoked,a.active,c.active AS clinic_active "
+            "FROM dental_assistant_sessions s "
+            "JOIN dental_clinic_assistants a ON a.id=s.assistant_id AND a.clinic_id=s.clinic_id "
+            "JOIN dental_clinics c ON c.id=s.clinic_id WHERE s.token_hash=?",
+            (_hash(token),),
+        )
+        if assistant_rows:
+            assistant_session = assistant_rows[0]
+            if (
+                not assistant_session["revoked"]
+                and assistant_session["active"]
+                and assistant_session["clinic_active"]
+                and int(assistant_session["expires_at"]) >= int(time.time())
+            ):
+                raise HTTPException(
+                    403,
+                    detail={
+                        "code": "DOCTOR_ROLE_REQUIRED",
+                        "message": "Clinic Assistant access cannot be used for Doctor operations",
+                    },
+                )
         raise HTTPException(
             401,
             detail={
