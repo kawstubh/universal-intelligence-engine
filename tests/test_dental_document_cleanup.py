@@ -3,12 +3,14 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 from fastapi import HTTPException
 
 from universal_intelligence_engine import dental_documents
 from universal_intelligence_engine.dental_document_cleanup import (
+    CLEANUP_CLAIM_LEASE_MINUTES,
     cleanup_expired_pending_uploads,
 )
 from universal_intelligence_engine.dental_store import DentalStore
@@ -264,6 +266,8 @@ def test_failed_object_delete_remains_retryable(cleanup_context):
     assert failed["delete_failures"] == 1
     assert current["status"] == "rejected"
     assert current["upload_object_key"] == key
+    assert current["cleanup_claim_token"] is None
+    assert current["cleanup_claimed_at"] is None
 
     s3.fail_keys.clear()
     retried = cleanup_expired_pending_uploads(
@@ -273,6 +277,8 @@ def test_failed_object_delete_remains_retryable(cleanup_context):
     assert retried["candidate_count"] == 1
     assert retried["deleted_count"] == 1
     assert current["upload_object_key"] is None
+    assert current["cleanup_claim_token"] is None
+    assert current["cleanup_claimed_at"] is None
     assert key not in s3.objects
 
 
@@ -304,3 +310,91 @@ def test_cleanup_cli_can_read_private_storage_before_lifecycle_attestation(monke
     assert error.value.status_code == 503
     assert error.value.detail["code"] == "DOCUMENT_STORAGE_LIFECYCLE_NOT_VERIFIED"
 
+
+
+def test_cleanup_claim_lease_prevents_overlapping_workers(cleanup_context):
+    store, organisation_id, clinic_id, patient = cleanup_context
+    now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
+    old = now - timedelta(hours=30)
+    document, key = _create_document(
+        store, organisation_id, clinic_id, patient, updated_at=old
+    )
+    entered_delete = Event()
+    allow_delete = Event()
+    first_store = DentalStore()
+    second_store = DentalStore()
+
+    class BlockingS3(FakeS3):
+        def delete_object(self, Bucket: str, Key: str):
+            entered_delete.set()
+            if not allow_delete.wait(timeout=5):
+                raise TimeoutError("synthetic delete release timed out")
+            return super().delete_object(Bucket=Bucket, Key=Key)
+
+    first_s3 = BlockingS3()
+    first_s3.objects.add(key)
+    first_result = {}
+    first_error = []
+
+    def first_worker():
+        try:
+            first_result["value"] = cleanup_expired_pending_uploads(
+                first_store, first_s3, "private-test-bucket",
+                now=now, dry_run=False,
+            )
+        except Exception as exc:
+            first_error.append(exc)
+
+    worker = Thread(target=first_worker, daemon=True)
+    worker.start()
+    assert entered_delete.wait(timeout=5)
+
+    second_s3 = FakeS3()
+    second_s3.objects.add(key)
+    second = cleanup_expired_pending_uploads(
+        second_store, second_s3, "private-test-bucket", now=now, dry_run=False
+    )
+    assert second["candidate_count"] == 0
+    assert second["deleted_count"] == 0
+    assert second_s3.deleted == []
+
+    allow_delete.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert first_error == []
+    assert first_result["value"]["deleted_count"] == 1
+    assert first_s3.deleted == [key]
+    current = store.get_document(document["id"], clinic_id)
+    assert current["upload_object_key"] is None
+    assert current["cleanup_claim_token"] is None
+    assert current["cleanup_claimed_at"] is None
+
+
+def test_cleanup_reclaims_an_expired_worker_lease(cleanup_context):
+    store, organisation_id, clinic_id, patient = cleanup_context
+    now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
+    old = now - timedelta(hours=30)
+    document, key = _create_document(
+        store, organisation_id, clinic_id, patient, updated_at=old
+    )
+    expired_claim = (
+        now - timedelta(minutes=CLEANUP_CLAIM_LEASE_MINUTES + 1)
+    ).isoformat()
+    store._execute(
+        "UPDATE dental_documents SET cleanup_claim_token=?,cleanup_claimed_at=? WHERE id=?",
+        ("stale-worker-token", expired_claim, document["id"]),
+    )
+    s3 = FakeS3()
+    s3.objects.add(key)
+
+    result = cleanup_expired_pending_uploads(
+        store, s3, "private-test-bucket", now=now, dry_run=False
+    )
+
+    assert result["candidate_count"] == 1
+    assert result["deleted_count"] == 1
+    assert s3.deleted == [key]
+    current = store.get_document(document["id"], clinic_id)
+    assert current["upload_object_key"] is None
+    assert current["cleanup_claim_token"] is None
+    assert current["cleanup_claimed_at"] is None

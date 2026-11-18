@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 MIN_PENDING_AGE_HOURS = 24
 MAX_PENDING_AGE_HOURS = 720
 MAX_CLEANUP_BATCH = 500
+CLEANUP_CLAIM_LEASE_MINUTES = 240
 
 
 def _safe_pending_object_key(document: dict[str, Any]) -> bool:
@@ -52,18 +54,32 @@ def _key_fingerprint(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
-def _expired_documents(store, cutoff: str, limit: int, *, claim: bool) -> list[dict[str, Any]]:
-    """Select old quarantine rows and atomically reject active pending states."""
+def _expired_documents(
+    store,
+    cutoff: str,
+    limit: int,
+    *,
+    claim: bool,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Select eligible quarantine rows and persist an exclusive worker lease."""
+    current = now.astimezone(UTC)
+    lease_cutoff = (
+        current - timedelta(minutes=CLEANUP_CLAIM_LEASE_MINUTES)
+    ).isoformat()
+    claimed_at = current.isoformat()
     select_sql = (
-        "SELECT id,organisation_id,clinic_id,patient_id,file_name,upload_object_key,object_key,status,updated_at "
+        "SELECT id,organisation_id,clinic_id,patient_id,file_name,upload_object_key,object_key,status,updated_at,cleanup_claim_token,cleanup_claimed_at "
         "FROM dental_documents WHERE status IN ('pending_upload','verifying','rejected') "
         "AND object_key IS NULL AND upload_object_key IS NOT NULL AND updated_at < %s "
+        "AND (cleanup_claim_token IS NULL OR cleanup_claimed_at IS NULL OR cleanup_claimed_at < %s) "
         "ORDER BY updated_at ASC,id ASC LIMIT %s"
         if store.database_url
         else
-        "SELECT id,organisation_id,clinic_id,patient_id,file_name,upload_object_key,object_key,status,updated_at "
+        "SELECT id,organisation_id,clinic_id,patient_id,file_name,upload_object_key,object_key,status,updated_at,cleanup_claim_token,cleanup_claimed_at "
         "FROM dental_documents WHERE status IN ('pending_upload','verifying','rejected') "
         "AND object_key IS NULL AND upload_object_key IS NOT NULL AND updated_at < ? "
+        "AND (cleanup_claim_token IS NULL OR cleanup_claimed_at IS NULL OR cleanup_claimed_at < ?) "
         "ORDER BY updated_at ASC,id ASC LIMIT ?"
     )
     if claim and store.database_url:
@@ -71,32 +87,52 @@ def _expired_documents(store, cutoff: str, limit: int, *, claim: bool) -> list[d
 
     with store.transaction() as connection:
         if claim and not store.database_url:
-            # A single cleanup runner takes the SQLite write lock before selecting rows.
+            # SQLite serializes cleanup claims by taking the write lock before selection.
             connection.execute("BEGIN IMMEDIATE")
-        rows = store._execute(select_sql, (cutoff, limit), connection=connection)
+        rows = store._execute(
+            select_sql,
+            (cutoff, lease_cutoff, limit),
+            connection=connection,
+        )
         if not claim:
             return rows
 
+        claim_token = uuid.uuid4().hex
         claimed: list[dict[str, Any]] = []
         update_sql = (
-            "UPDATE dental_documents SET status='rejected' "
-            "WHERE id=%s AND clinic_id=%s AND status IN ('pending_upload','verifying') "
-            "AND object_key IS NULL AND upload_object_key=%s RETURNING id"
+            "UPDATE dental_documents SET "
+            "status=CASE WHEN status IN ('pending_upload','verifying') THEN 'rejected' ELSE status END,"
+            "cleanup_claim_token=%s,cleanup_claimed_at=%s "
+            "WHERE id=%s AND clinic_id=%s AND status IN ('pending_upload','verifying','rejected') "
+            "AND object_key IS NULL AND upload_object_key=%s "
+            "AND (cleanup_claim_token IS NULL OR cleanup_claimed_at IS NULL OR cleanup_claimed_at < %s) "
+            "RETURNING id"
             if store.database_url
             else
-            "UPDATE dental_documents SET status='rejected' "
-            "WHERE id=? AND clinic_id=? AND status IN ('pending_upload','verifying') "
-            "AND object_key IS NULL AND upload_object_key=? RETURNING id"
+            "UPDATE dental_documents SET "
+            "status=CASE WHEN status IN ('pending_upload','verifying') THEN 'rejected' ELSE status END,"
+            "cleanup_claim_token=?,cleanup_claimed_at=? "
+            "WHERE id=? AND clinic_id=? AND status IN ('pending_upload','verifying','rejected') "
+            "AND object_key IS NULL AND upload_object_key=? "
+            "AND (cleanup_claim_token IS NULL OR cleanup_claimed_at IS NULL OR cleanup_claimed_at < ?) "
+            "RETURNING id"
         )
         for row in rows:
+            changed = store._execute(
+                update_sql,
+                (
+                    claim_token,
+                    claimed_at,
+                    row["id"],
+                    row["clinic_id"],
+                    row["upload_object_key"],
+                    lease_cutoff,
+                ),
+                connection=connection,
+            )
+            if not changed:
+                continue
             if row["status"] in ("pending_upload", "verifying"):
-                changed = store._execute(
-                    update_sql,
-                    (row["id"], row["clinic_id"], row["upload_object_key"]),
-                    connection=connection,
-                )
-                if not changed:
-                    continue
                 store.audit(
                     "system:document-cleanup",
                     "document.pending_upload_expired",
@@ -105,27 +141,70 @@ def _expired_documents(store, cutoff: str, limit: int, *, claim: bool) -> list[d
                     row["clinic_id"],
                     connection,
                 )
-                row["status"] = "rejected"
+            row["status"] = "rejected"
+            row["cleanup_claim_token"] = claim_token
+            row["cleanup_claimed_at"] = claimed_at
             claimed.append(row)
         return claimed
 
 
-def _clear_deleted_quarantine_key(store, document: dict[str, Any], key: str) -> bool:
-    now = datetime.now(UTC).isoformat()
+def _release_cleanup_claim(
+    store,
+    document: dict[str, Any],
+    key: str,
+    claim_token: str,
+) -> bool:
+    """Release a claim when no object deletion was completed."""
+    if not claim_token:
+        return False
     update_sql = (
-        "UPDATE dental_documents SET upload_object_key=NULL,updated_at=%s "
+        "UPDATE dental_documents SET cleanup_claim_token=NULL,cleanup_claimed_at=NULL "
         "WHERE id=%s AND clinic_id=%s AND status='rejected' AND object_key IS NULL "
-        "AND upload_object_key=%s RETURNING id"
+        "AND upload_object_key=%s AND cleanup_claim_token=%s RETURNING id"
         if store.database_url
         else
-        "UPDATE dental_documents SET upload_object_key=NULL,updated_at=? "
+        "UPDATE dental_documents SET cleanup_claim_token=NULL,cleanup_claimed_at=NULL "
         "WHERE id=? AND clinic_id=? AND status='rejected' AND object_key IS NULL "
-        "AND upload_object_key=? RETURNING id"
+        "AND upload_object_key=? AND cleanup_claim_token=? RETURNING id"
     )
     with store.transaction() as connection:
         rows = store._execute(
             update_sql,
-            (now, document["id"], document["clinic_id"], key),
+            (document["id"], document["clinic_id"], key, claim_token),
+            connection=connection,
+        )
+        return bool(rows)
+
+
+def _clear_deleted_quarantine_key(
+    store,
+    document: dict[str, Any],
+    key: str,
+    claim_token: str,
+    now: datetime,
+) -> bool:
+    update_sql = (
+        "UPDATE dental_documents SET upload_object_key=NULL,cleanup_claim_token=NULL,"
+        "cleanup_claimed_at=NULL,updated_at=%s "
+        "WHERE id=%s AND clinic_id=%s AND status='rejected' AND object_key IS NULL "
+        "AND upload_object_key=%s AND cleanup_claim_token=%s RETURNING id"
+        if store.database_url
+        else
+        "UPDATE dental_documents SET upload_object_key=NULL,cleanup_claim_token=NULL,"
+        "cleanup_claimed_at=NULL,updated_at=? "
+        "WHERE id=? AND clinic_id=? AND status='rejected' AND object_key IS NULL "
+        "AND upload_object_key=? AND cleanup_claim_token=? RETURNING id"
+    )
+    with store.transaction() as connection:
+        rows = store._execute(
+            update_sql,
+            (
+                now.astimezone(UTC).isoformat(),
+                document["id"],
+                document["clinic_id"],
+                key,
+                claim_token,
+            ),
             connection=connection,
         )
         if rows:
@@ -138,7 +217,6 @@ def _clear_deleted_quarantine_key(store, document: dict[str, Any], key: str) -> 
                 connection,
             )
         return bool(rows)
-
 
 def cleanup_expired_pending_uploads(
     store,
@@ -169,7 +247,7 @@ def cleanup_expired_pending_uploads(
     if current.tzinfo is None or current.utcoffset() is None:
         raise ValueError("Document cleanup time must be timezone-aware")
     cutoff = (current.astimezone(UTC) - timedelta(hours=age_hours)).isoformat()
-    rows = _expired_documents(store, cutoff, batch_limit, claim=not dry_run)
+    rows = _expired_documents(store, cutoff, batch_limit, claim=not dry_run, now=current)
     result = {
         "dry_run": bool(dry_run),
         "candidate_count": len(rows),
@@ -181,7 +259,10 @@ def cleanup_expired_pending_uploads(
 
     for document in rows:
         key = str(document.get("upload_object_key") or "")
+        claim_token = str(document.get("cleanup_claim_token") or "")
         if not _safe_pending_object_key(document):
+            if not dry_run:
+                _release_cleanup_claim(store, document, key, claim_token)
             result["unsafe_keys"] += 1
             logger.warning(
                 "Skipped an unsafe private document cleanup candidate (key_fingerprint=%s)",
@@ -191,6 +272,7 @@ def cleanup_expired_pending_uploads(
         if dry_run:
             continue
         if document.get("status") != "rejected":
+            _release_cleanup_claim(store, document, key, claim_token)
             result["delete_failures"] += 1
             logger.warning(
                 "Skipped a document cleanup candidate that was not atomically rejected (key_fingerprint=%s)",
@@ -202,6 +284,7 @@ def cleanup_expired_pending_uploads(
             # S3 DeleteObject is idempotent; a missing quarantine object is safe.
             s3.delete_object(Bucket=bucket, Key=key)
         except Exception as exc:
+            _release_cleanup_claim(store, document, key, claim_token)
             result["delete_failures"] += 1
             logger.warning(
                 "Private document quarantine deletion failed (key_fingerprint=%s, error_type=%s)",
@@ -211,7 +294,7 @@ def cleanup_expired_pending_uploads(
             continue
 
         try:
-            cleared = _clear_deleted_quarantine_key(store, document, key)
+            cleared = _clear_deleted_quarantine_key(store, document, key, claim_token, current)
         except Exception as exc:
             cleared = False
             logger.warning(
