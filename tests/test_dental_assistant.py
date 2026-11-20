@@ -295,6 +295,14 @@ def test_assistant_receipt_idempotency_and_overpayment_are_enforced(assistant_ap
     assert second.status_code == 201
     assert first.json()["result"]["id"] == second.json()["result"]["id"]
 
+    normalized_reference_retry = client.post(
+        path,
+        headers=headers,
+        json={**payload, "reference": "  CASH-REF-001  "},
+    )
+    assert normalized_reference_retry.status_code == 201
+    assert normalized_reference_retry.json()["result"]["id"] == first.json()["result"]["id"]
+
     changed_reference = client.post(
         path,
         headers=headers,
