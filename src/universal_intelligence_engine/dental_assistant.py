@@ -542,7 +542,7 @@ def _receipt_paid_at_matches(stored_paid_at, requested_paid_at: datetime | None)
         stored = stored_paid_at
     else:
         try:
-            stored = datetime.fromisoformat(str(stored_paid_at).replace("Z", "+00:00"))
+            stored = datetime.fromisoformat(str(stored_paid_at))
         except (TypeError, ValueError):
             return False
     if stored.tzinfo is None or stored.utcoffset() is None:

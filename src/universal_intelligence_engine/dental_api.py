@@ -873,7 +873,7 @@ def _database_branch_identity_verified(store) -> bool | None:
         rows = store._execute(
             "SELECT current_setting('neon.branch_id', true) AS branch_id"
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - fail closed if Neon branch identity cannot be verified
         return False
     actual_branch_id = str(rows[0].get("branch_id") or "").strip() if rows else ""
     return bool(actual_branch_id and actual_branch_id == expected_branch_id)

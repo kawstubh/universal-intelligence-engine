@@ -1,7 +1,7 @@
+from datetime import UTC, datetime, timedelta
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from datetime import UTC, datetime, timedelta
 
 from universal_intelligence_engine import dental_api, dental_store
 from universal_intelligence_engine.dental_api import router
