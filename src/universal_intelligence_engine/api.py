@@ -218,18 +218,31 @@ def _doctor_only_openapi():
         "bearerFormat": "opaque",
     }
     bearer_dependencies = {"require_doctor", "require_assistant"}
+
+    def _has_bearer_dependency(dependant) -> bool:
+        pending = list(getattr(dependant, "dependencies", []))
+        while pending:
+            dependency = pending.pop()
+            if getattr(getattr(dependency, "call", None), "__name__", "") in bearer_dependencies:
+                return True
+            pending.extend(getattr(dependency, "dependencies", []))
+        return False
+
     for route in app.routes:
-        path = getattr(route, "path", None)
         dependant = getattr(route, "dependant", None)
-        if not path or dependant is None:
+        if dependant is None or not _has_bearer_dependency(dependant):
             continue
-        dependency_calls = {
-            getattr(dependency.call, "__name__", "")
-            for dependency in dependant.dependencies
-        }
-        if not dependency_calls.intersection(bearer_dependencies):
+        path_candidates = (
+            getattr(route, "path_format", None),
+            getattr(route, "path", None),
+        )
+        openapi_path = next(
+            (candidate for candidate in path_candidates if candidate in schema.get("paths", {})),
+            None,
+        )
+        if openapi_path is None:
             continue
-        operations = schema.get("paths", {}).get(path, {})
+        operations = schema["paths"][openapi_path]
         for method in getattr(route, "methods", set()):
             operation = operations.get(method.lower())
             if not isinstance(operation, dict):
