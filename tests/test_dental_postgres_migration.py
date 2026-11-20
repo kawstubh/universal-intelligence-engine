@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 import sqlalchemy as sa
@@ -11,6 +13,9 @@ from alembic.script import ScriptDirectory
 from sqlalchemy.engine import make_url
 
 from alembic import command
+from universal_intelligence_engine.dental_document_cleanup import (
+    cleanup_expired_pending_uploads,
+)
 from universal_intelligence_engine.dental_store import DentalStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +45,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
         monkeypatch.delenv("DENTAL_SQLITE_PATH", raising=False)
         config = Config(str(ROOT / "alembic.ini"))
         assert ScriptDirectory.from_config(config).get_heads() == [
-            "0013_public_booking_idempotency"
+            "0015_document_cleanup_leases"
         ]
         command.upgrade(config, "0005_password_auth")
 
@@ -101,6 +106,13 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                 for column in inspector.get_columns("dental_documents")
             }
             assert {"reviewed_by_doctor_id", "reviewed_at"}.issubset(document_columns)
+            assert {"cleanup_claim_token", "cleanup_claimed_at"}.issubset(document_columns)
+            upload_key_column = next(
+                column
+                for column in inspector.get_columns("dental_documents")
+                if column["name"] == "upload_object_key"
+            )
+            assert upload_key_column["nullable"] is True
             receipt_columns = {
                 column["name"]: column
                 for column in inspector.get_columns("dental_receipts")
@@ -304,6 +316,105 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
             "SELECT id FROM dental_audit_events WHERE resource_id=%s",
             ("clinic-pg-rollback",),
         ) == []
+
+        # Exercise the real PostgreSQL SKIP LOCKED + durable lease path with
+        # two independent DentalStore connections. The first worker pauses
+        # after committing its claim but before S3 deletion; the second must
+        # not select or delete the same quarantine object.
+        cleanup_now = datetime.now(UTC)
+        cleanup_document_id = uuid.uuid4().hex
+        cleanup_object_key = (
+            f"pending/organisations/{home_organisation_id}/"
+            f"clinics/legacy-pg-clinic/patients/patient-pg/"
+            f"{cleanup_document_id}/scan.pdf"
+        )
+        store.create_document(
+            {
+                "id": cleanup_document_id,
+                "organisation_id": home_organisation_id,
+                "patient_id": "patient-pg",
+                "file_name": "scan.pdf",
+                "content_type": "application/pdf",
+                "size_bytes": 16,
+                "checksum_sha256": "b" * 64,
+                "upload_object_key": cleanup_object_key,
+            },
+            "legacy-pg-clinic",
+            "doctor-pg",
+        )
+        store._execute(
+            "UPDATE dental_documents SET updated_at=%s WHERE id=%s",
+            ((cleanup_now - timedelta(hours=30)).isoformat(), cleanup_document_id),
+        )
+
+        first_store = DentalStore()
+        second_store = DentalStore()
+        entered_delete = Event()
+        allow_delete = Event()
+
+        class BlockingS3:
+            def __init__(self):
+                self.deleted = []
+
+            def delete_object(self, Bucket: str, Key: str):
+                entered_delete.set()
+                if not allow_delete.wait(timeout=10):
+                    raise TimeoutError("PostgreSQL synthetic delete release timed out")
+                self.deleted.append(Key)
+                return {"DeleteMarker": True}
+
+        class RecordingS3:
+            def __init__(self):
+                self.deleted = []
+
+            def delete_object(self, Bucket: str, Key: str):
+                self.deleted.append(Key)
+                return {"DeleteMarker": True}
+
+        first_s3 = BlockingS3()
+        second_s3 = RecordingS3()
+        first_result = {}
+        first_errors = []
+
+        def run_first_cleanup_worker():
+            try:
+                first_result["value"] = cleanup_expired_pending_uploads(
+                    first_store,
+                    first_s3,
+                    "synthetic-private-documents",
+                    now=cleanup_now,
+                    dry_run=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - capture worker failures for deterministic PostgreSQL concurrency assertions
+                first_errors.append(exc)
+
+        worker = Thread(target=run_first_cleanup_worker, daemon=True)
+        worker.start()
+        assert entered_delete.wait(timeout=10)
+
+        second_result = cleanup_expired_pending_uploads(
+            second_store,
+            second_s3,
+            "synthetic-private-documents",
+            now=cleanup_now,
+            dry_run=False,
+        )
+        assert second_result["candidate_count"] == 0
+        assert second_result["deleted_count"] == 0
+        assert second_s3.deleted == []
+
+        allow_delete.set()
+        worker.join(timeout=10)
+        assert not worker.is_alive()
+        assert first_errors == []
+        assert first_result["value"]["deleted_count"] == 1
+        assert first_s3.deleted == [cleanup_object_key]
+        current_document = store.get_document(
+            cleanup_document_id, "legacy-pg-clinic"
+        )
+        assert current_document["upload_object_key"] is None
+        assert current_document["cleanup_claim_token"] is None
+        assert current_document["cleanup_claimed_at"] is None
     finally:
         if schema_engine is not None:
             schema_engine.dispose()
