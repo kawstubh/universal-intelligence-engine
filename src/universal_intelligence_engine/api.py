@@ -218,6 +218,7 @@ def _doctor_only_openapi():
         "bearerFormat": "opaque",
     }
     bearer_dependencies = {"require_doctor", "require_assistant"}
+    protected_paths: set[str] = set()
 
     def _has_bearer_dependency(dependant) -> bool:
         pending = list(getattr(dependant, "dependencies", []))
@@ -232,19 +233,26 @@ def _doctor_only_openapi():
         dependant = getattr(route, "dependant", None)
         if dependant is None or not _has_bearer_dependency(dependant):
             continue
-        path_candidates = (
-            getattr(route, "path_format", None),
-            getattr(route, "path", None),
+        path = getattr(route, "path_format", None) or getattr(route, "path", None)
+        if path:
+            protected_paths.add(path)
+
+    # These namespaces are exclusively Doctor/Assistant protected in the
+    # Dental API. The Assistant login route itself is intentionally public.
+    protected_prefixes = (
+        "/v1/dental/doctor/",
+        "/v1/dental/ai/doctor/",
+        "/v1/dental/assistant/",
+    )
+    for path, operations in schema.get("paths", {}).items():
+        is_protected = (
+            path in protected_paths
+            or path.startswith(protected_prefixes)
+            and path != "/v1/dental/assistant/auth/login"
         )
-        openapi_path = next(
-            (candidate for candidate in path_candidates if candidate in schema.get("paths", {})),
-            None,
-        )
-        if openapi_path is None:
+        if not is_protected:
             continue
-        operations = schema["paths"][openapi_path]
-        for method in getattr(route, "methods", set()):
-            operation = operations.get(method.lower())
+        for operation in operations.values():
             if not isinstance(operation, dict):
                 continue
             operation["security"] = [{"BearerAuth": []}]
