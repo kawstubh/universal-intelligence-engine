@@ -206,6 +206,44 @@ def _doctor_only_openapi():
             "/v1/dental/ai/patient/",
         ))
     }
+
+    # The runtime auth dependencies intentionally return 401 themselves so
+    # missing credentials retain the API's stable error contract. Document
+    # those same protected routes as HTTP Bearer security for generated clients.
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})[
+        "BearerAuth"
+    ] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque",
+    }
+    bearer_dependencies = {"require_doctor", "require_assistant"}
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        dependant = getattr(route, "dependant", None)
+        if not path or dependant is None:
+            continue
+        dependency_calls = {
+            getattr(dependency.call, "__name__", "")
+            for dependency in dependant.dependencies
+        }
+        if not dependency_calls.intersection(bearer_dependencies):
+            continue
+        operations = schema.get("paths", {}).get(path, {})
+        for method in getattr(route, "methods", set()):
+            operation = operations.get(method.lower())
+            if not isinstance(operation, dict):
+                continue
+            operation["security"] = [{"BearerAuth": []}]
+            operation["parameters"] = [
+                parameter
+                for parameter in operation.get("parameters", [])
+                if not (
+                    parameter.get("in") == "header"
+                    and str(parameter.get("name", "")).lower() == "authorization"
+                )
+            ]
+
     app.openapi_schema = schema
     return schema
 
