@@ -437,6 +437,16 @@ async def assistant_update_appointment(
     body: AssistantAppointmentUpdateIn,
     actor: Annotated[dict, Depends(require_assistant)],
 ):
+    # Appointment cancellation is intentionally outside the Assistant role.
+    # Reject it before reading or mutating clinic data; only Doctors may cancel.
+    if body.status == "cancelled":
+        raise HTTPException(
+            403,
+            detail={
+                "code": "ASSISTANT_APPOINTMENT_CANCELLATION_FORBIDDEN",
+                "message": "Clinic Assistants may confirm or reschedule appointments but cannot cancel them.",
+            },
+        )
     changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(

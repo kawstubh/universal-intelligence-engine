@@ -211,6 +211,19 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     assert "treatment_type" not in confirmed.json()["result"]
     assert "patient_id" not in confirmed.json()["result"]
 
+    denied_cancellation = client.patch(
+        f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
+        headers=headers,
+        json={"status": "cancelled"},
+    )
+    assert denied_cancellation.status_code == 403
+    assert denied_cancellation.json()["detail"]["code"] == "ASSISTANT_APPOINTMENT_CANCELLATION_FORBIDDEN"
+    after_denial = client.get("/v1/dental/assistant/appointments", headers=headers).json()["result"]
+    assert any(
+        row["id"] == context["appointment_a"]["id"] and row["status"] == "confirmed"
+        for row in after_denial
+    )
+
     missing_reschedule_time = client.patch(
         f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
         headers=headers,
