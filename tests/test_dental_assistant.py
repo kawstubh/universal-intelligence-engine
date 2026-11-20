@@ -286,6 +286,7 @@ def test_assistant_receipt_idempotency_and_overpayment_are_enforced(assistant_ap
     payload = {
         "amount_paise": 1000,
         "method": "cash",
+        "reference": "CASH-REF-001",
         "idempotency_key": "assistant-receipt-key-002",
     }
     first = client.post(path, headers=headers, json=payload)
@@ -293,6 +294,18 @@ def test_assistant_receipt_idempotency_and_overpayment_are_enforced(assistant_ap
     assert first.status_code == 201
     assert second.status_code == 201
     assert first.json()["result"]["id"] == second.json()["result"]["id"]
+
+    changed_reference = client.post(
+        path,
+        headers=headers,
+        json={**payload, "reference": "CASH-REF-002"},
+    )
+    assert changed_reference.status_code == 409
+    assert changed_reference.json()["detail"]["code"] == "RECEIPT_IDEMPOTENCY_CONFLICT"
+    persisted_after_conflict = context["store"].get_invoice(
+        context["invoice_a"]["id"], "clinic-assistant-a"
+    )
+    assert persisted_after_conflict["paid_paise"] == 1000
 
     overpayment = client.post(
         path,
