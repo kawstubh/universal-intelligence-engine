@@ -554,6 +554,7 @@ async def assistant_record_receipt(
                 receipt["invoice_id"] != invoice_id
                 or int(receipt["amount_paise"]) != body.amount_paise
                 or receipt["method"] != body.method
+                or receipt["reference"] != body.reference.strip()
             ):
                 raise HTTPException(
                     409,
@@ -623,7 +624,13 @@ async def assistant_record_receipt(
                 (clinic_id, body.idempotency_key),
                 connection,
             )
-            if duplicate and duplicate[0]["invoice_id"] == invoice_id and int(duplicate[0]["amount_paise"]) == body.amount_paise and duplicate[0]["method"] == body.method:
+            if (
+                duplicate
+                and duplicate[0]["invoice_id"] == invoice_id
+                and int(duplicate[0]["amount_paise"]) == body.amount_paise
+                and duplicate[0]["method"] == body.method
+                and duplicate[0]["reference"] == body.reference.strip()
+            ):
                 return _envelope(_safe_receipt(duplicate[0]))
             raise HTTPException(
                 409,
