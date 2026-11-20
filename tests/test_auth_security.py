@@ -133,7 +133,7 @@ def test_openapi_documents_bearer_security_for_protected_routes():
     }
     for path, method in protected:
         operation = schema["paths"][path][method]
-        assert operation["security"] == [{"BearerAuth": []}]
+        assert operation.get("security") == [{"BearerAuth": []}], (path, method, operation)
         assert not any(
             parameter.get("in") == "header"
             and str(parameter.get("name", "")).lower() == "authorization"
