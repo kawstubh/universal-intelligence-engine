@@ -519,6 +519,27 @@ async def assistant_list_invoice_balances(actor: Annotated[dict, Depends(require
     return _envelope(rows)
 
 
+def _receipt_paid_at_matches(stored_paid_at, requested_paid_at: datetime | None) -> bool:
+    """Compare an explicitly supplied payment time; omission makes no assertion.
+
+    When paid_at is omitted, the first request uses server time. A retry that
+    also omits it must return the original receipt rather than conflict merely
+    because the server clock has advanced.
+    """
+    if requested_paid_at is None:
+        return True
+    if isinstance(stored_paid_at, datetime):
+        stored = stored_paid_at
+    else:
+        try:
+            stored = datetime.fromisoformat(str(stored_paid_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return False
+    if stored.tzinfo is None or stored.utcoffset() is None:
+        return False
+    return stored.astimezone(UTC) == requested_paid_at.astimezone(UTC)
+
+
 def _safe_receipt(receipt: dict) -> dict:
     return {
         "id": receipt["id"],
@@ -555,6 +576,7 @@ async def assistant_record_receipt(
                 or int(receipt["amount_paise"]) != body.amount_paise
                 or receipt["method"] != body.method
                 or receipt["reference"] != body.reference.strip()
+                or not _receipt_paid_at_matches(receipt["paid_at"], body.paid_at)
             ):
                 raise HTTPException(
                     409,
@@ -630,6 +652,7 @@ async def assistant_record_receipt(
                 and int(duplicate[0]["amount_paise"]) == body.amount_paise
                 and duplicate[0]["method"] == body.method
                 and duplicate[0]["reference"] == body.reference.strip()
+                and _receipt_paid_at_matches(duplicate[0]["paid_at"], body.paid_at)
             ):
                 return _envelope(_safe_receipt(duplicate[0]))
             raise HTTPException(
