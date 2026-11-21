@@ -118,6 +118,37 @@ def test_patient_account_and_linked_record_routes_are_disabled_and_hidden_from_o
     )
 
 
+def test_openapi_documents_bearer_security_for_protected_routes():
+    schema = TestClient(app).get("/openapi.json").json()
+    assert schema["components"]["securitySchemes"]["BearerAuth"] == {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque",
+    }
+
+    protected = {
+        ("/v1/dental/assistant/appointments", "get"),
+        ("/v1/dental/ai/doctor/patient-summary", "post"),
+        ("/v1/dental/doctor/patients/{patient_id}/documents/upload-intent", "post"),
+    }
+    for path, method in protected:
+        operation = schema["paths"][path][method]
+        assert operation.get("security") == [{"BearerAuth": []}], (path, method, operation)
+        assert not any(
+            parameter.get("in") == "header"
+            and str(parameter.get("name", "")).lower() == "authorization"
+            for parameter in operation.get("parameters", [])
+        )
+
+    for path, method in (
+        ("/v1/dental/public/appointments", "post"),
+        ("/v1/dental/auth/password/login", "post"),
+        ("/v1/dental/assistant/auth/login", "post"),
+    ):
+        operation = schema["paths"][path][method]
+        assert "security" not in operation
+
+
 def test_demo_bearer_never_authenticates(monkeypatch):
     monkeypatch.delenv("DENTAL_DEMO_AUTH", raising=False)
     monkeypatch.setenv("DENTAL_SQLITE_PATH", ":memory:")

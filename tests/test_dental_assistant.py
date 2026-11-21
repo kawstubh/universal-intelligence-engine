@@ -211,6 +211,21 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     assert "treatment_type" not in confirmed.json()["result"]
     assert "patient_id" not in confirmed.json()["result"]
 
+    denied_cancellation = client.patch(
+        f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
+        headers=headers,
+        json={"status": "cancelled"},
+    )
+    assert denied_cancellation.status_code == 403
+    assert denied_cancellation.json()["detail"]["code"] == "ASSISTANT_APPOINTMENT_CANCELLATION_FORBIDDEN"
+    assistant_status_schema = client.get("/openapi.json").json()["components"]["schemas"]["AssistantAppointmentUpdateIn"]["properties"]["status"]
+    assert set(assistant_status_schema["enum"]) == {"confirmed", "rescheduled", None}
+    after_denial = client.get("/v1/dental/assistant/appointments", headers=headers).json()["result"]
+    assert any(
+        row["id"] == context["appointment_a"]["id"] and row["status"] == "confirmed"
+        for row in after_denial
+    )
+
     missing_reschedule_time = client.patch(
         f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
         headers=headers,
@@ -286,6 +301,7 @@ def test_assistant_receipt_idempotency_and_overpayment_are_enforced(assistant_ap
     payload = {
         "amount_paise": 1000,
         "method": "cash",
+        "reference": "CASH-REF-001",
         "idempotency_key": "assistant-receipt-key-002",
     }
     first = client.post(path, headers=headers, json=payload)
@@ -293,6 +309,26 @@ def test_assistant_receipt_idempotency_and_overpayment_are_enforced(assistant_ap
     assert first.status_code == 201
     assert second.status_code == 201
     assert first.json()["result"]["id"] == second.json()["result"]["id"]
+
+    normalized_reference_retry = client.post(
+        path,
+        headers=headers,
+        json={**payload, "reference": "  CASH-REF-001  "},
+    )
+    assert normalized_reference_retry.status_code == 201
+    assert normalized_reference_retry.json()["result"]["id"] == first.json()["result"]["id"]
+
+    changed_reference = client.post(
+        path,
+        headers=headers,
+        json={**payload, "reference": "CASH-REF-002"},
+    )
+    assert changed_reference.status_code == 409
+    assert changed_reference.json()["detail"]["code"] == "RECEIPT_IDEMPOTENCY_CONFLICT"
+    persisted_after_conflict = context["store"].get_invoice(
+        context["invoice_a"]["id"], "clinic-assistant-a"
+    )
+    assert persisted_after_conflict["paid_paise"] == 1000
 
     overpayment = client.post(
         path,
@@ -306,6 +342,42 @@ def test_assistant_receipt_idempotency_and_overpayment_are_enforced(assistant_ap
     assert overpayment.status_code == 409
     assert overpayment.json()["detail"]["code"] == "RECEIPT_EXCEEDS_BALANCE"
 
+
+
+def test_assistant_receipt_idempotency_checks_explicit_paid_at_instant(assistant_api):
+    context = assistant_api
+    client = context["client"]
+    headers = _assistant_headers(context)
+    path = f"/v1/dental/assistant/billing/invoices/{context['invoice_a']['id']}/receipts"
+    payload = {
+        "amount_paise": 1000,
+        "method": "upi",
+        "reference": "TIME-REF-001",
+        "idempotency_key": "assistant-receipt-paid-at-003",
+        "paid_at": "2026-11-19T12:00:00+05:30",
+    }
+
+    first = client.post(path, headers=headers, json=payload)
+    equivalent_instant = client.post(
+        path,
+        headers=headers,
+        json={**payload, "paid_at": "2026-11-19T06:30:00Z"},
+    )
+    assert first.status_code == 201, first.text
+    assert equivalent_instant.status_code == 201, equivalent_instant.text
+    assert equivalent_instant.json()["result"]["id"] == first.json()["result"]["id"]
+
+    changed_instant = client.post(
+        path,
+        headers=headers,
+        json={**payload, "paid_at": "2026-11-19T06:31:00Z"},
+    )
+    assert changed_instant.status_code == 409
+    assert changed_instant.json()["detail"]["code"] == "RECEIPT_IDEMPOTENCY_CONFLICT"
+    persisted = context["store"].get_invoice(
+        context["invoice_a"]["id"], "clinic-assistant-a"
+    )
+    assert persisted["paid_paise"] == 1000
 
 def test_assistant_is_denied_all_doctor_clinical_and_owner_routes_with_403(assistant_api):
     context = assistant_api

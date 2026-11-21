@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-import universal_intelligence_engine.dental_ai as dental_ai
+from universal_intelligence_engine import dental_ai
 from universal_intelligence_engine.api import app
 
 

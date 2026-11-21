@@ -283,7 +283,7 @@ def cleanup_expired_pending_uploads(
         try:
             # S3 DeleteObject is idempotent; a missing quarantine object is safe.
             s3.delete_object(Bucket=bucket, Key=key)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - release leases and keep failed storage/metadata operations retryable
             _release_cleanup_claim(store, document, key, claim_token)
             result["delete_failures"] += 1
             logger.warning(
@@ -295,7 +295,7 @@ def cleanup_expired_pending_uploads(
 
         try:
             cleared = _clear_deleted_quarantine_key(store, document, key, claim_token, current)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - release leases and keep failed storage/metadata operations retryable
             cleared = False
             logger.warning(
                 "Private document cleanup metadata update failed (key_fingerprint=%s, error_type=%s)",
@@ -355,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             dry_run=not args.apply,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - release leases and keep failed storage/metadata operations retryable
         logger.error(
             "Private dental document cleanup aborted (error_type=%s)",
             type(exc).__name__,
@@ -368,4 +368,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

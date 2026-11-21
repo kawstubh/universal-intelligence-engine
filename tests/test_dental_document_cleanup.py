@@ -72,7 +72,7 @@ def _create_document(
     )
     if unsafe_key:
         key = f"verified/organisations/{organisation_id}/clinics/{clinic_id}/scan.pdf"
-    document = store.create_document(
+    store.create_document(
         {
             "id": document_id,
             "organisation_id": organisation_id,
@@ -155,7 +155,7 @@ def test_apply_deletes_only_old_quarantine_objects_and_never_verified_objects(cl
     recent_pending, recent_key = _create_document(
         store, organisation_id, clinic_id, patient, updated_at=recent
     )
-    available, available_upload_key = _create_document(
+    available, _available_upload_key = _create_document(
         store, organisation_id, clinic_id, patient, status="available", updated_at=old
     )
     verified_key = available["object_key"]
@@ -342,7 +342,7 @@ def test_cleanup_claim_lease_prevents_overlapping_workers(cleanup_context):
                 first_store, first_s3, "private-test-bucket",
                 now=now, dry_run=False,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - capture worker failures for deterministic concurrency assertions
             first_error.append(exc)
 
     worker = Thread(target=first_worker, daemon=True)

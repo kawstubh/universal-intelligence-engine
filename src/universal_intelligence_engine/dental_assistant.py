@@ -170,8 +170,20 @@ class AssistantPatientCreateIn(BaseModel):
 
 
 class AssistantAppointmentUpdateIn(BaseModel):
-    status: Literal["confirmed", "cancelled", "rescheduled"] | None = None
+    # Keep cancellation accepted by runtime validation so the endpoint can
+    # return an explicit 403, but do not advertise it as an Assistant action.
+    status: str | None = Field(
+        default=None,
+        json_schema_extra={"enum": ["confirmed", "rescheduled", None]},
+    )
     starts_at: datetime | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str | None) -> str | None:
+        if value is not None and value not in {"confirmed", "cancelled", "rescheduled"}:
+            raise ValueError("Unsupported appointment status")
+        return value
 
     @model_validator(mode="after")
     def require_reschedule_time(self):
@@ -437,6 +449,16 @@ async def assistant_update_appointment(
     body: AssistantAppointmentUpdateIn,
     actor: Annotated[dict, Depends(require_assistant)],
 ):
+    # Appointment cancellation is intentionally outside the Assistant role.
+    # Reject it before reading or mutating clinic data; only Doctors may cancel.
+    if body.status == "cancelled":
+        raise HTTPException(
+            403,
+            detail={
+                "code": "ASSISTANT_APPOINTMENT_CANCELLATION_FORBIDDEN",
+                "message": "Clinic Assistants may confirm or reschedule appointments but cannot cancel them.",
+            },
+        )
     changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(
@@ -519,6 +541,27 @@ async def assistant_list_invoice_balances(actor: Annotated[dict, Depends(require
     return _envelope(rows)
 
 
+def _receipt_paid_at_matches(stored_paid_at, requested_paid_at: datetime | None) -> bool:
+    """Compare an explicitly supplied payment time; omission makes no assertion.
+
+    When paid_at is omitted, the first request uses server time. A retry that
+    also omits it must return the original receipt rather than conflict merely
+    because the server clock has advanced.
+    """
+    if requested_paid_at is None:
+        return True
+    if isinstance(stored_paid_at, datetime):
+        stored = stored_paid_at
+    else:
+        try:
+            stored = datetime.fromisoformat(str(stored_paid_at))
+        except (TypeError, ValueError):
+            return False
+    if stored.tzinfo is None or stored.utcoffset() is None:
+        return False
+    return stored.astimezone(UTC) == requested_paid_at.astimezone(UTC)
+
+
 def _safe_receipt(receipt: dict) -> dict:
     return {
         "id": receipt["id"],
@@ -554,6 +597,8 @@ async def assistant_record_receipt(
                 receipt["invoice_id"] != invoice_id
                 or int(receipt["amount_paise"]) != body.amount_paise
                 or receipt["method"] != body.method
+                or receipt["reference"] != body.reference.strip()
+                or not _receipt_paid_at_matches(receipt["paid_at"], body.paid_at)
             ):
                 raise HTTPException(
                     409,
@@ -623,7 +668,14 @@ async def assistant_record_receipt(
                 (clinic_id, body.idempotency_key),
                 connection,
             )
-            if duplicate and duplicate[0]["invoice_id"] == invoice_id and int(duplicate[0]["amount_paise"]) == body.amount_paise and duplicate[0]["method"] == body.method:
+            if (
+                duplicate
+                and duplicate[0]["invoice_id"] == invoice_id
+                and int(duplicate[0]["amount_paise"]) == body.amount_paise
+                and duplicate[0]["method"] == body.method
+                and duplicate[0]["reference"] == body.reference.strip()
+                and _receipt_paid_at_matches(duplicate[0]["paid_at"], body.paid_at)
+            ):
                 return _envelope(_safe_receipt(duplicate[0]))
             raise HTTPException(
                 409,

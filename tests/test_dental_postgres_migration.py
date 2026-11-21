@@ -13,7 +13,9 @@ from alembic.script import ScriptDirectory
 from sqlalchemy.engine import make_url
 
 from alembic import command
-from universal_intelligence_engine.dental_document_cleanup import cleanup_expired_pending_uploads
+from universal_intelligence_engine.dental_document_cleanup import (
+    cleanup_expired_pending_uploads,
+)
 from universal_intelligence_engine.dental_store import DentalStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -383,7 +385,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
                     now=cleanup_now,
                     dry_run=False,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - capture worker failures for deterministic PostgreSQL concurrency assertions
                 first_errors.append(exc)
 
         worker = Thread(target=run_first_cleanup_worker, daemon=True)

@@ -37,4 +37,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Forward-only: a cleaned quarantine key must not be recreated or guessed.
     pass
-
