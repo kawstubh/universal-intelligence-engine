@@ -68,7 +68,7 @@ def auth_environment(tmp_path: Path, monkeypatch):
     app.include_router(dental_api.router)
 
     @app.get("/_test/doctor-context")
-    async def doctor_context(doctor: dict = Depends(dental_auth.require_doctor)):
+    async def doctor_context(doctor: dict = Depends(dental_auth.require_doctor)):  # noqa: B008 - FastAPI endpoint dependency injection
         return doctor
 
     return TestClient(app), store

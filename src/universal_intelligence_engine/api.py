@@ -206,6 +206,65 @@ def _doctor_only_openapi():
             "/v1/dental/ai/patient/",
         ))
     }
+
+    # The runtime auth dependencies intentionally return 401 themselves so
+    # missing credentials retain the API's stable error contract. Document
+    # those same protected routes as HTTP Bearer security for generated clients.
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})[
+        "BearerAuth"
+    ] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque",
+    }
+    bearer_dependencies = {"require_doctor", "require_assistant"}
+    protected_paths: set[str] = set()
+
+    def _has_bearer_dependency(dependant) -> bool:
+        pending = list(getattr(dependant, "dependencies", []))
+        while pending:
+            dependency = pending.pop()
+            if getattr(getattr(dependency, "call", None), "__name__", "") in bearer_dependencies:
+                return True
+            pending.extend(getattr(dependency, "dependencies", []))
+        return False
+
+    for route in app.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None or not _has_bearer_dependency(dependant):
+            continue
+        path = getattr(route, "path_format", None) or getattr(route, "path", None)
+        if path:
+            protected_paths.add(path)
+
+    # These namespaces are exclusively Doctor/Assistant protected in the
+    # Dental API. The Assistant login route itself is intentionally public.
+    protected_prefixes = (
+        "/v1/dental/doctor/",
+        "/v1/dental/ai/doctor/",
+        "/v1/dental/assistant/",
+    )
+    for path, operations in schema.get("paths", {}).items():
+        is_protected = (
+            path in protected_paths
+            or path.startswith(protected_prefixes)
+            and path != "/v1/dental/assistant/auth/login"
+        )
+        if not is_protected:
+            continue
+        for operation in operations.values():
+            if not isinstance(operation, dict):
+                continue
+            operation["security"] = [{"BearerAuth": []}]
+            operation["parameters"] = [
+                parameter
+                for parameter in operation.get("parameters", [])
+                if not (
+                    parameter.get("in") == "header"
+                    and str(parameter.get("name", "")).lower() == "authorization"
+                )
+            ]
+
     app.openapi_schema = schema
     return schema
 

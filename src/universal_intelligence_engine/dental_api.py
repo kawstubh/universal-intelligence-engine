@@ -202,21 +202,21 @@ class PublicAppointmentIn(BaseModel):
         "Scaling & Cleaning",
         "Teeth Whitening",
         "Tooth Filling",
-        "Root Canal Treatment (RCT)",
+        "Root Canal Treatment",
         "Dental Crowns & Caps",
         "Dental Implants",
         "Tooth Extraction",
         "Braces Treatment",
-        "Clear Aligners (Invisible Braces)",
-        "Dentures (Full / Partial)",
-        "Veneers (Smile Makeover)",
+        "Clear Aligners",
+        "Dentures",
+        "Veneers",
         "Gum Treatment (Periodontal Care)",
-        "Kids Dentistry (Child Care)",
+        "Kids Dentistry",
         "Emergency Dental Care",
         "Tooth Sensitivity Treatment",
-        "Dental Sealants (Cavity Prevention)",
+        "Dental Sealants",
         "Oral Hygiene Education",
-        "Smile Makeover (Cosmetic Dentistry)",
+        "Smile Makeover",
         "TMJ & Jaw Pain Treatment",
         "Other dental concern",
     ] = "Dental Check-up & Consultation"
@@ -873,7 +873,7 @@ def _database_branch_identity_verified(store) -> bool | None:
         rows = store._execute(
             "SELECT current_setting('neon.branch_id', true) AS branch_id"
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - fail closed if Neon branch identity cannot be verified
         return False
     actual_branch_id = str(rows[0].get("branch_id") or "").strip() if rows else ""
     return bool(actual_branch_id and actual_branch_id == expected_branch_id)

@@ -264,7 +264,7 @@ def test_public_booking_honeypot_is_accepted_without_persisting(public_booking_a
     assert _count(store, "dental_appointments") == 0
     assert _count(store, "dental_public_booking_requests") == 0
 
-def test_public_booking_accepts_all_twenty_repository_catalog_services(monkeypatch, public_booking_api):
+def test_public_booking_accepts_all_twenty_clinic_approved_services(monkeypatch, public_booking_api):
     client, store = public_booking_api
     monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", lambda _client_ip: None)
     services = [
@@ -272,21 +272,21 @@ def test_public_booking_accepts_all_twenty_repository_catalog_services(monkeypat
         "Scaling & Cleaning",
         "Teeth Whitening",
         "Tooth Filling",
-        "Root Canal Treatment (RCT)",
+        "Root Canal Treatment",
         "Dental Crowns & Caps",
         "Dental Implants",
         "Tooth Extraction",
         "Braces Treatment",
-        "Clear Aligners (Invisible Braces)",
-        "Dentures (Full / Partial)",
-        "Veneers (Smile Makeover)",
+        "Clear Aligners",
+        "Dentures",
+        "Veneers",
         "Gum Treatment (Periodontal Care)",
-        "Kids Dentistry (Child Care)",
+        "Kids Dentistry",
         "Emergency Dental Care",
         "Tooth Sensitivity Treatment",
-        "Dental Sealants (Cavity Prevention)",
+        "Dental Sealants",
         "Oral Hygiene Education",
-        "Smile Makeover (Cosmetic Dentistry)",
+        "Smile Makeover",
         "TMJ & Jaw Pain Treatment",
     ]
     for index, service in enumerate(services):
@@ -345,3 +345,30 @@ def test_public_booking_phone_fingerprint_is_keyed(public_booking_api):
     import hashlib
     assert row["phone_hash"] != hashlib.sha256(phone_digits.encode("utf-8")).hexdigest()
     assert len(row["phone_hash"]) == 64
+
+def test_public_booking_rejects_legacy_expanded_service_aliases(public_booking_api):
+    client, store = public_booking_api
+    legacy_aliases = [
+        "Root Canal Treatment (RCT)",
+        "Clear Aligners (Invisible Braces)",
+        "Dentures (Full / Partial)",
+        "Veneers (Smile Makeover)",
+        "Kids Dentistry (Child Care)",
+        "Dental Sealants (Cavity Prevention)",
+        "Smile Makeover (Cosmetic Dentistry)",
+    ]
+    for index, service in enumerate(legacy_aliases):
+        response = client.post(
+            "/v1/dental/public/appointments",
+            json={
+                **_payload(
+                    key=f"public-booking-legacy-alias-{index:02d}",
+                    phone=f"+9199990010{index:02d}",
+                ),
+                "treatment_type": service,
+            },
+        )
+        assert response.status_code == 422, (service, response.text)
+    assert _count(store, "dental_patients") == 0
+    assert _count(store, "dental_appointments") == 0
+    assert _count(store, "dental_public_booking_requests") == 0
