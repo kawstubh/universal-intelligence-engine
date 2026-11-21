@@ -217,43 +217,26 @@ def _doctor_only_openapi():
         "scheme": "bearer",
         "bearerFormat": "opaque",
     }
-    bearer_dependencies = {"require_doctor", "require_assistant"}
-    protected_paths: set[str] = set()
+    # All Dental API operations are protected by default. Only these exact
+    # method/path pairs are public; a new method on a public path is protected
+    # unless it is deliberately added here after security review.
+    public_operations = {
+        ("get", "/v1/dental/health"),
+        ("post", "/v1/dental/auth/password/login"),
+        ("post", "/v1/dental/assistant/auth/login"),
+        ("post", "/v1/dental/public/appointments"),
+        ("get", "/v1/dental/billing/plans"),
+        ("post", "/v1/dental/billing/razorpay/webhook"),
+    }
 
-    def _has_bearer_dependency(dependant) -> bool:
-        pending = list(getattr(dependant, "dependencies", []))
-        while pending:
-            dependency = pending.pop()
-            if getattr(getattr(dependency, "call", None), "__name__", "") in bearer_dependencies:
-                return True
-            pending.extend(getattr(dependency, "dependencies", []))
-        return False
-
-    for route in app.routes:
-        dependant = getattr(route, "dependant", None)
-        if dependant is None or not _has_bearer_dependency(dependant):
-            continue
-        path = getattr(route, "path_format", None) or getattr(route, "path", None)
-        if path:
-            protected_paths.add(path)
-
-    # These namespaces are exclusively Doctor/Assistant protected in the
-    # Dental API. The Assistant login route itself is intentionally public.
-    protected_prefixes = (
-        "/v1/dental/doctor/",
-        "/v1/dental/ai/doctor/",
-        "/v1/dental/assistant/",
-    )
     for path, operations in schema.get("paths", {}).items():
-        is_protected = (
-            path in protected_paths
-            or path.startswith(protected_prefixes)
-            and path != "/v1/dental/assistant/auth/login"
-        )
-        if not is_protected:
+        if not path.startswith("/v1/dental/"):
             continue
-        for operation in operations.values():
+        for method, operation in operations.items():
             if not isinstance(operation, dict):
+                continue
+            if (method.lower(), path) in public_operations:
+                operation.pop("security", None)
                 continue
             operation["security"] = [{"BearerAuth": []}]
             operation["parameters"] = [
