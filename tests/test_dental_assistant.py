@@ -218,6 +218,8 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     )
     assert denied_cancellation.status_code == 403
     assert denied_cancellation.json()["detail"]["code"] == "ASSISTANT_APPOINTMENT_CANCELLATION_FORBIDDEN"
+    assistant_status_schema = client.get("/openapi.json").json()["components"]["schemas"]["AssistantAppointmentUpdateIn"]["properties"]["status"]
+    assert set(assistant_status_schema["enum"]) == {"confirmed", "rescheduled", None}
     after_denial = client.get("/v1/dental/assistant/appointments", headers=headers).json()["result"]
     assert any(
         row["id"] == context["appointment_a"]["id"] and row["status"] == "confirmed"

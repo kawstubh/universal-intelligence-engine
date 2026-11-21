@@ -170,8 +170,20 @@ class AssistantPatientCreateIn(BaseModel):
 
 
 class AssistantAppointmentUpdateIn(BaseModel):
-    status: Literal["confirmed", "cancelled", "rescheduled"] | None = None
+    # Keep cancellation accepted by runtime validation so the endpoint can
+    # return an explicit 403, but do not advertise it as an Assistant action.
+    status: str | None = Field(
+        default=None,
+        json_schema_extra={"enum": ["confirmed", "rescheduled", None]},
+    )
     starts_at: datetime | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str | None) -> str | None:
+        if value is not None and value not in {"confirmed", "cancelled", "rescheduled"}:
+            raise ValueError("Unsupported appointment status")
+        return value
 
     @model_validator(mode="after")
     def require_reschedule_time(self):
