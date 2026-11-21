@@ -398,3 +398,50 @@ def test_cleanup_reclaims_an_expired_worker_lease(cleanup_context):
     assert current["upload_object_key"] is None
     assert current["cleanup_claim_token"] is None
     assert current["cleanup_claimed_at"] is None
+
+
+def test_metadata_clear_failure_releases_lease_and_remains_retryable(
+    cleanup_context, monkeypatch
+):
+    store, organisation_id, clinic_id, patient = cleanup_context
+    now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
+    old = now - timedelta(hours=30)
+    document, key = _create_document(
+        store, organisation_id, clinic_id, patient, updated_at=old
+    )
+    s3 = FakeS3()
+    s3.objects.add(key)
+
+    original_execute = store._execute
+    fail_metadata_clear = {"enabled": True}
+
+    def flaky_execute(sql, params=(), connection=None):
+        if fail_metadata_clear["enabled"] and "SET upload_object_key=NULL" in sql:
+            raise OSError("synthetic metadata update failure")
+        return original_execute(sql, params, connection=connection)
+
+    monkeypatch.setattr(store, "_execute", flaky_execute)
+
+    failed = cleanup_expired_pending_uploads(
+        store, s3, "private-test-bucket", now=now, dry_run=False
+    )
+    current = store.get_document(document["id"], clinic_id)
+    assert failed["candidate_count"] == 1
+    assert failed["delete_failures"] == 1
+    assert failed["deleted_count"] == 0
+    assert key not in s3.objects
+    assert current["upload_object_key"] == key
+    assert current["cleanup_claim_token"] is None
+    assert current["cleanup_claimed_at"] is None
+
+    fail_metadata_clear["enabled"] = False
+    retried = cleanup_expired_pending_uploads(
+        store, s3, "private-test-bucket", now=now, dry_run=False
+    )
+    current = store.get_document(document["id"], clinic_id)
+    assert retried["candidate_count"] == 1
+    assert retried["delete_failures"] == 0
+    assert retried["deleted_count"] == 1
+    assert current["upload_object_key"] is None
+    assert current["cleanup_claim_token"] is None
+    assert current["cleanup_claimed_at"] is None
