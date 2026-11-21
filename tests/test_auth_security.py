@@ -10,7 +10,11 @@ PUBLIC_OPERATIONS = {
     ("GET", "/v1/dental/billing/plans"),
     ("POST", "/v1/dental/billing/razorpay/webhook"),
 }
-PUBLIC_PATHS = {path for _, path in PUBLIC_OPERATIONS}
+HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "TRACE"}
+
+
+def _is_public_operation(method: str, path: str) -> bool:
+    return (method.upper(), path) in PUBLIC_OPERATIONS
 PATIENT_PATH_PREFIX = "/v1/dental/ai/patient/"
 PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
 ASSISTANT_PATH_PREFIX = "/v1/dental/assistant/"
@@ -60,20 +64,46 @@ def test_no_demo_or_otp_release_auth_symbols():
 def test_protected_dental_routes_require_the_correct_auth_dependency():
     for route in app.routes:
         path = getattr(route, "path", "")
-        if not path.startswith("/v1/dental/"):
+        if not path.startswith("/v1/dental/") or _is_patient_ai_route(path):
             continue
-        if path in PUBLIC_PATHS or _is_patient_ai_route(path):
+        methods = {
+            str(method).upper()
+            for method in (getattr(route, "methods", None) or set())
+            if str(method).upper() in HTTP_METHODS
+        }
+        public_methods = {method for method in methods if _is_public_operation(method, path)}
+        protected_methods = methods - public_methods
+        if not methods:
             continue
+
         dependency_calls = {
             getattr(dep.call, "__name__", "")
             for dep in getattr(route, "dependant", None).dependencies
         }
+        auth_dependencies = {"require_doctor", "require_assistant", "require_patient"}
+        if public_methods:
+            assert not (dependency_calls & auth_dependencies), (
+                "public operation must not inherit patient/doctor/assistant auth",
+                sorted(public_methods),
+                path,
+                dependency_calls,
+            )
+        if not protected_methods:
+            continue
+
         if path.startswith(ASSISTANT_PATH_PREFIX):
-            assert "require_assistant" in dependency_calls, f"missing assistant auth on {path}"
+            expected_dependency = "require_assistant"
         elif path.startswith((PATIENT_PATH_PREFIX, PATIENT_DATA_PATH_PREFIX)):
-            assert "require_patient" in dependency_calls, f"missing patient auth on {path}"
+            expected_dependency = "require_patient"
         else:
-            assert "require_doctor" in dependency_calls, f"missing doctor auth on {path}"
+            expected_dependency = "require_doctor"
+        for method in protected_methods:
+            assert expected_dependency in dependency_calls, (
+                "missing role-specific auth",
+                method,
+                path,
+                expected_dependency,
+            )
 
 
 def test_protected_dental_requests_return_401_without_bearer():
@@ -81,19 +111,25 @@ def test_protected_dental_requests_return_401_without_bearer():
     seen = set()
     for route in app.routes:
         path = getattr(route, "path", "")
-        if not path.startswith("/v1/dental/"):
+        if not path.startswith("/v1/dental/") or _is_patient_ai_route(path):
             continue
-        if path in PUBLIC_PATHS or _is_patient_ai_route(path) or path in seen:
-            continue
-        seen.add(path)
-        method = next(iter(getattr(route, "methods", {"GET"})))
-        response = client.request(method, _sample_path(path))
-        assert response.status_code == 401, (
-            method,
-            path,
-            response.status_code,
-            response.text,
-        )
+        methods = {
+            str(method).upper()
+            for method in (getattr(route, "methods", None) or set())
+            if str(method).upper() in HTTP_METHODS
+        }
+        for method in sorted(methods):
+            operation = (method, path)
+            if _is_public_operation(method, path) or operation in seen:
+                continue
+            seen.add(operation)
+            response = client.request(method, _sample_path(path))
+            assert response.status_code == 401, (
+                method,
+                path,
+                response.status_code,
+                response.text,
+            )
 
 
 
