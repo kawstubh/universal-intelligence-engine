@@ -2,14 +2,15 @@ from fastapi.testclient import TestClient
 
 from universal_intelligence_engine.api import app
 
-PUBLIC_PATHS = {
-    "/v1/dental/health",
-    "/v1/dental/auth/password/login",
-    "/v1/dental/assistant/auth/login",
-    "/v1/dental/public/appointments",
-    "/v1/dental/billing/plans",
-    "/v1/dental/billing/razorpay/webhook",
+PUBLIC_OPERATIONS = {
+    ("GET", "/v1/dental/health"),
+    ("POST", "/v1/dental/auth/password/login"),
+    ("POST", "/v1/dental/assistant/auth/login"),
+    ("POST", "/v1/dental/public/appointments"),
+    ("GET", "/v1/dental/billing/plans"),
+    ("POST", "/v1/dental/billing/razorpay/webhook"),
 }
+PUBLIC_PATHS = {path for _, path in PUBLIC_OPERATIONS}
 PATIENT_PATH_PREFIX = "/v1/dental/ai/patient/"
 PATIENT_DATA_PATH_PREFIX = "/v1/dental/patient/"
 ASSISTANT_PATH_PREFIX = "/v1/dental/assistant/"
@@ -172,25 +173,29 @@ def test_every_documented_protected_dental_operation_declares_bearer_auth():
     }
 
     http_methods = {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
-    for public_path in PUBLIC_PATHS:
+    for public_method, public_path in PUBLIC_OPERATIONS:
         assert public_path in paths, f"public operation missing from OpenAPI: {public_path}"
-        for method, operation in paths[public_path].items():
-            if method.lower() in http_methods:
-                assert operation.get("security") in (None, []), (
-                    "public operation must not require BearerAuth",
-                    method,
-                    public_path,
-                )
+        assert public_method.lower() in paths[public_path], (
+            "public method missing from OpenAPI",
+            public_method,
+            public_path,
+        )
 
     protected_count = 0
     for path, operations in paths.items():
         if not path.startswith("/v1/dental/"):
             continue
         assert not _is_patient_ai_route(path), f"disabled patient route leaked into OpenAPI: {path}"
-        if path in PUBLIC_PATHS:
-            continue
         for method, operation in operations.items():
-            if method.lower() not in http_methods:
+            normalized_method = method.lower()
+            if normalized_method not in http_methods:
+                continue
+            if (normalized_method.upper(), path) in PUBLIC_OPERATIONS:
+                assert operation.get("security") in (None, []), (
+                    "public operation must not require BearerAuth",
+                    method,
+                    path,
+                )
                 continue
             protected_count += 1
             assert operation.get("security") == [{"BearerAuth": []}], (
