@@ -160,3 +160,44 @@ def test_demo_bearer_never_authenticates(monkeypatch):
         headers={"Authorization": "Bearer demo"},
     )
     assert response.status_code == 401
+
+
+def test_every_documented_protected_dental_operation_declares_bearer_auth():
+    schema = TestClient(app).get("/openapi.json").json()
+    paths = schema.get("paths", {})
+    assert schema["components"]["securitySchemes"]["BearerAuth"] == {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque",
+    }
+
+    http_methods = {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
+    for public_path in PUBLIC_PATHS:
+        assert public_path in paths, f"public operation missing from OpenAPI: {public_path}"
+        for method, operation in paths[public_path].items():
+            if method.lower() in http_methods:
+                assert operation.get("security") in (None, []), (
+                    "public operation must not require BearerAuth",
+                    method,
+                    public_path,
+                )
+
+    protected_count = 0
+    for path, operations in paths.items():
+        if not path.startswith("/v1/dental/"):
+            continue
+        assert not _is_patient_ai_route(path), f"disabled patient route leaked into OpenAPI: {path}"
+        if path in PUBLIC_PATHS:
+            continue
+        for method, operation in operations.items():
+            if method.lower() not in http_methods:
+                continue
+            protected_count += 1
+            assert operation.get("security") == [{"BearerAuth": []}], (
+                "every protected dental operation must explicitly require BearerAuth",
+                method,
+                path,
+                operation.get("security"),
+            )
+
+    assert protected_count >= 1
