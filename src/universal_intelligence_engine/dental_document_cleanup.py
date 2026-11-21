@@ -303,6 +303,17 @@ def cleanup_expired_pending_uploads(
                 type(exc).__name__,
             )
         if not cleared:
+            # The object delete is idempotent. Release the lease so a transient
+            # metadata failure can be retried immediately instead of waiting
+            # for the four-hour lease to expire.
+            try:
+                _release_cleanup_claim(store, document, key, claim_token)
+            except Exception as exc:  # noqa: BLE001 - keep the failed row retryable on the next lease expiry
+                logger.warning(
+                    "Private document cleanup lease release failed (key_fingerprint=%s, error_type=%s)",
+                    _key_fingerprint(key),
+                    type(exc).__name__,
+                )
             result["delete_failures"] += 1
             continue
         result["deleted_count"] += 1
