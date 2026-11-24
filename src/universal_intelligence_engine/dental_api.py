@@ -111,6 +111,18 @@ class DoctorAccountCreateIn(BaseModel):
     role: str = Field(default="doctor", pattern=r"^(doctor|dentist|admin)$")
 
 
+class PatientMessageIn(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("body")
+    @classmethod
+    def normalize_body(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Message cannot be empty")
+        return normalized
+
+
 class ClinicalNoteCreateIn(BaseModel):
     title: str = Field(min_length=2, max_length=160)
     content: str = Field(min_length=1, max_length=20000)
@@ -863,6 +875,44 @@ def _clinic_id(actor: dict) -> str:
             },
         )
     return clinic_id
+
+
+@router.get("/doctor/patients/{patient_id}/messages")
+async def list_doctor_patient_messages(
+    patient_id: str, actor: Annotated[dict, Depends(require_doctor)]
+):
+    store = get_dental_store()
+    clinic_id = _clinic_id(actor)
+    if not store.get_patient(patient_id, clinic_id):
+        raise HTTPException(
+            404,
+            detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found in this clinic"},
+        )
+    return {"messages": store.patient_messages(patient_id, clinic_id)}
+
+
+@router.post("/doctor/patients/{patient_id}/messages", status_code=201)
+async def send_doctor_patient_message(
+    patient_id: str,
+    body: PatientMessageIn,
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    store = get_dental_store()
+    clinic_id = _clinic_id(actor)
+    if not store.get_patient(patient_id, clinic_id):
+        raise HTTPException(
+            404,
+            detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found in this clinic"},
+        )
+    message = store.create_patient_message(
+        patient_id=patient_id,
+        clinic_id=clinic_id,
+        sender_type="doctor",
+        sender_id=actor["id"],
+        body=body.body,
+    )
+    store.audit(actor["id"], "patient_message.sent", "patient_message", message["id"], clinic_id)
+    return message
 
 
 @router.get("/doctor/patients/{patient_id}/clinical-notes")
