@@ -693,48 +693,6 @@ class DentalStore:
         )
 
 
-    def patient_messages(self, patient_id: str, clinic_id: str) -> list[dict[str, Any]]:
-        sql = (
-            "SELECT id,clinic_id,patient_id,sender_type,sender_id,body,created_at "
-            "FROM dental_patient_messages WHERE clinic_id=%s AND patient_id=%s ORDER BY created_at,id"
-            if self.database_url
-            else "SELECT id,clinic_id,patient_id,sender_type,sender_id,body,created_at "
-            "FROM dental_patient_messages WHERE clinic_id=? AND patient_id=? ORDER BY created_at,id"
-        )
-        return self._execute(sql, (clinic_id, patient_id))
-
-    def create_patient_message(
-        self, patient_id: str, clinic_id: str, sender_type: str, sender_id: str, body: str
-    ) -> dict[str, Any]:
-        message = {
-            "id": _id(),
-            "clinic_id": clinic_id,
-            "patient_id": patient_id,
-            "sender_type": sender_type,
-            "sender_id": sender_id,
-            "body": body.strip(),
-            "created_at": _now(),
-        }
-        with self.transaction() as connection:
-            patient_sql = (
-                "SELECT id FROM dental_patients WHERE id=%s AND clinic_id=%s"
-                if self.database_url
-                else "SELECT id FROM dental_patients WHERE id=? AND clinic_id=?"
-            )
-            if not self._execute(patient_sql, (patient_id, clinic_id), connection=connection):
-                raise ValueError("Patient not found in this clinic")
-            sql = (
-                "INSERT INTO dental_patient_messages(id,clinic_id,patient_id,sender_type,sender_id,body,created_at) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s)"
-                if self.database_url
-                else "INSERT INTO dental_patient_messages(id,clinic_id,patient_id,sender_type,sender_id,body,created_at) "
-                "VALUES (?,?,?,?,?,?,?)"
-            )
-            self._execute(sql, tuple(message[key] for key in (
-                "id","clinic_id","patient_id","sender_type","sender_id","body","created_at"
-            )), connection=connection)
-        return message
-
     def clinical_notes(self, patient_id: str, clinic_id: str) -> list[dict[str, Any]]:
         sql = (
             "SELECT id,clinic_id,patient_id,created_by_doctor_id,title,content,patient_visible,version,created_at,updated_at "
