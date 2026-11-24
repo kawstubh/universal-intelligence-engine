@@ -46,9 +46,11 @@ class IntelligenceRunBody(BaseModel):
 def build_service() -> IntelligenceService:
     # Public reference and biomedical APIs require no paid search subscription or key.
     knowledge: KnowledgeProvider = FreePublicKnowledgeProvider()
+    configured_provider = os.getenv("REASONING_PROVIDER", "").strip().lower()
     reasoning = (
         OpenAIResponsesReasoningProvider()
-        if os.getenv("OPENAI_API_KEY")
+        if configured_provider in {"openai", "gemini", "groq", "freellmapi"}
+        or os.getenv("OPENAI_API_KEY")
         else NativeReasoningProvider()
     )
     memory = LearningMemory(os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl"))
@@ -304,12 +306,27 @@ def health() -> dict[str, Any]:
             "knowledge_mode": "best-effort-public-sources",
             "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
             "reasoning_provider": (
-                "openai-responses" if os.getenv("OPENAI_API_KEY") else "native"
+                os.getenv("REASONING_PROVIDER", "openai").strip().lower()
+                if (
+                    os.getenv("OPENAI_API_KEY")
+                    or os.getenv("REASONING_PROVIDER", "").strip().lower()
+                    in {"openai", "gemini", "groq", "freellmapi"}
+                )
+                else "native"
             ),
             "reasoning_model": (
-                "native"
-                if not os.getenv("OPENAI_API_KEY")
-                else os.getenv("OPENAI_MODEL") or "default"
+                os.getenv("REASONING_MODEL")
+                or (
+                    os.getenv("FREELLMAPI_MODEL", "auto")
+                    if os.getenv("REASONING_PROVIDER", "").strip().lower() == "freellmapi"
+                    else os.getenv("OPENAI_MODEL") or "default"
+                )
+                if (
+                    os.getenv("OPENAI_API_KEY")
+                    or os.getenv("REASONING_PROVIDER", "").strip().lower()
+                    in {"openai", "gemini", "groq", "freellmapi"}
+                )
+                else "native"
             ),
         },
         "dental_api": True,
