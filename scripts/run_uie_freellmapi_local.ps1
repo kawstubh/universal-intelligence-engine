@@ -16,6 +16,7 @@ try {
     $env:FREELLMAPI_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($freellmapiPtr)
     $env:UIE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($uiePtr)
 
+    $env:PYTHONPATH = (Join-Path $PSScriptRoot "..\src") + [IO.Path]::PathSeparator + $env:PYTHONPATH
     Write-Host "Starting local UIE API on http://127.0.0.1:8000"
     Write-Host "Patient-specific context is blocked from FreeLLMAPI."
     python -m uvicorn universal_intelligence_engine.api:app --host 127.0.0.1 --port 8000
