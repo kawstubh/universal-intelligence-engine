@@ -24,6 +24,7 @@ def test_dental_health_is_public(monkeypatch):
     assert response.json()["database_ready"] is True
     assert response.json()["database_identity_verified"] is None
     assert response.json()["database_branch_identity_verified"] is None
+    assert response.json()["database_branch_id"] is None
     assert response.json()["deployment_commit"] is None
 
 
@@ -67,6 +68,7 @@ def test_dental_health_verifies_exact_neon_branch(monkeypatch):
     response = TestClient(app).get("/v1/dental/health")
     assert response.status_code == 200
     assert response.json()["database_branch_identity_verified"] is True
+    assert response.json()["database_branch_id"] == "br-steep-bonus-a1yqarg7"
 
 
 def test_dental_health_fails_closed_on_wrong_neon_branch(monkeypatch):
@@ -85,6 +87,7 @@ def test_dental_health_fails_closed_on_wrong_neon_branch(monkeypatch):
     response = TestClient(app).get("/v1/dental/health")
     assert response.status_code == 200
     assert response.json()["database_branch_identity_verified"] is False
+    assert response.json()["database_branch_id"] == "br-proud-scene-a1g7g3qo"
 
 
 def test_dental_health_fails_identity_check_on_wrong_host_or_database(monkeypatch):
