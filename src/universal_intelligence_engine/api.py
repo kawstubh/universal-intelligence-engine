@@ -306,12 +306,12 @@ def health() -> dict[str, Any]:
             "knowledge_mode": "best-effort-public-sources",
             "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
             "reasoning_provider": (
-                os.getenv("REASONING_PROVIDER", "openai").strip().lower()
-                if (
-                    os.getenv("OPENAI_API_KEY")
-                    or os.getenv("REASONING_PROVIDER", "").strip().lower()
-                    in {"openai", "gemini", "groq", "freellmapi"}
-                )
+                "freellmapi"
+                if os.getenv("REASONING_PROVIDER", "").strip().lower() == "freellmapi"
+                else os.getenv("REASONING_PROVIDER", "").strip().lower()
+                if os.getenv("REASONING_PROVIDER", "").strip().lower() in {"gemini", "groq"}
+                else "openai-responses"
+                if os.getenv("OPENAI_API_KEY")
                 else "native"
             ),
             "reasoning_model": (
