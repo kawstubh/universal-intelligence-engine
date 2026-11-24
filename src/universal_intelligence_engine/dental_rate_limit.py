@@ -22,6 +22,7 @@ def enforce_shared_rate_limit(
     client_identity: str,
     max_attempts: int,
     window_seconds: int,
+    rate_limited_code: str | None = None,
     now: int | None = None,
 ) -> None:
     """Atomically count an attempt in the shared database window.
@@ -101,7 +102,7 @@ def enforce_shared_rate_limit(
     attempts = int(rows[0]["attempt_count"])
     if attempts > max_attempts:
         retry_after = max(1, window_start + window_seconds - current)
-        code = f"{scope.upper()}_RATE_LIMITED"
+        code = rate_limited_code or f"{scope.upper()}_RATE_LIMITED"
         raise HTTPException(
             status_code=429,
             detail={
