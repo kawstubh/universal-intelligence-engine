@@ -174,6 +174,7 @@ def _check_login_rate_limit(ip: str) -> None:
         client_identity=ip,
         max_attempts=10,
         window_seconds=300,
+        rate_limited_code="LOGIN_RATE_LIMITED",
     )
 
 
