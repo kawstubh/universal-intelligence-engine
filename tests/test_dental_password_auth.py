@@ -85,7 +85,6 @@ def test_password_login_rejects_wrong_password(monkeypatch):
     monkeypatch.setattr(dental_auth, "get_dental_store", lambda: FakeStore())
     monkeypatch.setattr(dental_auth, "_bootstrap_admin", lambda: None)
     monkeypatch.setattr(dental_auth, "enforce_shared_rate_limit", lambda *args, **kwargs: None)
-    dental_auth._LOGIN_ATTEMPTS.clear()
     response = TestClient(app).post(
         "/v1/dental/auth/password/login",
         json={"email": "doctor@example.com", "password": "wrong password"},
