@@ -333,7 +333,6 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.post("/v1/intelligence/run")
 def _contains_restricted_patient_context(value: Any) -> bool:
     restricted_keys = {
         "patient", "patient_id", "patientid", "dental_chart", "periodontogram",
@@ -351,6 +350,7 @@ def _contains_restricted_patient_context(value: Any) -> bool:
     return False
 
 
+@app.post("/v1/intelligence/run")
 def run_intelligence(
     body: IntelligenceRunBody, authorization: str | None = Header(default=None)
 ) -> dict[str, Any]:
