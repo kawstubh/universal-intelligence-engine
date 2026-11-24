@@ -416,7 +416,8 @@ def test_build_service_selects_freellmapi_only_when_explicitly_configured(monkey
 
     class FakeEngine:
         def __init__(self, **kwargs):
-            captured["engine"] = kwargs
+            self.kwargs = kwargs
+            captured["engine"] = self
 
     class FakeService:
         def __init__(self, engine):
@@ -434,5 +435,5 @@ def test_build_service_selects_freellmapi_only_when_explicitly_configured(monkey
     service = api.build_service()
 
     assert captured["provider"] == "freellmapi"
-    assert isinstance(captured["engine"]["reasoning"], FakeProvider)
+    assert isinstance(captured["engine"].kwargs["reasoning"], FakeProvider)
     assert service.engine is captured["engine"]
