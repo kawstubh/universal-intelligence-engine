@@ -1,10 +1,15 @@
 """Interactive, secret-safe FreeLLMAPI smoke test. Never writes the key to disk."""
-from getpass import getpass
 import os
+from getpass import getpass
 from time import perf_counter
 
 from universal_intelligence_engine.contracts import IntelligenceRequest
-from universal_intelligence_engine.providers import OpenAIResponsesReasoningProvider
+from universal_intelligence_engine.providers import (
+    OpenAIResponsesReasoningProvider,
+    ProviderError,
+    ProviderNotConfiguredError,
+    ProviderRateLimitError,
+)
 
 key = getpass("Paste the FreeLLMAPI unified key (input hidden): ").strip()
 if not key:
@@ -23,8 +28,8 @@ request = IntelligenceRequest(
 started = perf_counter()
 try:
     result = OpenAIResponsesReasoningProvider().reason(request, [])
-except Exception as exc:
-    print(f"FreeLLMAPI smoke test failed: {type(exc).__name__}: {exc}")
+except (ProviderError, ProviderNotConfiguredError, ProviderRateLimitError) as exc:
+    print(f"FreeLLMAPI smoke test failed: {type(exc).__name__}")
     raise SystemExit(1)
 finally:
     key = None
