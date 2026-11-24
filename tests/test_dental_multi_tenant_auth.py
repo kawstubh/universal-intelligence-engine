@@ -62,7 +62,6 @@ def auth_environment(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(dental_auth, "get_dental_store", lambda: store)
     monkeypatch.setattr(dental_api, "get_dental_store", lambda: store)
-    dental_auth._LOGIN_ATTEMPTS.clear()
 
     app = FastAPI()
     app.include_router(dental_api.router)
