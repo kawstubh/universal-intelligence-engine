@@ -763,7 +763,6 @@ def test_assistant_login_rate_limit_uses_validated_client_ip(assistant_api):
 def test_doctor_login_rate_limit_uses_validated_client_ip(assistant_api):
     context = assistant_api
     client = context["client"]
-    dental_auth._LOGIN_ATTEMPTS.clear()
     path = "/v1/dental/auth/password/login"
     payload = {"email": "missing@example.test", "password": "not-the-password"}
     first_ip = {"CF-Connecting-IP": "198.51.100.20"}
@@ -783,30 +782,25 @@ def test_doctor_login_rate_limit_uses_validated_client_ip(assistant_api):
     assert other_client.status_code == 401
 
 
-def test_doctor_login_rate_limit_bounds_client_buckets(assistant_api, monkeypatch):
+def test_doctor_login_rate_limit_persists_across_store_instances(assistant_api, monkeypatch):
     context = assistant_api
     client = context["client"]
-    dental_auth._LOGIN_ATTEMPTS.clear()
-    monkeypatch.setattr(dental_auth, "_LOGIN_MAX_CLIENTS", 1)
     path = "/v1/dental/auth/password/login"
     payload = {"email": "missing@example.test", "password": "not-the-password"}
+    headers = {"CF-Connecting-IP": "198.51.100.30"}
 
-    first = client.post(
-        path,
-        headers={"CF-Connecting-IP": "198.51.100.30"},
-        json=payload,
-    )
-    assert first.status_code == 401
+    for _ in range(10):
+        response = client.post(path, headers=headers, json=payload)
+        assert response.status_code == 401
 
-    at_capacity = client.post(
-        path,
-        headers={"CF-Connecting-IP": "198.51.100.31"},
-        json=payload,
-    )
-    assert at_capacity.status_code == 503
-    assert at_capacity.json()["detail"]["code"] == "LOGIN_RATE_LIMIT_CAPACITY"
-    assert at_capacity.headers["retry-after"]
-    assert len(dental_auth._LOGIN_ATTEMPTS) == 1
+    # A second store object opens an independent database connection to the
+    # same SQLite file; the shared counter must still reject the next attempt.
+    second_store = DentalStore()
+    monkeypatch.setattr(dental_auth, "get_dental_store", lambda: second_store)
+    blocked = client.post(path, headers=headers, json=payload)
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "LOGIN_RATE_LIMITED"
+    assert blocked.headers["retry-after"]
 
 
 def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(assistant_api, monkeypatch):
@@ -865,27 +859,22 @@ def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(a
 def test_doctor_login_rate_limit_falls_back_for_missing_or_malformed_forwarded_ip(assistant_api):
     """Untrusted/malformed forwarding values share the connection-peer bucket."""
     client = assistant_api["client"]
-    dental_auth._LOGIN_ATTEMPTS.clear()
     path = "/v1/dental/auth/password/login"
     payload = {"email": "missing@example.test", "password": "not-the-password"}
 
-    try:
-        for attempt in range(10):
-            headers = (
-                {"CF-Connecting-IP": "not-an-ip"}
-                if attempt % 2 == 0
-                else {}
-            )
-            response = client.post(path, headers=headers, json=payload)
-            assert response.status_code == 401
-
-        blocked = client.post(
-            path,
-            headers={"CF-Connecting-IP": "still-not-an-ip"},
-            json=payload,
+    for attempt in range(10):
+        headers = (
+            {"CF-Connecting-IP": "not-an-ip"}
+            if attempt % 2 == 0
+            else {}
         )
-        assert blocked.status_code == 429
-        assert blocked.headers["retry-after"]
-        assert len(dental_auth._LOGIN_ATTEMPTS) == 1
-    finally:
-        dental_auth._LOGIN_ATTEMPTS.clear()
+        response = client.post(path, headers=headers, json=payload)
+        assert response.status_code == 401
+
+    blocked = client.post(
+        path,
+        headers={"CF-Connecting-IP": "still-not-an-ip"},
+        json=payload,
+    )
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"]
