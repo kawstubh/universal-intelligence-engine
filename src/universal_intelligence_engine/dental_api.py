@@ -8,7 +8,6 @@ import ipaddress
 import json
 import os
 import secrets
-import time
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -27,8 +26,8 @@ from .dental_auth import (
 from .dental_billing import create_order as create_membership_order_impl
 from .dental_billing import handle_webhook as handle_membership_webhook
 from .dental_billing import plans as membership_plans
-from .dental_store import get_dental_store
 from .dental_rate_limit import enforce_shared_rate_limit
+from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
 
@@ -55,6 +54,22 @@ def _check_public_appointment_rate_limit(client_ip: str) -> None:
         window_seconds=300,
         rate_limited_code="PUBLIC_APPOINTMENT_RATE_LIMITED",
     )
+
+
+def _public_booking_hmac(value: str, purpose: str) -> str:
+    """Keyed digest for low-entropy contact data and request fingerprints."""
+    key = os.getenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", "").strip()
+    if len(key.encode("utf-8")) < 32:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "PUBLIC_BOOKING_HASH_NOT_CONFIGURED",
+                "message": "Online appointment requests are temporarily unavailable. Please call the clinic.",
+            },
+        )
+    message = (purpose + ":" + value).encode("utf-8")
+    return hmac.new(key.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
 
 class DoctorPasswordLoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
