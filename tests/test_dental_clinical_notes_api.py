@@ -84,7 +84,7 @@ def test_doctor_can_create_and_list_private_clinical_notes(clinical_notes_api):
 
 
 def test_clinical_notes_reject_cross_clinic_patient_and_note_reads(clinical_notes_api):
-    client, store, patient_a, patient_b = clinical_notes_api
+    client, store, _patient_a, patient_b = clinical_notes_api
     foreign_patient = client.get(
         f"/v1/dental/doctor/patients/{patient_b['id']}/clinical-notes"
     )
