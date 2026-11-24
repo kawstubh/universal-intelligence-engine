@@ -63,6 +63,7 @@ def _check_login_rate_limit(request: Request) -> None:
         client_identity=_assistant_login_client_ip(request),
         max_attempts=10,
         window_seconds=300,
+        rate_limited_code="ASSISTANT_LOGIN_RATE_LIMITED",
     )
 
 
