@@ -404,3 +404,35 @@ def test_freellmapi_rejects_non_synthetic_or_patient_context(monkeypatch):
 
     with pytest.raises(ProviderNotConfiguredError, match="fixed synthetic"):
         OpenAIResponsesReasoningProvider().reason(request, [])
+
+def test_build_service_selects_freellmapi_only_when_explicitly_configured(monkeypatch):
+    from universal_intelligence_engine import api
+
+    captured = {}
+
+    class FakeProvider:
+        def __init__(self, *, provider=None):
+            captured["provider"] = provider
+
+    class FakeEngine:
+        def __init__(self, **kwargs):
+            captured["engine"] = kwargs
+
+    class FakeService:
+        def __init__(self, engine):
+            self.engine = engine
+
+    monkeypatch.setenv("REASONING_PROVIDER", "freellmapi")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(api, "FreePublicKnowledgeProvider", lambda: object())
+    monkeypatch.setattr(api, "OpenAIResponsesReasoningProvider", FakeProvider)
+    monkeypatch.setattr(api, "NativeReasoningProvider", lambda: object())
+    monkeypatch.setattr(api, "LearningMemory", lambda *_: object())
+    monkeypatch.setattr(api, "UniversalIntelligenceEngine", FakeEngine)
+    monkeypatch.setattr(api, "IntelligenceService", FakeService)
+
+    service = api.build_service()
+
+    assert captured["provider"] == "freellmapi"
+    assert isinstance(captured["engine"]["reasoning"], FakeProvider)
+    assert service.engine is captured["engine"]

@@ -46,11 +46,15 @@ class IntelligenceRunBody(BaseModel):
 def build_service() -> IntelligenceService:
     # Public reference and biomedical APIs require no paid search subscription or key.
     knowledge: KnowledgeProvider = FreePublicKnowledgeProvider()
-    reasoning = (
-        OpenAIResponsesReasoningProvider()
-        if os.getenv("OPENAI_API_KEY")
-        else NativeReasoningProvider()
-    )
+    configured_provider = os.getenv("REASONING_PROVIDER", "").strip().lower()
+    if configured_provider == "freellmapi":
+        # FreeLLMAPI is accepted only for its fixed synthetic smoke-test prompt;
+        # the provider enforces the exact goal, context and classification.
+        reasoning = OpenAIResponsesReasoningProvider(provider="freellmapi")
+    elif os.getenv("OPENAI_API_KEY"):
+        reasoning = OpenAIResponsesReasoningProvider()
+    else:
+        reasoning = NativeReasoningProvider()
     memory = LearningMemory(os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl"))
     engine = UniversalIntelligenceEngine(
         knowledge=knowledge,
