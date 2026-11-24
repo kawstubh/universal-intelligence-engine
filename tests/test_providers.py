@@ -174,6 +174,66 @@ def test_groq_provider_uses_openai_compatible_endpoint(monkeypatch):
     assert captured["url"] == "https://api.groq.com/openai/v1/chat/completions"
 
 
+def test_freellmapi_uses_openai_compatible_chat_completions(monkeypatch):
+    from universal_intelligence_engine import providers
+
+    monkeypatch.setenv("REASONING_PROVIDER", "freellmapi")
+    monkeypatch.setenv("FREELLMAPI_BASE_URL", "http://127.0.0.1:31415/v1")
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "synthetic-freellmapi-key")
+    monkeypatch.delenv("REASONING_MODEL", raising=False)
+    monkeypatch.delenv("FREELLMAPI_MODEL", raising=False)
+    captured = {}
+
+    def fake_request(url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs["headers"]
+        captured["payload"] = kwargs["payload"]
+        return {
+            "id": "freellmapi-test",
+            "choices": [{"message": {"content": "synthetic response"}}],
+            "usage": {"total_tokens": 12},
+        }
+
+    monkeypatch.setattr(providers, "_json_request", fake_request)
+    result = providers.OpenAIResponsesReasoningProvider().reason(
+        IntelligenceRequest(goal="synthetic test"), []
+    )
+    assert result.answer == "synthetic response"
+    assert captured["url"] == "http://127.0.0.1:31415/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer synthetic-freellmapi-key"
+    assert captured["payload"]["model"] == "auto"
+    assert result.metadata["provider"] == "freellmapi"
+
+
+def test_freellmapi_rejects_patient_context_before_provider_call(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from universal_intelligence_engine import api
+
+    api_key = "synthetic-uie-api-key"
+    monkeypatch.setenv("UIE_API_KEY", api_key)
+    monkeypatch.setenv("REASONING_PROVIDER", "freellmapi")
+    called = {"value": False}
+
+    def should_not_execute(*args, **kwargs):
+        called["value"] = True
+        raise AssertionError("patient context must not reach the inference provider")
+
+    monkeypatch.setattr(api.service, "execute", should_not_execute)
+    with TestClient(api.app) as client:
+        response = client.post(
+            "/v1/intelligence/run",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "goal": "synthetic clinical request",
+                "context": {"clinic": {"patient_id": "synthetic-patient-001"}},
+            },
+        )
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "EXTERNAL_PATIENT_DATA_BLOCKED"
+    assert called["value"] is False
+
+
 def test_disabled_knowledge_provider_returns_empty_evidence():
     from universal_intelligence_engine.providers import DisabledKnowledgeProvider
 
