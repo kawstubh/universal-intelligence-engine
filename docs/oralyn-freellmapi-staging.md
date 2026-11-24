@@ -52,3 +52,8 @@ A desktop gateway bound to 127.0.0.1 is reachable only from the same machine. A 
 - [ ] Exact synthetic prompt is the only payload accepted by the FreeLLMAPI provider.
 - [ ] Tests verify the provider rejects patient-context requests before network I/O.
 - [ ] No production deployment, patient data, or paid infrastructure is involved.
+
+
+### Provider selection and health verification
+
+Set `REASONING_PROVIDER=freellmapi` explicitly before starting the UIE process. The service selects the FreeLLMAPI adapter only for that exact setting; otherwise it preserves the existing OpenAI-key/native default. The `/health` response reports the selected provider/model and a boolean `providers.reasoning_configured` without exposing any key. For FreeLLMAPI this boolean is true only when `FREELLMAPI_API_KEY` is present; a missing key leaves reasoning unconfigured and requests fail closed. Health metadata does not prove external provider availability or quota.
