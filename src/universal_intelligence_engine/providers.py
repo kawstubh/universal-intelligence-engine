@@ -297,15 +297,18 @@ class OpenAIResponsesReasoningProvider:
       - openai: OpenAI Responses API
       - gemini: Gemini OpenAI-compatible Chat Completions API
       - groq: Groq OpenAI-compatible Chat Completions API
+      - freellmapi: local FreeLLMAPI OpenAI-compatible gateway (synthetic smoke-test only)
 
     Configuration:
-      REASONING_PROVIDER=openai|gemini|groq
+      REASONING_PROVIDER=openai|gemini|groq|freellmapi
       REASONING_BASE_URL=<optional override>
       REASONING_MODEL=<provider model id>
       REASONING_API_KEY=<generic key, optional>
       GEMINI_API_KEY=<Gemini key, preferred for provider=gemini>
       GROQ_API_KEY=<Groq key, preferred for provider=groq>
       OPENAI_API_KEY=<OpenAI key, preferred for provider=openai>
+      FREELLMAPI_API_KEY=<unified FreeLLMAPI key, preferred for provider=freellmapi>
+      FREELLMAPI_BASE_URL=<gateway URL; local desktop default is http://127.0.0.1:31415/v1>
     """
 
     DEFAULT_BASE_URLS: ClassVar[dict[str, str]] = {
@@ -327,15 +330,21 @@ class OpenAIResponsesReasoningProvider:
         self.model = (
             model or os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL") or ""
         ).strip() or None
+        default_base_url = self.DEFAULT_BASE_URLS.get(self.provider, "")
+        if self.provider == "freellmapi":
+            default_base_url = os.getenv(
+                "FREELLMAPI_BASE_URL", "http://127.0.0.1:31415/v1"
+            )
         self.base_url = (
             base_url
             or os.getenv("REASONING_BASE_URL")
-            or self.DEFAULT_BASE_URLS.get(self.provider, "")
+            or default_base_url
         ).rstrip("/")
         provider_keys = {
             "openai": os.getenv("OPENAI_API_KEY"),
             "gemini": os.getenv("GEMINI_API_KEY"),
             "groq": os.getenv("GROQ_API_KEY"),
+            "freellmapi": os.getenv("FREELLMAPI_API_KEY"),
         }
         self.api_key = (
             api_key
@@ -374,7 +383,21 @@ class OpenAIResponsesReasoningProvider:
         request: IntelligenceRequest,
         evidence: Sequence[Evidence],
     ) -> IntelligenceResponse:
-        if self.provider not in self.DEFAULT_BASE_URLS:
+        # Free provider terms and the Oralyn staging boundary prohibit patient data.
+        # This gateway is intentionally limited to one fixed synthetic connectivity
+        # benchmark; it is not a clinical reasoning route.
+        if self.provider == "freellmapi" and (
+            request.goal
+            != "Reply with exactly ORALYN-FREELLMAPI-OK and nothing else."
+            or dict(request.context)
+            != {"synthetic_test": "oralyn_freellmapi_smoke_test"}
+            or request.constraints.get("data_classification") != "synthetic"
+        ):
+            raise ProviderNotConfiguredError(
+                "reasoning",
+                "FreeLLMAPI is restricted to the fixed synthetic Oralyn staging smoke test; patient and clinical context are not permitted.",
+            )
+        if self.provider not in self.DEFAULT_BASE_URLS and self.provider != "freellmapi":
             raise ProviderNotConfiguredError(
                 "reasoning", f"Unsupported reasoning provider: {self.provider}"
             )

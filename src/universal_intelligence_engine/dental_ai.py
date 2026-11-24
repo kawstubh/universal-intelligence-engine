@@ -236,6 +236,11 @@ async def _uie(
                         "do_not_write_records": True,
                         "domain": "dental",
                         "capability": capability,
+                        **(
+                            {"data_classification": "synthetic"}
+                            if capability == "freellmapi_smoke_test"
+                            else {}
+                        ),
                     },
                 },
             )
@@ -305,6 +310,27 @@ async def _doctor_call(
         actor["id"], clinic_id, "doctor", capability, False
     )
     return result
+
+
+@router.post("/doctor/provider-smoke-test")
+async def doctor_provider_smoke_test(
+    actor: Annotated[dict, Depends(require_doctor)],
+):
+    """Verify the configured FreeLLMAPI gateway with a fixed synthetic prompt."""
+    if os.getenv("FREELLMAPI_SMOKE_TEST_ENABLED", "false").strip().lower() != "true":
+        raise HTTPException(
+            404,
+            detail={
+                "message": "Provider smoke test is disabled",
+                "code": "PROVIDER_SMOKE_TEST_DISABLED",
+            },
+        )
+    # Deliberately no patient_id, chart, appointment, or clinical record is accepted.
+    return await _uie(
+        "freellmapi_smoke_test",
+        "Reply with exactly ORALYN-FREELLMAPI-OK and nothing else.",
+        {"synthetic_test": "oralyn_freellmapi_smoke_test"},
+    )
 
 
 @router.post("/doctor/patient-summary")
