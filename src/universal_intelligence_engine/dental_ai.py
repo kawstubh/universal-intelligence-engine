@@ -209,6 +209,32 @@ async def _uie(
 ) -> dict[str, Any]:
     url = os.getenv("UIE_API_URL", "").strip()
     key = os.getenv("UIE_API_KEY", "").strip()
+    if os.getenv("REASONING_PROVIDER", "").strip().lower() == "freellmapi":
+        restricted_keys = {
+            "patient", "patient_id", "patientid", "dental_chart", "periodontogram",
+            "scan_reference", "visit_context", "clinical_note", "treatment_plan",
+            "symptoms", "medical_history", "date_of_birth", "dob", "phone",
+            "email", "address",
+        }
+
+        def contains_restricted_data(value: Any) -> bool:
+            if isinstance(value, dict):
+                for item_key, item_value in value.items():
+                    normalized = str(item_key).strip().lower().replace("-", "_")
+                    if normalized in restricted_keys or contains_restricted_data(item_value):
+                        return True
+            elif isinstance(value, (list, tuple)):
+                return any(contains_restricted_data(item) for item in value)
+            return False
+
+        if contains_restricted_data(context):
+            raise HTTPException(
+                503,
+                detail={
+                    "message": "FreeLLMAPI external inference is blocked for patient-specific or clinical-record context.",
+                    "code": "EXTERNAL_PATIENT_DATA_BLOCKED",
+                },
+            )
     if not url or not key:
         raise HTTPException(
             503,
@@ -236,6 +262,11 @@ async def _uie(
                         "do_not_write_records": True,
                         "domain": "dental",
                         "capability": capability,
+                        "data_classification": (
+                            "aggregate_non_patient"
+                            if capability == "daily_summary"
+                            else "patient_specific"
+                        ),
                     },
                 },
             )
@@ -374,18 +405,18 @@ async def doctor_daily_summary(actor: Annotated[dict, Depends(require_doctor)]):
     _limits(actor["id"], clinic_id, "daily_summary")
     store = get_dental_store()
     appointments = store.appointments(clinic_id)
-    safe = [
-        {
-            "starts_at": a["starts_at"],
-            "treatment_type": a["treatment_type"],
-            "status": a["status"],
-        }
-        for a in appointments
-    ]
+    status_counts: dict[str, int] = {}
+    for appointment in appointments:
+        status = str(appointment.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
     return await _uie(
         "daily_summary",
-        "Summarize today's clinic workload, appointment statuses, and operational follow-up items. Do not include patient names or identifiers.",
-        {"domain": "dental", "appointments": safe},
+        "Summarize aggregate clinic workload and appointment-status counts. Do not infer patient details or clinical conditions.",
+        {
+            "domain": "dental",
+            "appointment_count": len(appointments),
+            "status_counts": status_counts,
+        },
     )
 
 

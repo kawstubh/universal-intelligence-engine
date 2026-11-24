@@ -46,9 +46,11 @@ class IntelligenceRunBody(BaseModel):
 def build_service() -> IntelligenceService:
     # Public reference and biomedical APIs require no paid search subscription or key.
     knowledge: KnowledgeProvider = FreePublicKnowledgeProvider()
+    configured_provider = os.getenv("REASONING_PROVIDER", "").strip().lower()
     reasoning = (
         OpenAIResponsesReasoningProvider()
-        if os.getenv("OPENAI_API_KEY")
+        if configured_provider in {"openai", "gemini", "groq", "freellmapi"}
+        or os.getenv("OPENAI_API_KEY")
         else NativeReasoningProvider()
     )
     memory = LearningMemory(os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl"))
@@ -304,16 +306,48 @@ def health() -> dict[str, Any]:
             "knowledge_mode": "best-effort-public-sources",
             "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
             "reasoning_provider": (
-                "openai-responses" if os.getenv("OPENAI_API_KEY") else "native"
+                "freellmapi"
+                if os.getenv("REASONING_PROVIDER", "").strip().lower() == "freellmapi"
+                else os.getenv("REASONING_PROVIDER", "").strip().lower()
+                if os.getenv("REASONING_PROVIDER", "").strip().lower() in {"gemini", "groq"}
+                else "openai-responses"
+                if os.getenv("OPENAI_API_KEY")
+                else "native"
             ),
             "reasoning_model": (
-                "native"
-                if not os.getenv("OPENAI_API_KEY")
-                else os.getenv("OPENAI_MODEL") or "default"
+                os.getenv("REASONING_MODEL")
+                or (
+                    os.getenv("FREELLMAPI_MODEL", "auto")
+                    if os.getenv("REASONING_PROVIDER", "").strip().lower() == "freellmapi"
+                    else os.getenv("OPENAI_MODEL") or "default"
+                )
+                if (
+                    os.getenv("OPENAI_API_KEY")
+                    or os.getenv("REASONING_PROVIDER", "").strip().lower()
+                    in {"openai", "gemini", "groq", "freellmapi"}
+                )
+                else "native"
             ),
         },
         "dental_api": True,
     }
+
+
+def _contains_restricted_patient_context(value: Any) -> bool:
+    restricted_keys = {
+        "patient", "patient_id", "patientid", "dental_chart", "periodontogram",
+        "scan_reference", "visit_context", "clinical_note", "treatment_plan",
+        "symptoms", "medical_history", "date_of_birth", "dob", "phone",
+        "email", "address", "patient_name", "full_name",
+    }
+    if isinstance(value, dict):
+        for item_key, item_value in value.items():
+            normalized = str(item_key).strip().lower().replace("-", "_")
+            if normalized in restricted_keys or _contains_restricted_patient_context(item_value):
+                return True
+    elif isinstance(value, (list, tuple)):
+        return any(_contains_restricted_patient_context(item) for item in value)
+    return False
 
 
 @app.post("/v1/intelligence/run")
@@ -321,6 +355,24 @@ def run_intelligence(
     body: IntelligenceRunBody, authorization: str | None = Header(default=None)
 ) -> dict[str, Any]:
     _authorize(authorization)
+    if os.getenv("REASONING_PROVIDER", "").strip().lower() == "freellmapi":
+        classification = str(body.constraints.get("data_classification") or "").strip().lower()
+        if classification not in {"public", "synthetic", "aggregate_non_patient"}:
+            raise HTTPException(
+                503,
+                detail={
+                    "message": "FreeLLMAPI requires an explicit public, synthetic, or aggregate_non_patient data classification.",
+                    "code": "EXTERNAL_DATA_CLASSIFICATION_REQUIRED",
+                },
+            )
+        if _contains_restricted_patient_context(body.context):
+            raise HTTPException(
+                503,
+                detail={
+                    "message": "FreeLLMAPI external inference is blocked for patient-specific or clinical-record context.",
+                    "code": "EXTERNAL_PATIENT_DATA_BLOCKED",
+                },
+            )
     try:
         result = service.execute(
             IntelligenceRequest(

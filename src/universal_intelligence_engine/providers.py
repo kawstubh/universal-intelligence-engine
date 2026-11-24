@@ -297,12 +297,16 @@ class OpenAIResponsesReasoningProvider:
       - openai: OpenAI Responses API
       - gemini: Gemini OpenAI-compatible Chat Completions API
       - groq: Groq OpenAI-compatible Chat Completions API
+      - freellmapi: FreeLLMAPI OpenAI-compatible Chat Completions API
 
     Configuration:
-      REASONING_PROVIDER=openai|gemini|groq
+      REASONING_PROVIDER=openai|gemini|groq|freellmapi
       REASONING_BASE_URL=<optional override>
       REASONING_MODEL=<provider model id>
       REASONING_API_KEY=<generic key, optional>
+      FREELLMAPI_BASE_URL=<FreeLLMAPI /v1 URL; local desktop default is loopback>
+      FREELLMAPI_MODEL=<optional model id; defaults to auto>
+      FREELLMAPI_API_KEY=<FreeLLMAPI unified key>
       GEMINI_API_KEY=<Gemini key, preferred for provider=gemini>
       GROQ_API_KEY=<Groq key, preferred for provider=groq>
       OPENAI_API_KEY=<OpenAI key, preferred for provider=openai>
@@ -312,6 +316,7 @@ class OpenAIResponsesReasoningProvider:
         "openai": "https://api.openai.com/v1",
         "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
         "groq": "https://api.groq.com/openai/v1",
+        "freellmapi": "http://127.0.0.1:31415/v1",
     }
 
     def __init__(
@@ -324,18 +329,30 @@ class OpenAIResponsesReasoningProvider:
         self.provider = (
             (provider or os.getenv("REASONING_PROVIDER") or "openai").strip().lower()
         )
+        default_model = (
+            os.getenv("FREELLMAPI_MODEL", "auto")
+            if self.provider == "freellmapi"
+            else os.getenv("OPENAI_MODEL", "")
+        )
         self.model = (
-            model or os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL") or ""
+            model or os.getenv("REASONING_MODEL") or default_model or ""
         ).strip() or None
+        provider_base_url = (
+            os.getenv("FREELLMAPI_BASE_URL", "")
+            if self.provider == "freellmapi"
+            else ""
+        )
         self.base_url = (
             base_url
             or os.getenv("REASONING_BASE_URL")
+            or provider_base_url
             or self.DEFAULT_BASE_URLS.get(self.provider, "")
         ).rstrip("/")
         provider_keys = {
             "openai": os.getenv("OPENAI_API_KEY"),
             "gemini": os.getenv("GEMINI_API_KEY"),
             "groq": os.getenv("GROQ_API_KEY"),
+            "freellmapi": os.getenv("FREELLMAPI_API_KEY"),
         }
         self.api_key = (
             api_key
