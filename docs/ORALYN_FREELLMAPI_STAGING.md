@@ -47,8 +47,10 @@ production services or secrets.
 ## Patient-data boundary
 
 FreeLLMAPI is an external inference gateway. While
-REASONING_PROVIDER=freellmapi, the API rejects requests containing known
-patient-identifying or patient-record context keys before inference. Doctor
+REASONING_PROVIDER=freellmapi, the API requires an explicit
+data_classification of public, synthetic, or aggregate_non_patient and rejects
+requests containing known patient-identifying or patient-record context keys
+before inference. Doctor
 patient-specific clinical AI requests are therefore blocked from this
 external provider. This is intentional until a separate privacy, vendor,
 retention, and clinical data-processing approval is completed.
