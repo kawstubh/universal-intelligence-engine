@@ -13,13 +13,6 @@ from universal_intelligence_engine.api import app
 from universal_intelligence_engine.dental_store import DentalStore
 
 
-@pytest.fixture(autouse=True)
-def reset_public_intake_limits():
-    dental_api._PUBLIC_APPOINTMENT_ATTEMPTS.clear()
-    yield
-    dental_api._PUBLIC_APPOINTMENT_ATTEMPTS.clear()
-
-
 @pytest.fixture
 def public_booking_api(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -70,28 +63,30 @@ def _count(store: DentalStore, table: str) -> int:
     return int(store._execute(f"SELECT COUNT(*) AS n FROM {table}")[0]["n"])
 
 
-def test_public_appointment_rate_limit_blocks_bursts_and_returns_retry_after(monkeypatch):
-    monkeypatch.setattr(dental_api, "_PUBLIC_APPOINTMENT_MAX_ATTEMPTS", 2)
-    monkeypatch.setattr(dental_api, "_PUBLIC_APPOINTMENT_WINDOW_SECONDS", 300)
-    clock = {"now": 1000.0}
-    monkeypatch.setattr(dental_api.time, "monotonic", lambda: clock["now"])
+def test_public_appointment_rate_limit_blocks_bursts_and_returns_retry_after(
+    monkeypatch, public_booking_api
+):
+    from universal_intelligence_engine import dental_rate_limit
 
-    dental_api._check_public_appointment_rate_limit("203.0.113.10")
-    dental_api._check_public_appointment_rate_limit("203.0.113.10")
+    _client, _store = public_booking_api
+    monkeypatch.setattr(dental_rate_limit.time, "time", lambda: 1000)
+    for _ in range(8):
+        dental_api._check_public_appointment_rate_limit("203.0.113.10")
     with pytest.raises(HTTPException) as limited:
         dental_api._check_public_appointment_rate_limit("203.0.113.10")
 
     assert limited.value.status_code == 429
     assert limited.value.detail["code"] == "PUBLIC_APPOINTMENT_RATE_LIMITED"
-    assert limited.value.headers["Retry-After"] == "300"
+    assert limited.value.headers["Retry-After"] == "200"
 
-    clock["now"] += 301
+    monkeypatch.setattr(dental_rate_limit.time, "time", lambda: 1200)
     dental_api._check_public_appointment_rate_limit("203.0.113.10")
 
 
-def test_public_appointment_rate_limit_isolated_per_client_ip(monkeypatch):
-    monkeypatch.setattr(dental_api, "_PUBLIC_APPOINTMENT_MAX_ATTEMPTS", 1)
-    dental_api._check_public_appointment_rate_limit("203.0.113.11")
+def test_public_appointment_rate_limit_isolated_per_client_ip(public_booking_api):
+    _client, _store = public_booking_api
+    for _ in range(8):
+        dental_api._check_public_appointment_rate_limit("203.0.113.11")
     dental_api._check_public_appointment_rate_limit("203.0.113.12")
     with pytest.raises(HTTPException) as limited:
         dental_api._check_public_appointment_rate_limit("203.0.113.11")
