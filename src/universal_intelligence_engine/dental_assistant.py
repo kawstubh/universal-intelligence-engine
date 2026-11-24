@@ -10,7 +10,6 @@ import ipaddress
 import secrets
 import time
 import uuid
-from collections import defaultdict, deque
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
@@ -19,16 +18,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .dental_auth import hash_password, require_doctor, verify_password
 from .dental_store import get_dental_store
+from .dental_rate_limit import enforce_shared_rate_limit
 
 router = APIRouter(prefix="/v1/dental", tags=["dental-clinic-assistant"])
 
 ASSISTANT_SESSION_TTL = 8 * 60 * 60
-_LOGIN_WINDOW_SECONDS = 300
-_LOGIN_MAX_ATTEMPTS = 10
-_LOGIN_MAX_CLIENTS = 10_000
-_LOGIN_ATTEMPTS: dict[str, deque[float]] = defaultdict(deque)
-
-
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -63,55 +57,14 @@ def _assistant_login_client_ip(request: Request) -> str:
 
 
 def _check_login_rate_limit(request: Request) -> None:
-    key = (_assistant_login_client_ip(request) or "unknown").strip()[:128] or "unknown"
-    now = time.monotonic()
-    attempts = _LOGIN_ATTEMPTS.get(key)
-    if attempts is not None:
-        while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
-            attempts.popleft()
-        if not attempts:
-            _LOGIN_ATTEMPTS.pop(key, None)
-            attempts = None
+    enforce_shared_rate_limit(
+        get_dental_store(),
+        scope="assistant_login",
+        client_identity=_assistant_login_client_ip(request),
+        max_attempts=10,
+        window_seconds=300,
+    )
 
-    # Bound memory use if an attacker rotates source IPs. This remains a
-    # single-instance guard; production horizontal scaling needs shared storage
-    # or a trusted edge/WAF rate-limit rule.
-    if attempts is None:
-        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
-            cutoff = now - _LOGIN_WINDOW_SECONDS
-            for stale_key, stale_attempts in list(_LOGIN_ATTEMPTS.items()):
-                while stale_attempts and stale_attempts[0] <= cutoff:
-                    stale_attempts.popleft()
-                if not stale_attempts:
-                    _LOGIN_ATTEMPTS.pop(stale_key, None)
-                if len(_LOGIN_ATTEMPTS) < _LOGIN_MAX_CLIENTS:
-                    break
-        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
-            raise HTTPException(
-                503,
-                detail={
-                    "code": "ASSISTANT_LOGIN_CAPACITY",
-                    "message": "Sign-in is temporarily busy. Please try again shortly.",
-                },
-                headers={"Retry-After": str(_LOGIN_WINDOW_SECONDS)},
-            )
-        attempts = deque()
-        _LOGIN_ATTEMPTS[key] = attempts
-
-    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
-        retry_after = max(
-            1,
-            int(_LOGIN_WINDOW_SECONDS - (now - attempts[0])),
-        )
-        raise HTTPException(
-            429,
-            detail={
-                "code": "ASSISTANT_LOGIN_RATE_LIMITED",
-                "message": "Too many sign-in attempts. Please wait before trying again.",
-            },
-            headers={"Retry-After": str(retry_after)},
-        )
-    attempts.append(now)
 
 class AssistantLoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
