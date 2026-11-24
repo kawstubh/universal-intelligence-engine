@@ -52,7 +52,7 @@ def enforce_shared_rate_limit(
         )
 
     identity = (client_identity or "unknown").strip()[:128] or "unknown"
-    material = f"oralyn-rate-limit:v1:{scope}:{identity}".encode("utf-8")
+    material = f"oralyn-rate-limit:v1:{scope}:{identity}".encode()
     key_hash = hmac.new(secret.encode("utf-8"), material, hashlib.sha256).hexdigest()
     current = int(time.time()) if now is None else int(now)
     window_start = current - (current % window_seconds)
