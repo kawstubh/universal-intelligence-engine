@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
 from fastapi import HTTPException
 
 from universal_intelligence_engine.dental_rate_limit import enforce_shared_rate_limit
@@ -138,18 +139,35 @@ def test_postgres_counter_is_shared_across_independent_store_instances(monkeypat
     if not test_database_url:
         pytest.skip("PostgreSQL CI service is not configured")
 
+    # The PostgreSQL workflow provisions an isolated disposable service. Create
+    # only the rate-limit table here; the separate migration rehearsal verifies
+    # Alembic creates it at revision 0016.
+    engine = sa.create_engine(test_database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "CREATE TABLE IF NOT EXISTS dental_rate_limit_buckets ("
+                "key_hash VARCHAR(64) PRIMARY KEY, "
+                "window_start BIGINT NOT NULL, "
+                "attempt_count INTEGER NOT NULL CHECK (attempt_count > 0), "
+                "updated_at BIGINT NOT NULL)"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "CREATE INDEX IF NOT EXISTS idx_dental_rate_limit_window_start "
+                "ON dental_rate_limit_buckets(window_start)"
+            )
+        )
+
     database_url = test_database_url.replace(
         "postgresql+psycopg://", "postgresql://", 1
     )
     monkeypatch.setenv("DATABASE_URL", database_url)
-    monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
+    monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "false")
     monkeypatch.setenv(
         "DENTAL_RATE_LIMIT_HASH_KEY",
         "synthetic-postgres-rate-limit-key-at-least-32-bytes",
-    )
-    monkeypatch.setenv(
-        "ALEMBIC_CONFIG",
-        str(Path(__file__).resolve().parents[1] / "alembic.ini"),
     )
 
     first = DentalStore()
@@ -180,3 +198,4 @@ def test_postgres_counter_is_shared_across_independent_store_instances(monkeypat
 
     assert limited.value.status_code == 429
     assert limited.value.detail["code"] == "ASSISTANT_LOGIN_RATE_LIMITED"
+    engine.dispose()
