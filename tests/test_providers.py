@@ -205,6 +205,32 @@ def test_freellmapi_uses_openai_compatible_chat_completions(monkeypatch):
     assert result.metadata["provider"] == "freellmapi"
 
 
+def test_freellmapi_requires_explicit_data_classification(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from universal_intelligence_engine import api
+
+    api_key = "synthetic-uie-api-key"
+    monkeypatch.setenv("UIE_API_KEY", api_key)
+    monkeypatch.setenv("REASONING_PROVIDER", "freellmapi")
+    called = {"value": False}
+
+    def should_not_execute(*args, **kwargs):
+        called["value"] = True
+        raise AssertionError("unclassified data must not reach the inference provider")
+
+    monkeypatch.setattr(api.service, "execute", should_not_execute)
+    with TestClient(api.app) as client:
+        response = client.post(
+            "/v1/intelligence/run",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"goal": "synthetic public test", "context": {}, "constraints": {}},
+        )
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "EXTERNAL_DATA_CLASSIFICATION_REQUIRED"
+    assert called["value"] is False
+
+
 def test_freellmapi_rejects_patient_context_before_provider_call(monkeypatch):
     from fastapi.testclient import TestClient
 
