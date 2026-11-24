@@ -13,22 +13,16 @@ import os
 import secrets
 import time
 import uuid
-from collections import defaultdict, deque
 
 from fastapi import Header, HTTPException, Request
 
+from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
 
 SESSION_TTL = 60 * 60 * 24 * 30
 _SCRYPT_N = 2**14
 _SCRYPT_R = 8
 _SCRYPT_P = 1
-_LOGIN_ATTEMPTS: dict[str, deque[float]] = defaultdict(deque)
-_LOGIN_WINDOW_SECONDS = 300
-_LOGIN_MAX_ATTEMPTS = 10
-_LOGIN_MAX_CLIENTS = 10_000
-
-
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -174,55 +168,14 @@ def _login_client_ip(request: Request) -> str:
 
 
 def _check_login_rate_limit(ip: str) -> None:
-    key = (ip or "unknown").strip()[:128] or "unknown"
-    now = time.monotonic()
-    attempts = _LOGIN_ATTEMPTS.get(key)
-    if attempts is not None:
-        while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
-            attempts.popleft()
-        if not attempts:
-            _LOGIN_ATTEMPTS.pop(key, None)
-            attempts = None
-
-    # Bound memory if clients rotate source IPs. This process-local guard is
-    # suitable only for the current single-instance staging service; production
-    # horizontal scaling still requires a shared limiter or trusted edge policy.
-    if attempts is None:
-        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
-            cutoff = now - _LOGIN_WINDOW_SECONDS
-            for stale_key, stale_attempts in list(_LOGIN_ATTEMPTS.items()):
-                while stale_attempts and stale_attempts[0] <= cutoff:
-                    stale_attempts.popleft()
-                if not stale_attempts:
-                    _LOGIN_ATTEMPTS.pop(stale_key, None)
-                if len(_LOGIN_ATTEMPTS) < _LOGIN_MAX_CLIENTS:
-                    break
-        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
-            raise HTTPException(
-                503,
-                detail={
-                    "code": "LOGIN_RATE_LIMIT_CAPACITY",
-                    "message": "Sign-in is temporarily busy. Please try again shortly.",
-                },
-                headers={"Retry-After": str(_LOGIN_WINDOW_SECONDS)},
-            )
-        attempts = deque()
-        _LOGIN_ATTEMPTS[key] = attempts
-
-    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
-        retry_after = max(
-            1,
-            int(_LOGIN_WINDOW_SECONDS - (now - attempts[0])),
-        )
-        raise HTTPException(
-            429,
-            detail={
-                "code": "LOGIN_RATE_LIMITED",
-                "message": "Too many login attempts; try again in five minutes",
-            },
-            headers={"Retry-After": str(retry_after)},
-        )
-    attempts.append(now)
+    enforce_shared_rate_limit(
+        get_dental_store(),
+        scope="doctor_login",
+        client_identity=ip,
+        max_attempts=10,
+        window_seconds=300,
+        rate_limited_code="LOGIN_RATE_LIMITED",
+    )
 
 
 async def login_password(email: str, password: str, request: Request) -> dict:

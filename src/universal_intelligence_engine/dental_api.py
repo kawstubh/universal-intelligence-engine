@@ -8,8 +8,6 @@ import ipaddress
 import json
 import os
 import secrets
-import time
-from collections import defaultdict, deque
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -28,29 +26,16 @@ from .dental_auth import (
 from .dental_billing import create_order as create_membership_order_impl
 from .dental_billing import handle_webhook as handle_membership_webhook
 from .dental_billing import plans as membership_plans
+from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
 from .whatsapp_adapter import get_whatsapp_adapter
 
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
-# Public guest intake is intentionally bounded even before an edge/WAF policy is
-# configured. This in-process sliding window is suitable for the current
-# single-instance staging service; production horizontal scaling must add a
-# shared rate limiter or edge-level rule before increasing instance count.
-_PUBLIC_APPOINTMENT_ATTEMPTS: dict[str, deque[float]] = defaultdict(deque)
-_PUBLIC_APPOINTMENT_WINDOW_SECONDS = 300
-_PUBLIC_APPOINTMENT_MAX_ATTEMPTS = 8
-_PUBLIC_APPOINTMENT_MAX_CLIENTS = 10_000
-
 
 def _public_appointment_client_ip(request: Request) -> str:
-    """Use Cloudflare's edge-supplied client IP on Render, not the proxy socket IP.
-
-    Render routes public web-service traffic through Cloudflare. CF-Connecting-IP
-    is set by Cloudflare for origin traffic and has a single-IP format; do not
-    trust caller-supplied X-Forwarded-For chains as a rate-limit identity.
-    """
+    """Use Cloudflare's edge-supplied client IP on Render, not the proxy socket IP."""
     forwarded = str(request.headers.get("cf-connecting-ip") or "").strip()
     if forwarded:
         try:
@@ -60,13 +45,19 @@ def _public_appointment_client_ip(request: Request) -> str:
     return str(request.client.host if request.client else "unknown")
 
 
-def _public_booking_hmac(value: str, purpose: str) -> str:
-    """Keyed digest for low-entropy contact data and request fingerprints.
+def _check_public_appointment_rate_limit(client_ip: str) -> None:
+    enforce_shared_rate_limit(
+        get_dental_store(),
+        scope="public_appointment",
+        client_identity=client_ip,
+        max_attempts=8,
+        window_seconds=300,
+        rate_limited_code="PUBLIC_APPOINTMENT_RATE_LIMITED",
+    )
 
-    Plain SHA-256 is not suitable for phone numbers because the input space is
-    enumerable. Keep this key stable across deploys so duplicate detection and
-    idempotency remain consistent.
-    """
+
+def _public_booking_hmac(value: str, purpose: str) -> str:
+    """Keyed digest for low-entropy contact data and request fingerprints."""
     key = os.getenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", "").strip()
     if len(key.encode("utf-8")) < 32:
         raise HTTPException(
@@ -78,55 +69,6 @@ def _public_booking_hmac(value: str, purpose: str) -> str:
         )
     message = (purpose + ":" + value).encode("utf-8")
     return hmac.new(key.encode("utf-8"), message, hashlib.sha256).hexdigest()
-
-
-def _check_public_appointment_rate_limit(client_ip: str) -> None:
-    key = (client_ip or "unknown").strip()[:128] or "unknown"
-    now = time.monotonic()
-    attempts = _PUBLIC_APPOINTMENT_ATTEMPTS.get(key)
-    if attempts is not None:
-        while attempts and now - attempts[0] >= _PUBLIC_APPOINTMENT_WINDOW_SECONDS:
-            attempts.popleft()
-        if not attempts:
-            _PUBLIC_APPOINTMENT_ATTEMPTS.pop(key, None)
-            attempts = None
-
-    if attempts is None:
-        if len(_PUBLIC_APPOINTMENT_ATTEMPTS) >= _PUBLIC_APPOINTMENT_MAX_CLIENTS:
-            cutoff = now - _PUBLIC_APPOINTMENT_WINDOW_SECONDS
-            for stale_key, stale_attempts in list(_PUBLIC_APPOINTMENT_ATTEMPTS.items()):
-                while stale_attempts and stale_attempts[0] <= cutoff:
-                    stale_attempts.popleft()
-                if not stale_attempts:
-                    _PUBLIC_APPOINTMENT_ATTEMPTS.pop(stale_key, None)
-                if len(_PUBLIC_APPOINTMENT_ATTEMPTS) < _PUBLIC_APPOINTMENT_MAX_CLIENTS:
-                    break
-        if len(_PUBLIC_APPOINTMENT_ATTEMPTS) >= _PUBLIC_APPOINTMENT_MAX_CLIENTS:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "code": "PUBLIC_APPOINTMENT_CAPACITY",
-                    "message": "Public booking is temporarily busy. Please try again shortly.",
-                },
-                headers={"Retry-After": str(_PUBLIC_APPOINTMENT_WINDOW_SECONDS)},
-            )
-        attempts = deque()
-        _PUBLIC_APPOINTMENT_ATTEMPTS[key] = attempts
-
-    if len(attempts) >= _PUBLIC_APPOINTMENT_MAX_ATTEMPTS:
-        retry_after = max(
-            1,
-            int(_PUBLIC_APPOINTMENT_WINDOW_SECONDS - (now - attempts[0])),
-        )
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "code": "PUBLIC_APPOINTMENT_RATE_LIMITED",
-                "message": "Too many appointment requests. Please wait and try again.",
-            },
-            headers={"Retry-After": str(retry_after)},
-        )
-    attempts.append(now)
 
 
 class DoctorPasswordLoginIn(BaseModel):
@@ -202,21 +144,21 @@ class PublicAppointmentIn(BaseModel):
         "Scaling & Cleaning",
         "Teeth Whitening",
         "Tooth Filling",
-        "Root Canal Treatment (RCT)",
+        "Root Canal Treatment",
         "Dental Crowns & Caps",
         "Dental Implants",
         "Tooth Extraction",
         "Braces Treatment",
-        "Clear Aligners (Invisible Braces)",
-        "Dentures (Full / Partial)",
-        "Veneers (Smile Makeover)",
+        "Clear Aligners",
+        "Dentures",
+        "Veneers",
         "Gum Treatment (Periodontal Care)",
-        "Kids Dentistry (Child Care)",
+        "Kids Dentistry",
         "Emergency Dental Care",
         "Tooth Sensitivity Treatment",
-        "Dental Sealants (Cavity Prevention)",
+        "Dental Sealants",
         "Oral Hygiene Education",
-        "Smile Makeover (Cosmetic Dentistry)",
+        "Smile Makeover",
         "TMJ & Jaw Pain Treatment",
         "Other dental concern",
     ] = "Dental Check-up & Consultation"
@@ -873,7 +815,7 @@ def _database_branch_identity(store) -> tuple[str | None, bool | None]:
         rows = store._execute(
             "SELECT current_setting('neon.branch_id', true) AS branch_id"
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - fail closed if Neon branch identity cannot be verified
         return None, False
     actual_branch_id = str(rows[0].get("branch_id") or "").strip() if rows else ""
     if not actual_branch_id:

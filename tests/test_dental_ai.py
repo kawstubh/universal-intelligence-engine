@@ -300,10 +300,11 @@ def test_invalid_patient_token_has_stable_error_code(monkeypatch):
 
 def test_patient_appointments_and_chart_require_explicit_selection_for_multiple_links(monkeypatch):
     class Store:
-        records = {
-            "patient-a": {"id": "patient-a", "clinic_id": "clinic-a"},
-            "patient-b": {"id": "patient-b", "clinic_id": "clinic-b"},
-        }
+        def __init__(self):
+            self.records = {
+                "patient-a": {"id": "patient-a", "clinic_id": "clinic-a"},
+                "patient-b": {"id": "patient-b", "clinic_id": "clinic-b"},
+            }
 
         def patients_by_user_id(self, user_id):
             return [

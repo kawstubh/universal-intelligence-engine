@@ -78,7 +78,7 @@ def test_clinical_notes_remain_clinic_only(comms_api):
 
 
 def test_doctor_contact_messages_are_tenant_scoped_and_patient_routes_absent(comms_api):
-    client, _store, actor, _patient_actor, patient_a, patient_b = comms_api
+    client, _store, actor, _patient_actor, patient_a, _patient_b = comms_api
     doctor_send = client.post(
         f"/v1/dental/doctor/patients/{patient_a['id']}/messages",
         json={"body": "Your public appointment request has been received."},

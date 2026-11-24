@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine import dental_assistant, dental_auth, dental_store
+from universal_intelligence_engine import dental_auth, dental_store
 from universal_intelligence_engine.api import app
 from universal_intelligence_engine.dental_auth import hash_password
 from universal_intelligence_engine.dental_store import DentalStore
@@ -22,8 +22,6 @@ def assistant_api(tmp_path: Path, monkeypatch):
         str(Path(__file__).resolve().parents[1] / "alembic.ini"),
     )
     monkeypatch.setattr(dental_store, "_store", None)
-    dental_assistant._LOGIN_ATTEMPTS.clear()
-    dental_auth._LOGIN_ATTEMPTS.clear()
     store = DentalStore()
     store.create_organisation(
         {"id": "org-assistant-a", "name": "Assistant Clinic", "organisation_type": "clinic"}
@@ -211,6 +209,21 @@ def test_assistant_has_a_distinct_identity_and_can_only_use_reception_and_billin
     assert "treatment_type" not in confirmed.json()["result"]
     assert "patient_id" not in confirmed.json()["result"]
 
+    denied_cancellation = client.patch(
+        f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
+        headers=headers,
+        json={"status": "cancelled"},
+    )
+    assert denied_cancellation.status_code == 403
+    assert denied_cancellation.json()["detail"]["code"] == "ASSISTANT_APPOINTMENT_CANCELLATION_FORBIDDEN"
+    assistant_status_schema = client.get("/openapi.json").json()["components"]["schemas"]["AssistantAppointmentUpdateIn"]["properties"]["status"]
+    assert set(assistant_status_schema["enum"]) == {"confirmed", "rescheduled", None}
+    after_denial = client.get("/v1/dental/assistant/appointments", headers=headers).json()["result"]
+    assert any(
+        row["id"] == context["appointment_a"]["id"] and row["status"] == "confirmed"
+        for row in after_denial
+    )
+
     missing_reschedule_time = client.patch(
         f"/v1/dental/assistant/appointments/{context['appointment_a']['id']}",
         headers=headers,
@@ -286,6 +299,7 @@ def test_assistant_receipt_idempotency_and_overpayment_are_enforced(assistant_ap
     payload = {
         "amount_paise": 1000,
         "method": "cash",
+        "reference": "CASH-REF-001",
         "idempotency_key": "assistant-receipt-key-002",
     }
     first = client.post(path, headers=headers, json=payload)
@@ -293,6 +307,26 @@ def test_assistant_receipt_idempotency_and_overpayment_are_enforced(assistant_ap
     assert first.status_code == 201
     assert second.status_code == 201
     assert first.json()["result"]["id"] == second.json()["result"]["id"]
+
+    normalized_reference_retry = client.post(
+        path,
+        headers=headers,
+        json={**payload, "reference": "  CASH-REF-001  "},
+    )
+    assert normalized_reference_retry.status_code == 201
+    assert normalized_reference_retry.json()["result"]["id"] == first.json()["result"]["id"]
+
+    changed_reference = client.post(
+        path,
+        headers=headers,
+        json={**payload, "reference": "CASH-REF-002"},
+    )
+    assert changed_reference.status_code == 409
+    assert changed_reference.json()["detail"]["code"] == "RECEIPT_IDEMPOTENCY_CONFLICT"
+    persisted_after_conflict = context["store"].get_invoice(
+        context["invoice_a"]["id"], "clinic-assistant-a"
+    )
+    assert persisted_after_conflict["paid_paise"] == 1000
 
     overpayment = client.post(
         path,
@@ -306,6 +340,42 @@ def test_assistant_receipt_idempotency_and_overpayment_are_enforced(assistant_ap
     assert overpayment.status_code == 409
     assert overpayment.json()["detail"]["code"] == "RECEIPT_EXCEEDS_BALANCE"
 
+
+
+def test_assistant_receipt_idempotency_checks_explicit_paid_at_instant(assistant_api):
+    context = assistant_api
+    client = context["client"]
+    headers = _assistant_headers(context)
+    path = f"/v1/dental/assistant/billing/invoices/{context['invoice_a']['id']}/receipts"
+    payload = {
+        "amount_paise": 1000,
+        "method": "upi",
+        "reference": "TIME-REF-001",
+        "idempotency_key": "assistant-receipt-paid-at-003",
+        "paid_at": "2026-11-19T12:00:00+05:30",
+    }
+
+    first = client.post(path, headers=headers, json=payload)
+    equivalent_instant = client.post(
+        path,
+        headers=headers,
+        json={**payload, "paid_at": "2026-11-19T06:30:00Z"},
+    )
+    assert first.status_code == 201, first.text
+    assert equivalent_instant.status_code == 201, equivalent_instant.text
+    assert equivalent_instant.json()["result"]["id"] == first.json()["result"]["id"]
+
+    changed_instant = client.post(
+        path,
+        headers=headers,
+        json={**payload, "paid_at": "2026-11-19T06:31:00Z"},
+    )
+    assert changed_instant.status_code == 409
+    assert changed_instant.json()["detail"]["code"] == "RECEIPT_IDEMPOTENCY_CONFLICT"
+    persisted = context["store"].get_invoice(
+        context["invoice_a"]["id"], "clinic-assistant-a"
+    )
+    assert persisted["paid_paise"] == 1000
 
 def test_assistant_is_denied_all_doctor_clinical_and_owner_routes_with_403(assistant_api):
     context = assistant_api
@@ -693,7 +763,6 @@ def test_assistant_login_rate_limit_uses_validated_client_ip(assistant_api):
 def test_doctor_login_rate_limit_uses_validated_client_ip(assistant_api):
     context = assistant_api
     client = context["client"]
-    dental_auth._LOGIN_ATTEMPTS.clear()
     path = "/v1/dental/auth/password/login"
     payload = {"email": "missing@example.test", "password": "not-the-password"}
     first_ip = {"CF-Connecting-IP": "198.51.100.20"}
@@ -713,30 +782,25 @@ def test_doctor_login_rate_limit_uses_validated_client_ip(assistant_api):
     assert other_client.status_code == 401
 
 
-def test_doctor_login_rate_limit_bounds_client_buckets(assistant_api, monkeypatch):
+def test_doctor_login_rate_limit_persists_across_store_instances(assistant_api, monkeypatch):
     context = assistant_api
     client = context["client"]
-    dental_auth._LOGIN_ATTEMPTS.clear()
-    monkeypatch.setattr(dental_auth, "_LOGIN_MAX_CLIENTS", 1)
     path = "/v1/dental/auth/password/login"
     payload = {"email": "missing@example.test", "password": "not-the-password"}
+    headers = {"CF-Connecting-IP": "198.51.100.30"}
 
-    first = client.post(
-        path,
-        headers={"CF-Connecting-IP": "198.51.100.30"},
-        json=payload,
-    )
-    assert first.status_code == 401
+    for _ in range(10):
+        response = client.post(path, headers=headers, json=payload)
+        assert response.status_code == 401
 
-    at_capacity = client.post(
-        path,
-        headers={"CF-Connecting-IP": "198.51.100.31"},
-        json=payload,
-    )
-    assert at_capacity.status_code == 503
-    assert at_capacity.json()["detail"]["code"] == "LOGIN_RATE_LIMIT_CAPACITY"
-    assert at_capacity.headers["retry-after"]
-    assert len(dental_auth._LOGIN_ATTEMPTS) == 1
+    # A second store object opens an independent database connection to the
+    # same SQLite file; the shared counter must still reject the next attempt.
+    second_store = DentalStore()
+    monkeypatch.setattr(dental_auth, "get_dental_store", lambda: second_store)
+    blocked = client.post(path, headers=headers, json=payload)
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "LOGIN_RATE_LIMITED"
+    assert blocked.headers["retry-after"]
 
 
 def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(assistant_api, monkeypatch):
@@ -794,28 +858,26 @@ def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(a
 
 def test_doctor_login_rate_limit_falls_back_for_missing_or_malformed_forwarded_ip(assistant_api):
     """Untrusted/malformed forwarding values share the connection-peer bucket."""
-    client = assistant_api["client"]
-    dental_auth._LOGIN_ATTEMPTS.clear()
+    context = assistant_api
+    client = context["client"]
+    # The fixture's owner bootstrap login also used the TestClient peer IP.
+    context["store"]._execute("DELETE FROM dental_rate_limit_buckets")
     path = "/v1/dental/auth/password/login"
     payload = {"email": "missing@example.test", "password": "not-the-password"}
 
-    try:
-        for attempt in range(10):
-            headers = (
-                {"CF-Connecting-IP": "not-an-ip"}
-                if attempt % 2 == 0
-                else {}
-            )
-            response = client.post(path, headers=headers, json=payload)
-            assert response.status_code == 401
-
-        blocked = client.post(
-            path,
-            headers={"CF-Connecting-IP": "still-not-an-ip"},
-            json=payload,
+    for attempt in range(10):
+        headers = (
+            {"CF-Connecting-IP": "not-an-ip"}
+            if attempt % 2 == 0
+            else {}
         )
-        assert blocked.status_code == 429
-        assert blocked.headers["retry-after"]
-        assert len(dental_auth._LOGIN_ATTEMPTS) == 1
-    finally:
-        dental_auth._LOGIN_ATTEMPTS.clear()
+        response = client.post(path, headers=headers, json=payload)
+        assert response.status_code == 401
+
+    blocked = client.post(
+        path,
+        headers={"CF-Connecting-IP": "still-not-an-ip"},
+        json=payload,
+    )
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"]

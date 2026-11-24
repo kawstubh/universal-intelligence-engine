@@ -10,7 +10,6 @@ import ipaddress
 import secrets
 import time
 import uuid
-from collections import defaultdict, deque
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
@@ -18,15 +17,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .dental_auth import hash_password, require_doctor, verify_password
+from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
 
 router = APIRouter(prefix="/v1/dental", tags=["dental-clinic-assistant"])
 
 ASSISTANT_SESSION_TTL = 8 * 60 * 60
-_LOGIN_WINDOW_SECONDS = 300
-_LOGIN_MAX_ATTEMPTS = 10
-_LOGIN_MAX_CLIENTS = 10_000
-_LOGIN_ATTEMPTS: dict[str, deque[float]] = defaultdict(deque)
 
 
 def _now() -> str:
@@ -63,55 +59,15 @@ def _assistant_login_client_ip(request: Request) -> str:
 
 
 def _check_login_rate_limit(request: Request) -> None:
-    key = (_assistant_login_client_ip(request) or "unknown").strip()[:128] or "unknown"
-    now = time.monotonic()
-    attempts = _LOGIN_ATTEMPTS.get(key)
-    if attempts is not None:
-        while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
-            attempts.popleft()
-        if not attempts:
-            _LOGIN_ATTEMPTS.pop(key, None)
-            attempts = None
+    enforce_shared_rate_limit(
+        get_dental_store(),
+        scope="assistant_login",
+        client_identity=_assistant_login_client_ip(request),
+        max_attempts=10,
+        window_seconds=300,
+        rate_limited_code="ASSISTANT_LOGIN_RATE_LIMITED",
+    )
 
-    # Bound memory use if an attacker rotates source IPs. This remains a
-    # single-instance guard; production horizontal scaling needs shared storage
-    # or a trusted edge/WAF rate-limit rule.
-    if attempts is None:
-        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
-            cutoff = now - _LOGIN_WINDOW_SECONDS
-            for stale_key, stale_attempts in list(_LOGIN_ATTEMPTS.items()):
-                while stale_attempts and stale_attempts[0] <= cutoff:
-                    stale_attempts.popleft()
-                if not stale_attempts:
-                    _LOGIN_ATTEMPTS.pop(stale_key, None)
-                if len(_LOGIN_ATTEMPTS) < _LOGIN_MAX_CLIENTS:
-                    break
-        if len(_LOGIN_ATTEMPTS) >= _LOGIN_MAX_CLIENTS:
-            raise HTTPException(
-                503,
-                detail={
-                    "code": "ASSISTANT_LOGIN_CAPACITY",
-                    "message": "Sign-in is temporarily busy. Please try again shortly.",
-                },
-                headers={"Retry-After": str(_LOGIN_WINDOW_SECONDS)},
-            )
-        attempts = deque()
-        _LOGIN_ATTEMPTS[key] = attempts
-
-    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
-        retry_after = max(
-            1,
-            int(_LOGIN_WINDOW_SECONDS - (now - attempts[0])),
-        )
-        raise HTTPException(
-            429,
-            detail={
-                "code": "ASSISTANT_LOGIN_RATE_LIMITED",
-                "message": "Too many sign-in attempts. Please wait before trying again.",
-            },
-            headers={"Retry-After": str(retry_after)},
-        )
-    attempts.append(now)
 
 class AssistantLoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
@@ -170,8 +126,20 @@ class AssistantPatientCreateIn(BaseModel):
 
 
 class AssistantAppointmentUpdateIn(BaseModel):
-    status: Literal["confirmed", "cancelled", "rescheduled"] | None = None
+    # Keep cancellation accepted by runtime validation so the endpoint can
+    # return an explicit 403, but do not advertise it as an Assistant action.
+    status: str | None = Field(
+        default=None,
+        json_schema_extra={"enum": ["confirmed", "rescheduled", None]},
+    )
     starts_at: datetime | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str | None) -> str | None:
+        if value is not None and value not in {"confirmed", "cancelled", "rescheduled"}:
+            raise ValueError("Unsupported appointment status")
+        return value
 
     @model_validator(mode="after")
     def require_reschedule_time(self):
@@ -437,6 +405,16 @@ async def assistant_update_appointment(
     body: AssistantAppointmentUpdateIn,
     actor: Annotated[dict, Depends(require_assistant)],
 ):
+    # Appointment cancellation is intentionally outside the Assistant role.
+    # Reject it before reading or mutating clinic data; only Doctors may cancel.
+    if body.status == "cancelled":
+        raise HTTPException(
+            403,
+            detail={
+                "code": "ASSISTANT_APPOINTMENT_CANCELLATION_FORBIDDEN",
+                "message": "Clinic Assistants may confirm or reschedule appointments but cannot cancel them.",
+            },
+        )
     changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(
@@ -519,6 +497,27 @@ async def assistant_list_invoice_balances(actor: Annotated[dict, Depends(require
     return _envelope(rows)
 
 
+def _receipt_paid_at_matches(stored_paid_at, requested_paid_at: datetime | None) -> bool:
+    """Compare an explicitly supplied payment time; omission makes no assertion.
+
+    When paid_at is omitted, the first request uses server time. A retry that
+    also omits it must return the original receipt rather than conflict merely
+    because the server clock has advanced.
+    """
+    if requested_paid_at is None:
+        return True
+    if isinstance(stored_paid_at, datetime):
+        stored = stored_paid_at
+    else:
+        try:
+            stored = datetime.fromisoformat(str(stored_paid_at))
+        except (TypeError, ValueError):
+            return False
+    if stored.tzinfo is None or stored.utcoffset() is None:
+        return False
+    return stored.astimezone(UTC) == requested_paid_at.astimezone(UTC)
+
+
 def _safe_receipt(receipt: dict) -> dict:
     return {
         "id": receipt["id"],
@@ -554,6 +553,8 @@ async def assistant_record_receipt(
                 receipt["invoice_id"] != invoice_id
                 or int(receipt["amount_paise"]) != body.amount_paise
                 or receipt["method"] != body.method
+                or receipt["reference"] != body.reference.strip()
+                or not _receipt_paid_at_matches(receipt["paid_at"], body.paid_at)
             ):
                 raise HTTPException(
                     409,
@@ -623,7 +624,14 @@ async def assistant_record_receipt(
                 (clinic_id, body.idempotency_key),
                 connection,
             )
-            if duplicate and duplicate[0]["invoice_id"] == invoice_id and int(duplicate[0]["amount_paise"]) == body.amount_paise and duplicate[0]["method"] == body.method:
+            if (
+                duplicate
+                and duplicate[0]["invoice_id"] == invoice_id
+                and int(duplicate[0]["amount_paise"]) == body.amount_paise
+                and duplicate[0]["method"] == body.method
+                and duplicate[0]["reference"] == body.reference.strip()
+                and _receipt_paid_at_matches(duplicate[0]["paid_at"], body.paid_at)
+            ):
                 return _envelope(_safe_receipt(duplicate[0]))
             raise HTTPException(
                 409,

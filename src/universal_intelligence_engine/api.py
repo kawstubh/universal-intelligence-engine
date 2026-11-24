@@ -206,6 +206,48 @@ def _doctor_only_openapi():
             "/v1/dental/ai/patient/",
         ))
     }
+
+    # The runtime auth dependencies intentionally return 401 themselves so
+    # missing credentials retain the API's stable error contract. Document
+    # those same protected routes as HTTP Bearer security for generated clients.
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})[
+        "BearerAuth"
+    ] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque",
+    }
+    # All Dental API operations are protected by default. Only these exact
+    # method/path pairs are public; a new method on a public path is protected
+    # unless it is deliberately added here after security review.
+    public_operations = {
+        ("get", "/v1/dental/health"),
+        ("post", "/v1/dental/auth/password/login"),
+        ("post", "/v1/dental/assistant/auth/login"),
+        ("post", "/v1/dental/public/appointments"),
+        ("get", "/v1/dental/billing/plans"),
+        ("post", "/v1/dental/billing/razorpay/webhook"),
+    }
+
+    for path, operations in schema.get("paths", {}).items():
+        if not path.startswith("/v1/dental/"):
+            continue
+        for method, operation in operations.items():
+            if not isinstance(operation, dict):
+                continue
+            if (method.lower(), path) in public_operations:
+                operation.pop("security", None)
+                continue
+            operation["security"] = [{"BearerAuth": []}]
+            operation["parameters"] = [
+                parameter
+                for parameter in operation.get("parameters", [])
+                if not (
+                    parameter.get("in") == "header"
+                    and str(parameter.get("name", "")).lower() == "authorization"
+                )
+            ]
+
     app.openapi_schema = schema
     return schema
 
