@@ -262,6 +262,11 @@ async def _uie(
                         "do_not_write_records": True,
                         "domain": "dental",
                         "capability": capability,
+                        "data_classification": (
+                            "aggregate_non_patient"
+                            if capability == "daily_summary"
+                            else "patient_specific"
+                        ),
                     },
                 },
             )
