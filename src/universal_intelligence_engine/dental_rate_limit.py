@@ -36,6 +36,10 @@ def enforce_shared_rate_limit(
         os.getenv("DENTAL_RATE_LIMIT_HASH_KEY", "").strip()
         or os.getenv("DENTAL_PUBLIC_BOOKING_HASH_KEY", "").strip()
     )
+    # A deterministic key is acceptable only for isolated SQLite development
+    # and tests. PostgreSQL staging/production must provide a stable secret.
+    if not secret and not store.database_url:
+        secret = "oralyn-local-sqlite-rate-limit-key-not-for-deployment"
     if len(secret.encode("utf-8")) < 32:
         raise HTTPException(
             status_code=503,
