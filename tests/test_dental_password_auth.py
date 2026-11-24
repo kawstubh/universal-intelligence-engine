@@ -51,7 +51,7 @@ def test_password_login_issues_session_for_active_doctor(monkeypatch):
     store = FakeStore()
     monkeypatch.setattr(dental_auth, "get_dental_store", lambda: store)
     monkeypatch.setattr(dental_auth, "_bootstrap_admin", lambda: None)
-    dental_auth._LOGIN_ATTEMPTS.clear()
+    monkeypatch.setattr(dental_auth, "enforce_shared_rate_limit", lambda *args, **kwargs: None)
     response = TestClient(app).post(
         "/v1/dental/auth/password/login",
         json={
@@ -84,6 +84,7 @@ def test_password_login_rejects_wrong_password(monkeypatch):
 
     monkeypatch.setattr(dental_auth, "get_dental_store", lambda: FakeStore())
     monkeypatch.setattr(dental_auth, "_bootstrap_admin", lambda: None)
+    monkeypatch.setattr(dental_auth, "enforce_shared_rate_limit", lambda *args, **kwargs: None)
     dental_auth._LOGIN_ATTEMPTS.clear()
     response = TestClient(app).post(
         "/v1/dental/auth/password/login",
