@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine import dental_assistant, dental_auth, dental_store
+from universal_intelligence_engine import dental_auth, dental_store
 from universal_intelligence_engine.api import app
 from universal_intelligence_engine.dental_auth import hash_password
 from universal_intelligence_engine.dental_store import DentalStore
