@@ -22,8 +22,6 @@ def assistant_api(tmp_path: Path, monkeypatch):
         str(Path(__file__).resolve().parents[1] / "alembic.ini"),
     )
     monkeypatch.setattr(dental_store, "_store", None)
-    dental_assistant._LOGIN_ATTEMPTS.clear()
-    dental_auth._LOGIN_ATTEMPTS.clear()
     store = DentalStore()
     store.create_organisation(
         {"id": "org-assistant-a", "name": "Assistant Clinic", "organisation_type": "clinic"}
