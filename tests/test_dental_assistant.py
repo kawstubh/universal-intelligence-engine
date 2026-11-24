@@ -858,7 +858,10 @@ def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(a
 
 def test_doctor_login_rate_limit_falls_back_for_missing_or_malformed_forwarded_ip(assistant_api):
     """Untrusted/malformed forwarding values share the connection-peer bucket."""
-    client = assistant_api["client"]
+    context = assistant_api
+    client = context["client"]
+    # The fixture's owner bootstrap login also used the TestClient peer IP.
+    context["store"]._execute("DELETE FROM dental_rate_limit_buckets")
     path = "/v1/dental/auth/password/login"
     payload = {"email": "missing@example.test", "password": "not-the-password"}
 
