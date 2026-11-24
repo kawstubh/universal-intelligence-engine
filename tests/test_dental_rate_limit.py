@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -128,3 +130,53 @@ def test_shared_store_failure_fails_closed(monkeypatch):
 
     assert unavailable.value.status_code == 503
     assert unavailable.value.detail["code"] == "RATE_LIMIT_STORE_UNAVAILABLE"
+
+
+
+def test_postgres_counter_is_shared_across_independent_store_instances(monkeypatch):
+    test_database_url = os.getenv("TEST_DATABASE_URL")
+    if not test_database_url:
+        pytest.skip("PostgreSQL CI service is not configured")
+
+    database_url = test_database_url.replace(
+        "postgresql+psycopg://", "postgresql://", 1
+    )
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("DENTAL_AUTO_MIGRATE", "true")
+    monkeypatch.setenv(
+        "DENTAL_RATE_LIMIT_HASH_KEY",
+        "synthetic-postgres-rate-limit-key-at-least-32-bytes",
+    )
+    monkeypatch.setenv(
+        "ALEMBIC_CONFIG",
+        str(Path(__file__).resolve().parents[1] / "alembic.ini"),
+    )
+
+    first = DentalStore()
+    second = DentalStore()
+    identity = "postgres-ci-" + uuid.uuid4().hex
+
+    for _ in range(2):
+        enforce_shared_rate_limit(
+            first,
+            scope="assistant_login",
+            client_identity=identity,
+            max_attempts=2,
+            window_seconds=300,
+            rate_limited_code="ASSISTANT_LOGIN_RATE_LIMITED",
+            now=1_000,
+        )
+
+    with pytest.raises(HTTPException) as limited:
+        enforce_shared_rate_limit(
+            second,
+            scope="assistant_login",
+            client_identity=identity,
+            max_attempts=2,
+            window_seconds=300,
+            rate_limited_code="ASSISTANT_LOGIN_RATE_LIMITED",
+            now=1_000,
+        )
+
+    assert limited.value.status_code == 429
+    assert limited.value.detail["code"] == "ASSISTANT_LOGIN_RATE_LIMITED"
