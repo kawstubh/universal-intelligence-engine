@@ -759,16 +759,18 @@ class DentalStore:
                 raise ValueError("This note was changed by another user. Reload it before saving.")
             update_sql = (
                 "UPDATE dental_clinical_notes SET title=%s,content=%s,version=version+1,updated_at=%s "
-                "WHERE id=%s AND clinic_id=%s AND version=%s"
+                "WHERE id=%s AND clinic_id=%s AND version=%s RETURNING id"
                 if self.database_url
                 else "UPDATE dental_clinical_notes SET title=?,content=?,version=version+1,updated_at=? "
-                "WHERE id=? AND clinic_id=? AND version=?"
+                "WHERE id=? AND clinic_id=? AND version=? RETURNING id"
             )
             updated = self._execute(
                 update_sql,
                 (title.strip(), content.strip(), now, note_id, clinic_id, expected_version),
                 connection=connection,
             )
+            if not updated:
+                raise ValueError("This note was changed by another user. Reload it before saving.")
             if self.database_url:
                 result_sql = (
                     "SELECT id,clinic_id,patient_id,created_by_doctor_id,title,content,patient_visible,version,created_at,updated_at "
