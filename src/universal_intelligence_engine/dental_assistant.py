@@ -23,6 +23,8 @@ from .dental_rate_limit import enforce_shared_rate_limit
 router = APIRouter(prefix="/v1/dental", tags=["dental-clinic-assistant"])
 
 ASSISTANT_SESSION_TTL = 8 * 60 * 60
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
