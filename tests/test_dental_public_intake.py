@@ -247,6 +247,23 @@ def test_public_booking_requires_timezone_aware_future_time_and_fixed_service_ca
     assert _count(store, "dental_appointments") == 0
 
 
+def test_public_booking_requires_explicit_service_and_openapi_required(public_booking_api):
+    client, store = public_booking_api
+    payload = _payload(key="public-booking-missing-service-001")
+    payload.pop("treatment_type")
+
+    response = client.post("/v1/dental/public/appointments", json=payload)
+    assert response.status_code == 422
+
+    schema = client.get("/openapi.json").json()
+    required = schema["components"]["schemas"]["PublicAppointmentIn"]["required"]
+    assert "treatment_type" in required
+
+    assert _count(store, "dental_patients") == 0
+    assert _count(store, "dental_appointments") == 0
+    assert _count(store, "dental_public_booking_requests") == 0
+
+
 def test_public_booking_honeypot_is_accepted_without_persisting(public_booking_api):
     client, store = public_booking_api
     response = client.post(
