@@ -52,6 +52,7 @@ def _check_public_appointment_rate_limit(client_ip: str) -> None:
         client_identity=client_ip,
         max_attempts=8,
         window_seconds=300,
+        rate_limited_code="PUBLIC_APPOINTMENT_RATE_LIMITED",
     )
 
 class DoctorPasswordLoginIn(BaseModel):
