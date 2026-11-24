@@ -152,3 +152,34 @@ def test_clinical_note_content_validation_and_authentication(clinical_notes_api)
         json={"title": "x", "content": ""},
     )
     assert invalid.status_code == 422
+
+
+def test_doctor_messages_are_persisted_and_clinic_scoped(clinical_notes_api):
+    client, store, patient, other_patient = clinical_notes_api
+    sent = client.post(
+        f"/v1/dental/doctor/patients/{patient['id']}/messages",
+        json={"body": "Please confirm your next appointment."},
+    )
+    assert sent.status_code == 201, sent.text
+    message = sent.json()
+    assert message["sender_type"] == "doctor"
+    assert message["clinic_id"] == "clinic-notes-a"
+    assert message["patient_id"] == patient["id"]
+
+    listed = client.get(
+        f"/v1/dental/doctor/patients/{patient['id']}/messages"
+    )
+    assert listed.status_code == 200
+    assert listed.json()["messages"] == [message]
+
+    denied = client.get(
+        f"/v1/dental/doctor/patients/{other_patient['id']}/messages"
+    )
+    assert denied.status_code == 404
+
+    audit = store._execute(
+        "SELECT action,metadata_json FROM dental_audit_events "
+        "WHERE resource_type='patient_message'"
+    )
+    assert audit and audit[0]["action"] == "patient_message.sent"
+    assert "Please confirm" not in audit[0]["metadata_json"]
