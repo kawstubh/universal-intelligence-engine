@@ -437,3 +437,23 @@ def test_build_service_selects_freellmapi_only_when_explicitly_configured(monkey
     assert captured["provider"] == "freellmapi"
     assert isinstance(captured["engine"].kwargs["reasoning"], FakeProvider)
     assert service.engine is captured["engine"]
+
+def test_health_reports_freellmapi_provider_and_key_readiness(monkeypatch):
+    from universal_intelligence_engine import api
+
+    monkeypatch.setenv("REASONING_PROVIDER", "freellmapi")
+    monkeypatch.setenv("REASONING_MODEL", "auto:balanced")
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "synthetic-test-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    configured = api.health()["providers"]
+    assert configured["reasoning_provider"] == "freellmapi"
+    assert configured["reasoning_model"] == "auto:balanced"
+    assert configured["reasoning"] is True
+    assert configured["reasoning_configured"] is True
+
+    monkeypatch.delenv("FREELLMAPI_API_KEY")
+    unconfigured = api.health()["providers"]
+    assert unconfigured["reasoning_provider"] == "freellmapi"
+    assert unconfigured["reasoning"] is False
+    assert unconfigured["reasoning_configured"] is False
