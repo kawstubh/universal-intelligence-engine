@@ -862,33 +862,38 @@ def _database_identity_verified(store) -> bool | None:
     )
 
 
-def _database_branch_identity_verified(store) -> bool | None:
-    """Verify the live Neon branch independently of host/database identity."""
+def _database_branch_identity(store) -> tuple[str | None, bool | None]:
+    """Return the actual Neon branch ID and verify it against staging attestation."""
     expected_branch_id = os.getenv("DENTAL_EXPECTED_NEON_BRANCH_ID", "").strip()
     if not expected_branch_id:
-        return None
+        return None, None
     if store.backend != "postgres":
-        return False
+        return None, False
     try:
         rows = store._execute(
             "SELECT current_setting('neon.branch_id', true) AS branch_id"
         )
     except Exception:
-        return False
+        return None, False
     actual_branch_id = str(rows[0].get("branch_id") or "").strip() if rows else ""
-    return bool(actual_branch_id and actual_branch_id == expected_branch_id)
+    if not actual_branch_id:
+        return None, False
+    return actual_branch_id, actual_branch_id == expected_branch_id
 
 
 @router.get("/health")
 async def dental_health():
     store = get_dental_store()
+    database_branch_id, branch_identity_verified = _database_branch_identity(store)
     return {
         "status": "ok",
         "service": "dental-api",
         "database": store.backend,
         "database_ready": bool(store.healthcheck()),
         "database_identity_verified": _database_identity_verified(store),
-        "database_branch_identity_verified": _database_branch_identity_verified(store),
+        "database_branch_identity_verified": branch_identity_verified,
+        # The opaque Neon branch ID is exposed only when staging branch attestation is configured.
+        "database_branch_id": database_branch_id,
         "deployment_commit": os.getenv("RENDER_GIT_COMMIT") or None,
         "uie_configured": bool(os.getenv("UIE_API_URL") and os.getenv("UIE_API_KEY")),
     }
