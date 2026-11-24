@@ -227,6 +227,7 @@ def test_freellmapi_rejects_patient_context_before_provider_call(monkeypatch):
             json={
                 "goal": "synthetic clinical request",
                 "context": {"clinic": {"patient_id": "synthetic-patient-001"}},
+                "constraints": {"data_classification": "synthetic"},
             },
         )
     assert response.status_code == 503
