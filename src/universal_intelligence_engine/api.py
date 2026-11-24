@@ -43,14 +43,27 @@ class IntelligenceRunBody(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
 
 
+def _configured_reasoning_provider() -> str:
+    configured = os.getenv("REASONING_PROVIDER", "").strip().lower()
+    if configured == "freellmapi":
+        return "freellmapi"
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai-responses"
+    return "native"
+
+
 def build_service() -> IntelligenceService:
     # Public reference and biomedical APIs require no paid search subscription or key.
     knowledge: KnowledgeProvider = FreePublicKnowledgeProvider()
-    reasoning = (
-        OpenAIResponsesReasoningProvider()
-        if os.getenv("OPENAI_API_KEY")
-        else NativeReasoningProvider()
-    )
+    selected_provider = _configured_reasoning_provider()
+    if selected_provider == "freellmapi":
+        # FreeLLMAPI is accepted only for its fixed synthetic smoke-test prompt;
+        # the provider enforces the exact goal, context and classification.
+        reasoning = OpenAIResponsesReasoningProvider(provider="freellmapi")
+    elif selected_provider == "openai-responses":
+        reasoning = OpenAIResponsesReasoningProvider()
+    else:
+        reasoning = NativeReasoningProvider()
     memory = LearningMemory(os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl"))
     engine = UniversalIntelligenceEngine(
         knowledge=knowledge,
@@ -293,24 +306,34 @@ def readiness() -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    selected_provider = _configured_reasoning_provider()
+    reasoning_configured = (
+        bool(os.getenv("FREELLMAPI_API_KEY"))
+        if selected_provider == "freellmapi"
+        else bool(os.getenv("OPENAI_API_KEY"))
+        if selected_provider == "openai-responses"
+        else True
+    )
+    reasoning_model = (
+        os.getenv("REASONING_MODEL") or "auto:balanced"
+        if selected_provider == "freellmapi"
+        else os.getenv("OPENAI_MODEL") or "default"
+        if selected_provider == "openai-responses"
+        else "native"
+    )
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
         "version": app.version,
         "providers": {
             "knowledge": True,
-            "reasoning": True,
+            "reasoning": reasoning_configured,
+            "reasoning_configured": reasoning_configured,
             "knowledge_provider": "wikipedia+europe-pmc-public-api",
             "knowledge_mode": "best-effort-public-sources",
             "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
-            "reasoning_provider": (
-                "openai-responses" if os.getenv("OPENAI_API_KEY") else "native"
-            ),
-            "reasoning_model": (
-                "native"
-                if not os.getenv("OPENAI_API_KEY")
-                else os.getenv("OPENAI_MODEL") or "default"
-            ),
+            "reasoning_provider": selected_provider,
+            "reasoning_model": reasoning_model,
         },
         "dental_api": True,
     }

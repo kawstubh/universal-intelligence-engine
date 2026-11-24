@@ -354,3 +354,48 @@ def test_patient_appointments_and_chart_require_explicit_selection_for_multiple_
     assert chart.status_code == 200
     assert chart.json()["result"] == [{"tooth_fdi": "16", "status": "healthy"}]
     app.dependency_overrides.clear()
+
+
+def test_freellmapi_smoke_test_is_doctor_only_and_uses_fixed_synthetic_payload(monkeypatch):
+    from universal_intelligence_engine import dental_ai
+
+    captured = {}
+
+    async def fake_uie(capability, goal, context, disclaimer=dental_ai.DISCLAIMER_DOCTOR):
+        captured.update(capability=capability, goal=goal, context=context)
+        return {"result": "ORALYN-FREELLMAPI-OK"}
+
+    monkeypatch.setenv("FREELLMAPI_SMOKE_TEST_ENABLED", "true")
+    monkeypatch.setattr(dental_ai, "_uie", fake_uie)
+    app.dependency_overrides[dental_ai.require_doctor] = doctor
+    try:
+        response = TestClient(app).post("/v1/dental/ai/doctor/provider-smoke-test")
+    finally:
+        app.dependency_overrides.pop(dental_ai.require_doctor, None)
+
+    assert response.status_code == 200
+    assert captured == {
+        "capability": "freellmapi_smoke_test",
+        "goal": "Reply with exactly ORALYN-FREELLMAPI-OK and nothing else.",
+        "context": {"synthetic_test": "oralyn_freellmapi_smoke_test"},
+    }
+
+
+def test_freellmapi_smoke_test_is_disabled_by_default(monkeypatch):
+    from universal_intelligence_engine import dental_ai
+
+    monkeypatch.delenv("FREELLMAPI_SMOKE_TEST_ENABLED", raising=False)
+    app.dependency_overrides[dental_ai.require_doctor] = doctor
+    try:
+        response = TestClient(app).post("/v1/dental/ai/doctor/provider-smoke-test")
+    finally:
+        app.dependency_overrides.pop(dental_ai.require_doctor, None)
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "PROVIDER_SMOKE_TEST_DISABLED"
+
+
+def test_freellmapi_smoke_test_requires_doctor_auth(monkeypatch):
+    monkeypatch.setenv("FREELLMAPI_SMOKE_TEST_ENABLED", "true")
+    response = TestClient(app).post("/v1/dental/ai/doctor/provider-smoke-test")
+    assert response.status_code in {401, 403}

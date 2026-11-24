@@ -350,3 +350,110 @@ def test_api_provider_exception_message_is_not_logged(monkeypatch, caplog):
     assert response.json()["detail"]["message"] == "Provider request failed."
     for canary in canaries:
         assert canary not in caplog.text
+
+
+def test_freellmapi_uses_openai_compatible_gateway_for_fixed_synthetic_prompt(monkeypatch):
+    from universal_intelligence_engine import providers
+
+    monkeypatch.setenv("REASONING_PROVIDER", "freellmapi")
+    monkeypatch.setenv("REASONING_MODEL", "auto:balanced")
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "synthetic-test-key")
+    monkeypatch.setenv("FREELLMAPI_BASE_URL", "http://127.0.0.1:31415/v1")
+    captured = {}
+
+    def fake_request(url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs["headers"]
+        captured["payload"] = kwargs["payload"]
+        return {
+            "id": "freellmapi-synthetic-test",
+            "choices": [{"message": {"content": "ORALYN-FREELLMAPI-OK"}}],
+            "usage": {"total_tokens": 12},
+        }
+
+    monkeypatch.setattr(providers, "_json_request", fake_request)
+    request = IntelligenceRequest(
+        goal="Reply with exactly ORALYN-FREELLMAPI-OK and nothing else.",
+        context={"synthetic_test": "oralyn_freellmapi_smoke_test"},
+        constraints={"data_classification": "synthetic"},
+    )
+    result = providers.OpenAIResponsesReasoningProvider().reason(request, [])
+
+    assert result.answer == "ORALYN-FREELLMAPI-OK"
+    assert captured["url"] == "http://127.0.0.1:31415/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer synthetic-test-key"
+    assert captured["payload"]["model"] == "auto:balanced"
+    assert result.metadata["provider"] == "freellmapi"
+    assert result.metadata["usage"]["total_tokens"] == 12
+
+
+def test_freellmapi_rejects_non_synthetic_or_patient_context(monkeypatch):
+    from universal_intelligence_engine.providers import (
+        OpenAIResponsesReasoningProvider,
+        ProviderNotConfiguredError,
+    )
+
+    monkeypatch.setenv("REASONING_PROVIDER", "freellmapi")
+    monkeypatch.setenv("REASONING_MODEL", "auto:balanced")
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "synthetic-test-key")
+    request = IntelligenceRequest(
+        goal="Summarize this patient chart.",
+        context={"patient_id": "patient-123", "chart": [{"tooth": "16"}]},
+        constraints={"data_classification": "synthetic"},
+    )
+
+    with pytest.raises(ProviderNotConfiguredError, match="fixed synthetic"):
+        OpenAIResponsesReasoningProvider().reason(request, [])
+
+def test_build_service_selects_freellmapi_only_when_explicitly_configured(monkeypatch):
+    from universal_intelligence_engine import api
+
+    captured = {}
+
+    class FakeProvider:
+        def __init__(self, *, provider=None):
+            captured["provider"] = provider
+
+    class FakeEngine:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            captured["engine"] = self
+
+    class FakeService:
+        def __init__(self, engine):
+            self.engine = engine
+
+    monkeypatch.setenv("REASONING_PROVIDER", "freellmapi")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(api, "FreePublicKnowledgeProvider", lambda: object())
+    monkeypatch.setattr(api, "OpenAIResponsesReasoningProvider", FakeProvider)
+    monkeypatch.setattr(api, "NativeReasoningProvider", lambda: object())
+    monkeypatch.setattr(api, "LearningMemory", lambda *_: object())
+    monkeypatch.setattr(api, "UniversalIntelligenceEngine", FakeEngine)
+    monkeypatch.setattr(api, "IntelligenceService", FakeService)
+
+    service = api.build_service()
+
+    assert captured["provider"] == "freellmapi"
+    assert isinstance(captured["engine"].kwargs["reasoning"], FakeProvider)
+    assert service.engine is captured["engine"]
+
+def test_health_reports_freellmapi_provider_and_key_readiness(monkeypatch):
+    from universal_intelligence_engine import api
+
+    monkeypatch.setenv("REASONING_PROVIDER", "freellmapi")
+    monkeypatch.setenv("REASONING_MODEL", "auto:balanced")
+    monkeypatch.setenv("FREELLMAPI_API_KEY", "synthetic-test-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    configured = api.health()["providers"]
+    assert configured["reasoning_provider"] == "freellmapi"
+    assert configured["reasoning_model"] == "auto:balanced"
+    assert configured["reasoning"] is True
+    assert configured["reasoning_configured"] is True
+
+    monkeypatch.delenv("FREELLMAPI_API_KEY")
+    unconfigured = api.health()["providers"]
+    assert unconfigured["reasoning_provider"] == "freellmapi"
+    assert unconfigured["reasoning"] is False
+    assert unconfigured["reasoning_configured"] is False
