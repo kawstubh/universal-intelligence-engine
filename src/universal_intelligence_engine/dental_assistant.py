@@ -17,8 +17,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .dental_auth import hash_password, require_doctor, verify_password
-from .dental_store import get_dental_store
 from .dental_rate_limit import enforce_shared_rate_limit
+from .dental_store import get_dental_store
 
 router = APIRouter(prefix="/v1/dental", tags=["dental-clinic-assistant"])
 
