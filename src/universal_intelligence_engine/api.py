@@ -355,17 +355,24 @@ def run_intelligence(
     body: IntelligenceRunBody, authorization: str | None = Header(default=None)
 ) -> dict[str, Any]:
     _authorize(authorization)
-    if (
-        os.getenv("REASONING_PROVIDER", "").strip().lower() == "freellmapi"
-        and _contains_restricted_patient_context(body.context)
-    ):
-        raise HTTPException(
-            503,
-            detail={
-                "message": "FreeLLMAPI external inference is blocked for patient-specific or clinical-record context.",
-                "code": "EXTERNAL_PATIENT_DATA_BLOCKED",
-            },
-        )
+    if os.getenv("REASONING_PROVIDER", "").strip().lower() == "freellmapi":
+        classification = str(body.constraints.get("data_classification") or "").strip().lower()
+        if classification not in {"public", "synthetic", "aggregate_non_patient"}:
+            raise HTTPException(
+                503,
+                detail={
+                    "message": "FreeLLMAPI requires an explicit public, synthetic, or aggregate_non_patient data classification.",
+                    "code": "EXTERNAL_DATA_CLASSIFICATION_REQUIRED",
+                },
+            )
+        if _contains_restricted_patient_context(body.context):
+            raise HTTPException(
+                503,
+                detail={
+                    "message": "FreeLLMAPI external inference is blocked for patient-specific or clinical-record context.",
+                    "code": "EXTERNAL_PATIENT_DATA_BLOCKED",
+                },
+            )
     try:
         result = service.execute(
             IntelligenceRequest(
