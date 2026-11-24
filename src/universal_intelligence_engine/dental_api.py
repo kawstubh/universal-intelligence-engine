@@ -34,6 +34,7 @@ from .whatsapp_adapter import get_whatsapp_adapter
 
 router = APIRouter(prefix="/v1/dental", tags=["dental"])
 
+
 def _public_appointment_client_ip(request: Request) -> str:
     """Use Cloudflare's edge-supplied client IP on Render, not the proxy socket IP."""
     forwarded = str(request.headers.get("cf-connecting-ip") or "").strip()
