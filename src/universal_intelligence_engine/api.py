@@ -36,7 +36,7 @@ class KnowledgeHarvestBody(BaseModel):
 
 
 def _selected_reasoning_provider():
-    selected = os.getenv("UIE_REASONING_PROVIDER", "auto").strip().lower()
+    selected = os.getenv("UIE_REASONING_PROVIDER", "native").strip().lower()
     if selected == "sarvam":
         return SarvamTokenFactoryReasoningProvider()
     if selected == "openai":
