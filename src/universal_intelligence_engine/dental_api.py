@@ -885,6 +885,24 @@ async def create_patient(
     return item
 
 
+class PublicAppointmentLookupIn(BaseModel):
+    reference: str = Field(min_length=20, max_length=20, pattern=r"^ORL-[A-F0-9]{16}$")
+    phone: str = Field(min_length=7, max_length=40)
+
+    @field_validator("reference")
+    @classmethod
+    def normalize_reference(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_lookup_phone(cls, value: str) -> str:
+        digits = "".join(character for character in value if character.isdigit())
+        if len(digits) < 7 or len(digits) > 15:
+            raise ValueError("Enter the phone number used for the booking")
+        return digits
+
+
 @router.post("/public/appointments")
 async def create_public_appointment(body: PublicAppointmentIn, request: Request):
     """Create a privacy-minimised, idempotent guest request for the master clinic.
@@ -1045,6 +1063,47 @@ async def create_public_appointment(body: PublicAppointmentIn, request: Request)
         "status": "requested",
         "message": "Your appointment request has been received. The clinic team will contact you to confirm.",
         "reference": public_reference,
+    }
+
+
+@router.post("/public/appointments/lookup")
+async def lookup_public_appointment(body: PublicAppointmentLookupIn, request: Request):
+    """Return minimal booking status after matching its receipt and phone fingerprint."""
+    _check_public_appointment_rate_limit(_public_appointment_client_ip(request))
+    store = get_dental_store()
+    master_clinic = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip() or "dr-pranali"
+    phone_hash = _public_booking_hmac(body.phone, "phone")
+    if store.database_url:
+        rows = store._execute(
+            "SELECT a.starts_at, a.treatment_type, a.status "
+            "FROM dental_public_booking_requests r "
+            "JOIN dental_appointments a ON a.id = r.appointment_id "
+            "WHERE r.clinic_id=%s AND r.public_reference=%s AND r.phone_hash=%s "
+            "AND a.clinic_id=%s LIMIT 1",
+            (master_clinic, body.reference, phone_hash, master_clinic),
+        )
+    else:
+        rows = store._execute(
+            "SELECT a.starts_at, a.treatment_type, a.status "
+            "FROM dental_public_booking_requests r "
+            "JOIN dental_appointments a ON a.id = r.appointment_id "
+            "WHERE r.clinic_id=? AND r.public_reference=? AND r.phone_hash=? "
+            "AND a.clinic_id=? LIMIT 1",
+            (master_clinic, body.reference, phone_hash, master_clinic),
+        )
+    if not rows:
+        raise HTTPException(
+            404,
+            detail={
+                "code": "BOOKING_NOT_FOUND",
+                "message": "We could not match that reference and phone number. Check both details or contact the clinic.",
+            },
+        )
+    booking = rows[0]
+    return {
+        "status": booking["status"],
+        "starts_at": booking["starts_at"],
+        "treatment_type": booking["treatment_type"],
     }
 
 
