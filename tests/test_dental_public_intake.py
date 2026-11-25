@@ -432,3 +432,63 @@ def test_public_booking_rejects_times_outside_exact_ist_slots(public_booking_api
     assert response.status_code == 422, response.text
     assert _count(store, "dental_patients") == 0
     assert _count(store, "dental_appointments") == 0
+
+
+def test_public_booking_lookup_returns_only_minimal_status_for_matching_reference_and_phone(monkeypatch, public_booking_api):
+    client, store = public_booking_api
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", lambda _ip: None)
+    payload = _payload(key="public-booking-lookup-0001", phone="+919999000001")
+    created = client.post("/v1/dental/public/appointments", json=payload)
+    assert created.status_code == 200, created.text
+    reference = created.json()["reference"]
+    store._execute("UPDATE dental_appointments SET status='scheduled'")
+
+    response = client.post(
+        "/v1/dental/public/appointments/lookup",
+        json={"reference": reference, "phone": "+91 99990 00001"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "scheduled"
+    assert response.json()["treatment_type"] == payload["treatment_type"]
+    assert "starts_at" in response.json()
+    for forbidden in ("patient_id", "appointment_id", "name", "phone", "note", "clinical_notes"):
+        assert forbidden not in response.json()
+
+
+def test_public_booking_lookup_does_not_disclose_if_reference_or_phone_is_wrong(monkeypatch, public_booking_api):
+    client, store = public_booking_api
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", lambda _ip: None)
+    created = client.post(
+        "/v1/dental/public/appointments",
+        json=_payload(key="public-booking-lookup-0002", phone="+919999000002"),
+    )
+    assert created.status_code == 200, created.text
+    reference = created.json()["reference"]
+
+    wrong_phone = client.post(
+        "/v1/dental/public/appointments/lookup",
+        json={"reference": reference, "phone": "+919999000099"},
+    )
+    wrong_reference = client.post(
+        "/v1/dental/public/appointments/lookup",
+        json={"reference": "ORL-0000000000000000", "phone": "+919999000002"},
+    )
+    assert wrong_phone.status_code == 404
+    assert wrong_reference.status_code == 404
+    assert wrong_phone.json()["detail"]["code"] == "BOOKING_NOT_FOUND"
+    assert wrong_reference.json()["detail"]["code"] == "BOOKING_NOT_FOUND"
+
+
+def test_public_booking_lookup_uses_same_public_rate_limit(monkeypatch, public_booking_api):
+    client, _store = public_booking_api
+    seen = []
+    def reject(client_ip):
+        seen.append(client_ip)
+        raise HTTPException(429, detail={"code": "PUBLIC_APPOINTMENT_RATE_LIMITED"})
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", reject)
+    response = client.post(
+        "/v1/dental/public/appointments/lookup",
+        json={"reference": "ORL-0000000000000000", "phone": "+919999000001"},
+    )
+    assert response.status_code == 429
+    assert seen == ["testclient"]
