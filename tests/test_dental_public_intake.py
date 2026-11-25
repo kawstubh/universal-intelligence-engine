@@ -456,7 +456,7 @@ def test_public_booking_lookup_returns_only_minimal_status_for_matching_referenc
 
 
 def test_public_booking_lookup_does_not_disclose_if_reference_or_phone_is_wrong(monkeypatch, public_booking_api):
-    client, store = public_booking_api
+    client, _store = public_booking_api
     monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", lambda _ip: None)
     created = client.post(
         "/v1/dental/public/appointments",
