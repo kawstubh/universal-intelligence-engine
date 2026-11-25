@@ -10,8 +10,8 @@ import os
 import secrets
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
-from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
