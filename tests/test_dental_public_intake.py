@@ -48,7 +48,8 @@ def _payload(
     starts_at: str | None = None,
 ) -> dict:
     future = datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=7)
-    preferred = starts_at or future.replace(second=0, microsecond=0).isoformat()
+    default_slot = future.replace(hour=10, minute=0, second=0, microsecond=0)
+    preferred = starts_at or default_slot.isoformat()
     return {
         "idempotency_key": key,
         "name": "Synthetic Patient",
@@ -367,3 +368,67 @@ def test_public_booking_rejects_legacy_expanded_service_aliases(public_booking_a
     assert _count(store, "dental_patients") == 0
     assert _count(store, "dental_appointments") == 0
     assert _count(store, "dental_public_booking_requests") == 0
+
+
+
+def test_public_booking_accepts_only_eight_exact_ist_clinic_slots(monkeypatch, public_booking_api):
+    client, store = public_booking_api
+    monkeypatch.setattr(dental_api, "_check_public_appointment_rate_limit", lambda _ip: None)
+    clinic_date = (datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=7)).date()
+    slots = [10, 11, 12, 13, 17, 18, 19, 20]
+
+    for index, hour in enumerate(slots):
+        local_slot = datetime(
+            clinic_date.year, clinic_date.month, clinic_date.day,
+            hour, 0, tzinfo=ZoneInfo("Asia/Kolkata")
+        )
+        # Exercise offset conversion as well as the normal +05:30 form.
+        starts_at = (
+            local_slot.astimezone(ZoneInfo("UTC")).isoformat()
+            if hour == 10
+            else local_slot.isoformat()
+        )
+        response = client.post(
+            "/v1/dental/public/appointments",
+            json=_payload(
+                key=f"public-booking-allowed-slot-{index:02d}",
+                phone=f"+9199980000{index:02d}",
+                starts_at=starts_at,
+            ),
+        )
+        assert response.status_code == 200, (hour, response.text)
+        assert response.json()["status"] == "requested"
+
+    assert _count(store, "dental_appointments") == len(slots)
+
+
+@pytest.mark.parametrize(
+    "local_time",
+    [
+        "09:00:00",
+        "10:30:00",
+        "13:30:00",
+        "14:00:00",
+        "15:00:00",
+        "16:00:00",
+        "16:30:00",
+        "20:30:00",
+        "21:00:00",
+        "22:00:00",
+    ],
+)
+def test_public_booking_rejects_times_outside_exact_ist_slots(public_booking_api, local_time):
+    client, store = public_booking_api
+    clinic_date = (datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=7)).date()
+    starts_at = f"{clinic_date.isoformat()}T{local_time}+05:30"
+    response = client.post(
+        "/v1/dental/public/appointments",
+        json=_payload(
+            key=f"public-booking-rejected-{local_time.replace(':', '')}",
+            phone="+919997000001",
+            starts_at=starts_at,
+        ),
+    )
+    assert response.status_code == 422, response.text
+    assert _count(store, "dental_patients") == 0
+    assert _count(store, "dental_appointments") == 0
