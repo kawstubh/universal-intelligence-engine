@@ -19,6 +19,7 @@ def test_health_reports_free_public_knowledge_and_native_reasoning(monkeypatch):
 
 def test_service_uses_native_reasoning_when_openai_key_is_missing(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("UIE_REASONING_PROVIDER", "native")
     service = api.build_service()
 
     assert isinstance(service.engine.reasoning, NativeReasoningProvider)
@@ -27,6 +28,7 @@ def test_service_uses_native_reasoning_when_openai_key_is_missing(monkeypatch):
 def test_health_reports_openai_when_configured(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-a-secret")
     monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("UIE_REASONING_PROVIDER", "openai")
 
     providers = api.health()["providers"]
 
