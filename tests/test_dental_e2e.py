@@ -34,7 +34,7 @@ def e2e_db(tmp_path, monkeypatch):
 
 def test_patient_books_doctor_updates_and_patient_account_routes_are_disabled(e2e_db):
     client = TestClient(app)
-    starts_at = (datetime.now(UTC) + timedelta(days=10)).isoformat()
+    starts_at = (datetime.now(UTC) + timedelta(days=10)).replace(hour=4, minute=30, second=0, microsecond=0).isoformat()
     appointment_response = client.post(
         "/v1/dental/public/appointments",
         json={
