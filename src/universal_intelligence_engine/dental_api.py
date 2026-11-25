@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
@@ -199,9 +200,24 @@ class PublicAppointmentIn(BaseModel):
 
     @field_validator("starts_at")
     @classmethod
-    def require_future_timezone(cls, value: datetime) -> datetime:
+    def require_future_clinic_slot(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("Appointment time must include a timezone")
+
+        # Validate the clinic's local wall-clock slot before normalising to UTC.
+        # The public patient booking flow is for Dr. Pranali Dental Clinic (IST).
+        local_time = value.astimezone(ZoneInfo("Asia/Kolkata"))
+        allowed_hours = {10, 11, 12, 13, 17, 18, 19, 20}
+        if (
+            local_time.hour not in allowed_hours
+            or local_time.minute != 0
+            or local_time.second != 0
+            or local_time.microsecond != 0
+        ):
+            raise ValueError(
+                "Choose an available clinic slot: 10 AM–2 PM or 5 PM–9 PM"
+            )
+
         normalized = value.astimezone(UTC)
         if normalized <= datetime.now(UTC):
             raise ValueError("Appointment time must be in the future")
