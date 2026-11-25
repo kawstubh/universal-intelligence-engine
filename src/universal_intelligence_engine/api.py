@@ -14,6 +14,7 @@ from .evaluation import BasicResponseEvaluator
 from .memory import LearningMemory
 from .persistent_memory import PersistentMemoryEngine
 from .providers import FreePublicKnowledgeProvider, OpenAIResponsesReasoningProvider
+from .sarvam import SarvamTokenFactoryReasoningProvider
 from .web_knowledge import PublicWebKnowledgeStore
 from .ingestion.pipeline import CrossDomainIngestionPipeline
 from .service import IntelligenceService
@@ -34,13 +35,29 @@ class KnowledgeHarvestBody(BaseModel):
     urls: list[str] = Field(min_length=1, max_length=10)
 
 
+def _selected_reasoning_provider():
+    selected = os.getenv("UIE_REASONING_PROVIDER", "auto").strip().lower()
+    if selected == "sarvam":
+        return SarvamTokenFactoryReasoningProvider()
+    if selected == "openai":
+        return OpenAIResponsesReasoningProvider()
+    if selected == "native":
+        return None
+    if selected != "auto":
+        raise RuntimeError("UIE_REASONING_PROVIDER must be auto, native, openai, or sarvam")
+    if os.getenv("SARVAM_API_KEY"):
+        return SarvamTokenFactoryReasoningProvider()
+    if os.getenv("OPENAI_API_KEY"):
+        return OpenAIResponsesReasoningProvider()
+    return None
+
+
 def build_service() -> IntelligenceService:
     web_knowledge = PublicWebKnowledgeStore(
         os.getenv("UIE_WEB_KNOWLEDGE_PATH", ".data/web_knowledge.sqlite3")
     )
     knowledge = FreePublicKnowledgeProvider(web_knowledge=web_knowledge)
-    # The engine provides native reasoning when no optional OpenAI key is set.
-    reasoning = OpenAIResponsesReasoningProvider() if os.getenv("OPENAI_API_KEY") else None
+    reasoning = _selected_reasoning_provider()
     memory = LearningMemory(
         os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl")
     )
@@ -58,7 +75,7 @@ def build_service() -> IntelligenceService:
 
 app = FastAPI(
     title="Universal Intelligence Engine",
-    version="0.5.0",
+    version="0.5.1",
     description="Shared intelligence API for research, reasoning, applications and agents.",
 )
 service = build_service()
@@ -98,18 +115,31 @@ def _authorize(authorization: str | None) -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    selected = os.getenv("UIE_REASONING_PROVIDER", "auto").strip().lower()
+    if selected == "auto":
+        selected = "sarvam" if os.getenv("SARVAM_API_KEY") else ("openai" if os.getenv("OPENAI_API_KEY") else "native")
+    if selected == "sarvam":
+        model = os.getenv("SARVAM_MODEL", "sarvam-105b")
+        configured = bool(os.getenv("SARVAM_API_KEY"))
+    elif selected == "openai":
+        model = os.getenv("OPENAI_MODEL", "configured")
+        configured = bool(os.getenv("OPENAI_API_KEY"))
+    else:
+        model = "native"
+        configured = True
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
-        "version": "0.5.0",
+        "version": "0.5.1",
         "providers": {
             "knowledge": True,
             "knowledge_provider": "wikipedia+europe-pmc-public-api",
             "knowledge_mode": "best-effort-public-sources",
             "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
             "reasoning": True,
-            "reasoning_provider": "openai-responses" if os.getenv("OPENAI_API_KEY") else "native",
-            "reasoning_model": os.getenv("OPENAI_MODEL", "native") if os.getenv("OPENAI_API_KEY") else "native",
+            "reasoning_provider": "sarvam-token-factory" if selected == "sarvam" else ("openai-responses" if selected == "openai" else "native"),
+            "reasoning_model": model,
+            "reasoning_configured": configured,
         },
     }
 
