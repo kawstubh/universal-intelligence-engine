@@ -1,10 +1,11 @@
 """Sarvam Token Factory reasoning adapter for UIE.
 
-The provider is opt-in through UIE_REASONING_PROVIDER=sarvam. Credentials are
+The provider is selected by UIE_REASONING_PROVIDER=sarvam. Credentials are
 read only from SARVAM_API_KEY and are never returned by health or logs.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Sequence
 
@@ -55,8 +56,8 @@ class SarvamTokenFactoryReasoningProvider:
             f"Goal: {request.goal}\n"
             f"Language: {request.language or 'en'}\n"
             f"Locale: {request.locale or 'global'}\n"
-            f"Context: {__import__('json').dumps(dict(request.context), ensure_ascii=False)}\n"
-            f"Constraints: {__import__('json').dumps(dict(request.constraints), ensure_ascii=False)}\n\n"
+            f"Context: {json.dumps(dict(request.context), ensure_ascii=False)}\n"
+            f"Constraints: {json.dumps(dict(request.constraints), ensure_ascii=False)}\n\n"
             f"Evidence:\n{evidence_block or 'No evidence was retrieved.'}"
         )
         data = _json_request(
