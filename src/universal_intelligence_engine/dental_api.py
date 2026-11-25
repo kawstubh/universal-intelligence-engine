@@ -491,6 +491,17 @@ async def run_dental_intelligence(
     # Minimum necessary context is built server-side from the authenticated clinic.
     # The app never sends patient phone/name/free-form chart notes to UIE.
     safe_context: dict[str, Any] = {"domain": "dental"}
+    # Accept only known Doctor Feed module identifiers; never forward arbitrary
+    # client context across the clinic-to-UIE boundary.
+    allowed_modules = {
+        "clinical_research",
+        "product_supplier",
+        "practice",
+        "referral",
+    }
+    requested_module = str(body.context.get("module") or "").strip()
+    if requested_module in allowed_modules:
+        safe_context["module"] = requested_module
     if patient:
         store = get_dental_store()
         safe_context["patient"] = {
