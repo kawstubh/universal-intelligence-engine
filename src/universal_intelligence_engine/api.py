@@ -115,7 +115,7 @@ def _authorize(authorization: str | None) -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    selected = os.getenv("UIE_REASONING_PROVIDER", "auto").strip().lower()
+    selected = os.getenv("UIE_REASONING_PROVIDER", "native").strip().lower()
     if selected == "auto":
         selected = "sarvam" if os.getenv("SARVAM_API_KEY") else ("openai" if os.getenv("OPENAI_API_KEY") else "native")
     if selected == "sarvam":
