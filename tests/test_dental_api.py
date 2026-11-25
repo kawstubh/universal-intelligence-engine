@@ -137,7 +137,7 @@ def test_public_appointment_intake_does_not_require_doctor_auth(monkeypatch, tmp
         }
     )
     client = TestClient(app)
-    starts_at = (datetime.now(UTC) + timedelta(days=7)).isoformat()
+    starts_at = (datetime.now(UTC) + timedelta(days=7)).replace(hour=4, minute=30, second=0, microsecond=0).isoformat()
     response = client.post(
         "/v1/dental/public/appointments",
         json={

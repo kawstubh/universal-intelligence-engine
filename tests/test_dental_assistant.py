@@ -812,7 +812,7 @@ def test_guest_patient_booking_appears_in_assistant_queue_and_doctor_workspace(a
         "DENTAL_PUBLIC_BOOKING_HASH_KEY",
         "synthetic-public-booking-hash-key-32-bytes-minimum",
     )
-    starts_at = (datetime.now(UTC) + timedelta(days=14)).isoformat()
+    starts_at = (datetime.now(UTC) + timedelta(days=14)).replace(hour=4, minute=30, second=0, microsecond=0).isoformat()
     guest_response = client.post(
         "/v1/dental/public/appointments",
         json={
