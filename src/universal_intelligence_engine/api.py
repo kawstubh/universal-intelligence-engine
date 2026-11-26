@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 from typing import Any
 
@@ -103,13 +104,30 @@ async def stop_background_learning() -> None:
 
 
 def _authorize(authorization: str | None) -> None:
-    expected = os.getenv("UIE_API_KEY")
+    # Environment dashboards and HTTP clients can preserve accidental outer
+    # whitespace. Normalize only surrounding whitespace and scheme casing;
+    # never trim or otherwise rewrite the credential itself.
+    expected = (os.getenv("UIE_API_KEY") or "").strip()
     if not expected:
         raise HTTPException(
             status_code=503,
             detail="UIE_API_KEY is not configured; API access is fail-closed.",
         )
-    if authorization != f"Bearer {expected}":
+
+    # Accept a raw key or the standard Bearer form. This keeps the header
+    # usable from Swagger's plain Authorization input as well as API clients.
+    # Also tolerate an environment value accidentally stored with "Bearer ".
+    if expected[:7].lower() == "bearer ":
+        expected = expected[7:].strip()
+
+    supplied = authorization.strip() if authorization else ""
+    parts = supplied.split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        supplied = parts[1]
+    elif len(parts) != 1:
+        supplied = ""
+
+    if not supplied or not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="Invalid API credentials")
 
 
