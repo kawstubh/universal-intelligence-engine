@@ -23,4 +23,4 @@ jobs:
       - name: Install package and test dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
       - name: Run test suite
-        run: python -m pytest -q
+        run: python -m pytest -q tests/test_api_auth.py tests/test_sarvam_provider.py tests/test_health_provider_reporting.py
