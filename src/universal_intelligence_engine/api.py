@@ -33,6 +33,7 @@ from .providers import (
 )
 from .reasoning import NativeReasoningProvider
 from .service import IntelligenceService
+from .sarvam import SarvamTokenFactoryReasoningProvider
 
 
 class IntelligenceRunBody(BaseModel):
@@ -46,11 +47,13 @@ class IntelligenceRunBody(BaseModel):
 def build_service() -> IntelligenceService:
     # Public reference and biomedical APIs require no paid search subscription or key.
     knowledge: KnowledgeProvider = FreePublicKnowledgeProvider()
-    reasoning = (
-        OpenAIResponsesReasoningProvider()
-        if os.getenv("OPENAI_API_KEY")
-        else NativeReasoningProvider()
-    )
+    selected_provider = os.getenv("UIE_REASONING_PROVIDER", "").strip().lower()
+    if selected_provider in {"sarvam", "sarvam-token-factory"}:
+        reasoning = SarvamTokenFactoryReasoningProvider()
+    elif os.getenv("OPENAI_API_KEY"):
+        reasoning = OpenAIResponsesReasoningProvider()
+    else:
+        reasoning = NativeReasoningProvider()
     memory = LearningMemory(os.getenv("UIE_MEMORY_PATH", ".data/learning.jsonl"))
     engine = UniversalIntelligenceEngine(
         knowledge=knowledge,
@@ -304,12 +307,20 @@ def health() -> dict[str, Any]:
             "knowledge_mode": "best-effort-public-sources",
             "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
             "reasoning_provider": (
-                "openai-responses" if os.getenv("OPENAI_API_KEY") else "native"
+                "sarvam-token-factory"
+                if os.getenv("UIE_REASONING_PROVIDER", "").strip().lower() in {"sarvam", "sarvam-token-factory"}
+                else "openai-responses" if os.getenv("OPENAI_API_KEY") else "native"
             ),
             "reasoning_model": (
-                "native"
-                if not os.getenv("OPENAI_API_KEY")
+                os.getenv("SARVAM_MODEL", "sarvam-105b")
+                if os.getenv("UIE_REASONING_PROVIDER", "").strip().lower() in {"sarvam", "sarvam-token-factory"}
+                else "native" if not os.getenv("OPENAI_API_KEY")
                 else os.getenv("OPENAI_MODEL") or "default"
+            ),
+            "reasoning_configured": (
+                bool(os.getenv("SARVAM_API_KEY"))
+                if os.getenv("UIE_REASONING_PROVIDER", "").strip().lower() in {"sarvam", "sarvam-token-factory"}
+                else True
             ),
         },
         "dental_api": True,
