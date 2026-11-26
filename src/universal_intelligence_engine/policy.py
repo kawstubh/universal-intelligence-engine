@@ -13,7 +13,12 @@ class CapabilityPolicy:
     blocked_context_domains: frozenset[str] = frozenset()
 
     def allows(self, action: str) -> bool:
-        return action not in self.blocked_actions
+        """Apply explicit denies first, then the allow-list when configured."""
+        if action in self.blocked_actions:
+            return False
+        if self.allowed_tools:
+            return action in self.allowed_tools
+        return True
 
     def needs_approval(self, action: str) -> bool:
         return action in self.require_human_approval_for
