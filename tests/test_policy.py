@@ -54,3 +54,20 @@ def test_policy_for_supports_least_privilege_context():
     assert policy.filter_context({"dental_chart": 1, "appointments": 2, "secrets": 3}) == {
         "dental_chart": 1
     }
+
+
+def test_allowlist_rejects_unknown_actions():
+    policy = policy_for(allowed={"dental_chart_read"})
+    assert policy.allows("dental_chart_read") is True
+    assert policy.allows("unknown_action") is False
+
+
+def test_explicit_deny_overrides_allowlist():
+    policy = policy_for(allowed={"dental_chart_read"}, blocked={"dental_chart_read"})
+    assert policy.allows("dental_chart_read") is False
+
+
+def test_blocklist_only_policy_remains_supported():
+    policy = policy_for(blocked={"unsafe_action"})
+    assert policy.allows("ordinary_action") is True
+    assert policy.allows("unsafe_action") is False
