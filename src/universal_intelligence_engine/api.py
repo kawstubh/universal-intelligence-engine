@@ -114,12 +114,20 @@ def _authorize(authorization: str | None) -> None:
             detail="UIE_API_KEY is not configured; API access is fail-closed.",
         )
 
-    parts = authorization.strip().split() if authorization else []
-    if (
-        len(parts) != 2
-        or parts[0].lower() != "bearer"
-        or not hmac.compare_digest(parts[1], expected)
-    ):
+    # Accept a raw key or the standard Bearer form. This keeps the header
+    # usable from Swagger's plain Authorization input as well as API clients.
+    # Also tolerate an environment value accidentally stored with "Bearer ".
+    if expected[:7].lower() == "bearer ":
+        expected = expected[7:].strip()
+
+    supplied = authorization.strip() if authorization else ""
+    parts = supplied.split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        supplied = parts[1]
+    elif len(parts) != 1:
+        supplied = ""
+
+    if not supplied or not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="Invalid API credentials")
 
 
