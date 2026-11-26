@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 from typing import Any
 
@@ -103,13 +104,22 @@ async def stop_background_learning() -> None:
 
 
 def _authorize(authorization: str | None) -> None:
-    expected = os.getenv("UIE_API_KEY")
+    # Environment dashboards and HTTP clients can preserve accidental outer
+    # whitespace. Normalize only surrounding whitespace and scheme casing;
+    # never trim or otherwise rewrite the credential itself.
+    expected = (os.getenv("UIE_API_KEY") or "").strip()
     if not expected:
         raise HTTPException(
             status_code=503,
             detail="UIE_API_KEY is not configured; API access is fail-closed.",
         )
-    if authorization != f"Bearer {expected}":
+
+    parts = authorization.strip().split() if authorization else []
+    if (
+        len(parts) != 2
+        or parts[0].lower() != "bearer"
+        or not hmac.compare_digest(parts[1], expected)
+    ):
         raise HTTPException(status_code=401, detail="Invalid API credentials")
 
 
