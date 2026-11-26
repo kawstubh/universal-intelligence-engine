@@ -6,8 +6,14 @@ from fastapi import HTTPException
 from universal_intelligence_engine.api import _authorize
 
 
-def test_authorize_accepts_exact_bearer_token(monkeypatch):
+@pytest.mark.parametrize("header", ["Bearer test-secret", "test-secret", "bEaReR test-secret"])
+def test_authorize_accepts_bearer_and_raw_token(monkeypatch, header):
     monkeypatch.setenv("UIE_API_KEY", "test-secret")
+    _authorize(header)
+
+
+def test_authorize_accepts_environment_key_with_bearer_prefix(monkeypatch):
+    monkeypatch.setenv("UIE_API_KEY", "Bearer test-secret")
     _authorize("Bearer test-secret")
 
 
@@ -17,6 +23,7 @@ def test_authorize_accepts_exact_bearer_token(monkeypatch):
         " bearer test-secret ",
         "BEARER test-secret",
         "\tBearer\ttest-secret\t",
+        " test-secret ",
     ],
 )
 def test_authorize_normalizes_header_whitespace_and_scheme(monkeypatch, header):
