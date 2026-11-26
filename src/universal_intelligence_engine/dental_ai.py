@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from .dental_auth import require_doctor
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
+from .sarvam_adapter import generate_sarvam_completion
 
 router = APIRouter(prefix="/v1/dental/ai", tags=["dental-ai"])
 DISCLAIMER_DOCTOR = "AI suggestion only. A qualified doctor must verify the result. AI never writes clinical records automatically."
@@ -286,71 +287,9 @@ async def _sarvam_direct(
     context: dict[str, Any],
     disclaimer: str = DISCLAIMER_DOCTOR,
 ) -> dict[str, Any]:
-    """Temporary staging-only direct Sarvam path; strips direct patient identifiers."""
-    api_key = os.getenv("SARVAM_API_KEY", "").strip()
-    if not api_key:
-        raise HTTPException(
-            503,
-            detail={"message": "Clinical AI provider is not configured.", "code": "SARVAM_NOT_CONFIGURED"},
-        )
-
-    def redact(value: Any) -> Any:
-        blocked = {"patient_id", "id", "name", "full_name", "phone", "mobile", "email", "address"}
-        if isinstance(value, dict):
-            return {str(k): redact(v) for k, v in value.items() if str(k).lower() not in blocked}
-        if isinstance(value, list):
-            return [redact(item) for item in value]
-        return value
-
-    safe_context = redact(context)
-    model = os.getenv("DENTAL_SARVAM_MODEL", "sarvam-105b").strip() or "sarvam-105b"
-    prompt = (
-        f"Clinical capability: {capability}\\n"
-        f"Task: {goal}\\n"
-        "Use only the supplied clinical facts. Do not invent findings, diagnoses, "
-        "medicines, dosages, or procedures. Separate documented facts from "
-        "inferences and uncertainty. Cite guideline/evidence sources only when "
-        "you can identify them reliably; otherwise say that sources were not verified. "
-        "This is decision support for a licensed dentist, not an autonomous decision. "
-        "Do not write to or modify any patient record. Return a concise, structured answer.\\n\\n"
-        f"Authorized clinical context (direct identifiers removed): {json.dumps(safe_context, ensure_ascii=False)}"
-    )
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                "https://api.sarvam.ai/v1/chat/completions",
-                headers={
-                    "api-subscription-key": api_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": "You are a cautious dental clinical decision-support assistant. The dentist makes all clinical decisions."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": 3000,
-                    "temperature": 0.2,
-                },
-            )
-    except httpx.TimeoutException as exc:
-        raise HTTPException(504, detail={"message": "Clinical AI timed out. Please retry.", "code": "SARVAM_TIMEOUT"}) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, detail={"message": "Clinical AI provider could not be reached.", "code": "SARVAM_UNREACHABLE"}) from exc
-
-    if response.status_code >= 400:
-        code = "SARVAM_PROVIDER_ERROR"
-        status = 503 if response.status_code in (401, 403) else 429 if response.status_code == 429 else 502
-        raise HTTPException(status, detail={"message": "Clinical AI provider returned an error.", "code": code})
-    try:
-        payload = response.json()
-        answer = payload["choices"][0]["message"]["content"]
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise HTTPException(502, detail={"message": "Clinical AI returned an invalid response.", "code": "SARVAM_BAD_RESPONSE"}) from exc
-    if not isinstance(answer, str) or not answer.strip():
-        raise HTTPException(502, detail={"message": "Clinical AI returned an empty response.", "code": "SARVAM_EMPTY_RESPONSE"})
+    answer = await generate_sarvam_completion(capability, goal, context)
     return _result(
-        answer.strip(),
+        answer,
         0.0,
         [],
         disclaimer,
