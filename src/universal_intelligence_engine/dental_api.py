@@ -949,7 +949,11 @@ class PublicAppointmentLookupIn(BaseModel):
         return digits
 
 
-@router.post("/public/demo-requests", status_code=202)
+@router.post(
+    "/public/demo-requests",
+    status_code=202,
+    openapi_extra={"security": []},
+)
 async def create_public_demo_request(body: PublicDemoRequestIn, request: Request):
     """Collect a clinic demo enquiry without creating an unverified tenant."""
     store = get_dental_store()
