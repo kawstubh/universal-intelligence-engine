@@ -318,17 +318,13 @@ def health() -> dict[str, Any]:
                 if os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY")
                 else "native"
             ),
-            "reasoning_configured": (
-                bool(os.getenv("SARVAM_API_KEY"))
-                if (selected_reasoning_provider == "sarvam"
-                else bool(os.getenv("GEMINI_API_KEY"))
-                if selected_reasoning_provider == "gemini"
-                else bool(os.getenv("GROQ_API_KEY"))
-                if selected_reasoning_provider == "groq"
-                else bool(os.getenv("OPENAI_API_KEY"))
-                if selected_reasoning_provider == "openai"
-                else True
-            ),
+            "reasoning_configured": {
+                "sarvam": bool(os.getenv("SARVAM_API_KEY")),
+                "openai": bool(os.getenv("OPENAI_API_KEY")),
+                "gemini": bool(os.getenv("GEMINI_API_KEY")),
+                "groq": bool(os.getenv("GROQ_API_KEY")),
+                "native": True,
+            }.get(selected_reasoning_provider, False),
             "reasoning_model": (
                 os.getenv("SARVAM_MODEL", "sarvam-105b")
                 if (os.getenv("UIE_REASONING_PROVIDER") or os.getenv("REASONING_PROVIDER") or "").lower() == "sarvam" or os.getenv("SARVAM_API_KEY")
