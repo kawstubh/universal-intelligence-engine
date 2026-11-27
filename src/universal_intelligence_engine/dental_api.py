@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import secrets
+import time
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -1192,7 +1193,7 @@ async def master_admin_provision_demo_request(
             },
             connection=connection,
         )
-        membership = store.create_doctor_membership(
+        store.create_doctor_membership(
             doctor_id, clinic_id, "owner", connection=connection
         )
         entitlement = ensure_clinic_entitlement(clinic_id, connection=connection)
