@@ -70,7 +70,35 @@ class UniversalIntelligenceEngine:
         fused_evidence = tuple(rank_evidence(raw_evidence))
         decision = self.algorithm.decide(request, fused_evidence)
         evidence = decision.evidence
-        response = self.reasoning_coordinator.reason(request, evidence, self.reasoning)
+        primary_provider = self.reasoning.__class__.__name__
+        fallback_used = False
+        provider_failure = None
+        try:
+            response = self.reasoning_coordinator.reason(request, evidence, self.reasoning)
+        except Exception as exc:
+            # External reasoning providers are accelerators, never a single point
+            # of failure. Recover with the deterministic native reasoning baseline.
+            # Preserve a visible degraded-mode marker; never mislabel fallback output.
+            if isinstance(self.reasoning, NativeReasoningProvider):
+                raise
+            provider_failure = type(exc).__name__
+            response = NativeReasoningProvider().reason(request, evidence)
+            fallback_used = True
+            fallback_metadata = dict(response.metadata)
+            fallback_metadata.update({
+                "provider": "native-fallback",
+                "primary_provider": primary_provider,
+                "fallback_used": True,
+                "fallback_reason": provider_failure,
+                "service_degraded": True,
+            })
+            response = IntelligenceResponse(
+                answer=response.answer,
+                evidence=response.evidence or evidence,
+                actions=response.actions,
+                confidence=response.confidence,
+                metadata=fallback_metadata,
+            )
         evaluation = self.evaluator.evaluate(response) if self.evaluator else None
 
         if self.learning_store is not None:
@@ -95,6 +123,9 @@ class UniversalIntelligenceEngine:
 
         metadata = dict(response.metadata)
         metadata.update({
+            "primary_provider": primary_provider,
+            "fallback_used": fallback_used,
+            "service_degraded": fallback_used,
             "evidence_count": len(evidence),
             "raw_evidence_count": len(raw_evidence),
             "algorithm": "ARC",
