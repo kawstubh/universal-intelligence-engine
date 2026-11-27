@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import os
 import secrets
 import time
 import uuid
@@ -17,6 +18,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .dental_auth import hash_password, require_doctor, verify_password
+from .dental_entitlements import ensure_clinic_entitlement, get_clinic_entitlement
 from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
 
@@ -223,6 +225,23 @@ async def require_assistant(authorization: str | None = Header(default=None)) ->
         raise HTTPException(
             401,
             detail={"code": "SESSION_INVALID", "message": "Invalid or expired assistant session"},
+        )
+
+    clinic_id = str(row["clinic_id"])
+    entitlement = get_clinic_entitlement(clinic_id)
+    master_clinic_id = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip()
+    if not entitlement and master_clinic_id and clinic_id == master_clinic_id:
+        entitlement = ensure_clinic_entitlement(clinic_id)
+    if entitlement and entitlement.get("status") not in {
+        "trialing", "active", "lifetime_free"
+    }:
+        raise HTTPException(
+            402,
+            detail={
+                "code": "CLINIC_SUBSCRIPTION_REQUIRED",
+                "message": "The clinic demo has ended. Choose a subscription to restore full access.",
+                "entitlement": entitlement,
+            },
         )
     return {
         "id": str(row["assistant_id"]),

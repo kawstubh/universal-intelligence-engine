@@ -27,6 +27,7 @@ from .dental_auth import (
 from .dental_billing import create_order as create_membership_order_impl
 from .dental_billing import handle_webhook as handle_membership_webhook
 from .dental_billing import plans as membership_plans
+from .dental_entitlements import ensure_clinic_entitlement, get_clinic_entitlement
 from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
@@ -224,6 +225,45 @@ class PublicAppointmentIn(BaseModel):
         return normalized
 
 
+class PublicDemoRequestIn(BaseModel):
+    idempotency_key: str = Field(min_length=16, max_length=128)
+    clinic_name: str = Field(min_length=2, max_length=200)
+    owner_name: str = Field(min_length=2, max_length=200)
+    email: str = Field(min_length=6, max_length=320)
+    phone: str = Field(min_length=7, max_length=40)
+    website: str = Field(default="", max_length=200)
+
+    @field_validator("idempotency_key", "clinic_name", "owner_name")
+    @classmethod
+    def normalize_demo_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("Please complete the required field")
+        return normalized
+
+    @field_validator("email")
+    @classmethod
+    def normalize_demo_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if "@" not in normalized or "." not in normalized.rsplit("@", 1)[-1]:
+            raise ValueError("Enter a valid email address")
+        return normalized
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_demo_phone(cls, value: str) -> str:
+        normalized = value.strip()
+        digits = "".join(character for character in normalized if character.isdigit())
+        if not (
+            (len(digits) == 10 and digits[0] in "6789")
+            or (len(digits) == 12 and digits.startswith("91") and digits[2] in "6789")
+        ):
+            raise ValueError("Enter a valid 10-digit Indian mobile number")
+        if any(character not in "+0123456789 ()-" for character in normalized):
+            raise ValueError("Enter a valid contact number")
+        return normalized
+
+
 class ChartEntryIn(BaseModel):
     patient_id: str
     tooth_fdi: str = Field(pattern=r"^(1[1-8]|2[1-8]|3[1-8]|4[1-8])$")
@@ -274,15 +314,18 @@ async def get_membership(doctor: Annotated[dict, Depends(require_doctor)]):
     clinic_id = doctor.get("clinic_id", "dr-pranali")
     master = clinic_id == os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip()
     if master:
+        entitlement = ensure_clinic_entitlement(clinic_id)
         return {
             "clinic_id": clinic_id,
-            "plan_id": "master",
+            "plan_id": "founding",
             "name": "Dr. Pranali Master",
-            "status": "active",
+            "status": "lifetime_free",
             "price_inr": 0,
             "period": "forever",
             "master": True,
+            "entitlement": entitlement,
         }
+    entitlement = get_clinic_entitlement(clinic_id)
     store = get_dental_store()
     rows = store._execute(
         "SELECT * FROM dental_memberships WHERE clinic_id=%s ORDER BY created_at DESC LIMIT 1"
@@ -293,6 +336,7 @@ async def get_membership(doctor: Annotated[dict, Depends(require_doctor)]):
     return {
         "clinic_id": clinic_id,
         "membership": rows[0] if rows else None,
+        "entitlement": entitlement,
         "master": False,
     }
 
@@ -456,6 +500,7 @@ async def create_organisation(
         membership = store.create_doctor_membership(
             actor["id"], clinic_id, "owner", connection=connection
         )
+        ensure_clinic_entitlement(clinic_id, connection=connection)
         store.audit(
             actor["id"],
             "organisation.created",
@@ -513,6 +558,7 @@ async def create_organisation_workspace(
         membership = store.create_doctor_membership(
             actor["id"], workspace["id"], actor["role"], connection=connection
         )
+        ensure_clinic_entitlement(workspace["id"], connection=connection)
         store.audit(
             actor["id"],
             "workspace.created",
@@ -901,6 +947,82 @@ class PublicAppointmentLookupIn(BaseModel):
         if len(digits) < 7 or len(digits) > 15:
             raise ValueError("Enter the phone number used for the booking")
         return digits
+
+
+@router.post(
+    "/public/demo-requests",
+    status_code=202,
+    openapi_extra={"security": []},
+)
+async def create_public_demo_request(body: PublicDemoRequestIn, request: Request):
+    """Collect a clinic demo enquiry without creating an unverified tenant."""
+    store = get_dental_store()
+    enforce_shared_rate_limit(
+        store,
+        scope="public_demo_request",
+        client_identity=_public_appointment_client_ip(request),
+        max_attempts=5,
+        window_seconds=3600,
+        rate_limited_code="PUBLIC_DEMO_REQUEST_RATE_LIMITED",
+    )
+    if body.website.strip():
+        return {
+            "status": "received",
+            "message": "Your demo request has been received. Our team will contact you.",
+        }
+
+    request_key_hash = hashlib.sha256(
+        ("oralyn-demo-request:" + body.idempotency_key.strip()).encode("utf-8")
+    ).hexdigest()
+    existing = store._execute(
+        "SELECT id,status FROM dental_onboarding_requests WHERE request_key_hash=%s"
+        if store.database_url
+        else "SELECT id,status FROM dental_onboarding_requests WHERE request_key_hash=?",
+        (request_key_hash,),
+    )
+    if existing:
+        return {
+            "status": "already_received",
+            "message": "This demo request has already been received. Our team will contact you.",
+        }
+
+    now = int(datetime.now(UTC).timestamp())
+    request_id = secrets.token_hex(16)
+    try:
+        store._execute(
+            "INSERT INTO dental_onboarding_requests(id,request_key_hash,clinic_name,owner_name,email,phone,status,clinic_id,verified_at,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,'pending',NULL,NULL,%s,%s)"
+            if store.database_url
+            else "INSERT INTO dental_onboarding_requests(id,request_key_hash,clinic_name,owner_name,email,phone,status,clinic_id,verified_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'pending',NULL,NULL,?,?)",
+            (
+                request_id,
+                request_key_hash,
+                body.clinic_name.strip(),
+                body.owner_name.strip(),
+                body.email,
+                body.phone,
+                now,
+                now,
+            ),
+        )
+    except Exception:
+        # A concurrent retry may win the unique idempotency constraint.
+        existing = store._execute(
+            "SELECT id FROM dental_onboarding_requests WHERE request_key_hash=%s"
+            if store.database_url
+            else "SELECT id FROM dental_onboarding_requests WHERE request_key_hash=?",
+            (request_key_hash,),
+        )
+        if not existing:
+            raise
+        return {
+            "status": "already_received",
+            "message": "This demo request has already been received. Our team will contact you.",
+        }
+
+    return {
+        "status": "received",
+        "message": "Your demo request has been received. Our team will verify your details before activating a 3-day demo.",
+    }
 
 
 @router.post("/public/appointments")

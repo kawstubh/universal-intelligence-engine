@@ -7,6 +7,7 @@ PUBLIC_OPERATIONS = {
     ("POST", "/v1/dental/auth/password/login"),
     ("POST", "/v1/dental/assistant/auth/login"),
     ("POST", "/v1/dental/public/appointments"),
+    ("POST", "/v1/dental/public/demo-requests"),
     ("GET", "/v1/dental/billing/plans"),
     ("POST", "/v1/dental/billing/razorpay/webhook"),
 }

@@ -32,8 +32,8 @@ from .providers import (
     ProviderRateLimitError,
 )
 from .reasoning import NativeReasoningProvider
-from .service import IntelligenceService
 from .sarvam import SarvamTokenFactoryReasoningProvider
+from .service import IntelligenceService
 
 
 class IntelligenceRunBody(BaseModel):
@@ -232,6 +232,7 @@ def _doctor_only_openapi():
         ("post", "/v1/dental/auth/password/login"),
         ("post", "/v1/dental/assistant/auth/login"),
         ("post", "/v1/dental/public/appointments"),
+        ("post", "/v1/dental/public/demo-requests"),
         ("get", "/v1/dental/billing/plans"),
         ("post", "/v1/dental/billing/razorpay/webhook"),
     }
@@ -300,7 +301,42 @@ def readiness() -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    selected_reasoning_provider = (os.getenv("UIE_REASONING_PROVIDER") or os.getenv("REASONING_PROVIDER") or ("sarvam" if os.getenv("SARVAM_API_KEY") else "openai" if os.getenv("OPENAI_API_KEY") else "native")).strip().lower()
+    selected_reasoning_provider = (
+        os.getenv("UIE_REASONING_PROVIDER")
+        or os.getenv("REASONING_PROVIDER")
+        or (
+            "sarvam"
+            if os.getenv("SARVAM_API_KEY")
+            else "openai"
+            if os.getenv("OPENAI_API_KEY")
+            else "gemini"
+            if os.getenv("GEMINI_API_KEY")
+            else "groq"
+            if os.getenv("GROQ_API_KEY")
+            else "native"
+        )
+    ).strip().lower()
+    provider_names = {
+        "sarvam": "sarvam-token-factory",
+        "openai": "openai-responses",
+        "gemini": "gemini",
+        "groq": "groq",
+        "native": "native",
+    }
+    provider_configured = {
+        "sarvam": bool(os.getenv("SARVAM_API_KEY")),
+        "openai": bool(os.getenv("OPENAI_API_KEY")),
+        "gemini": bool(os.getenv("GEMINI_API_KEY")),
+        "groq": bool(os.getenv("GROQ_API_KEY")),
+        "native": True,
+    }.get(selected_reasoning_provider, False)
+    model = {
+        "sarvam": os.getenv("SARVAM_MODEL", "sarvam-105b"),
+        "openai": os.getenv("OPENAI_MODEL") or os.getenv("REASONING_MODEL") or "openai-default",
+        "gemini": os.getenv("GEMINI_MODEL") or os.getenv("REASONING_MODEL") or "gemini-default",
+        "groq": os.getenv("GROQ_MODEL") or os.getenv("REASONING_MODEL") or "groq-default",
+        "native": "native",
+    }.get(selected_reasoning_provider, "native")
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
@@ -311,25 +347,11 @@ def health() -> dict[str, Any]:
             "knowledge_provider": "wikipedia+europe-pmc-public-api",
             "knowledge_mode": "best-effort-public-sources",
             "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
-            "reasoning_provider": (
-                "sarvam-token-factory"
-                if (os.getenv("UIE_REASONING_PROVIDER") or os.getenv("REASONING_PROVIDER") or "").lower() == "sarvam" or os.getenv("SARVAM_API_KEY")
-                else (os.getenv("UIE_REASONING_PROVIDER") or os.getenv("REASONING_PROVIDER") or "openai").lower()
-                if os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY")
-                else "native"
+            "reasoning_provider": provider_names.get(
+                selected_reasoning_provider, "native"
             ),
-            "reasoning_configured": {
-                "sarvam": bool(os.getenv("SARVAM_API_KEY")),
-                "openai": bool(os.getenv("OPENAI_API_KEY")),
-                "gemini": bool(os.getenv("GEMINI_API_KEY")),
-                "groq": bool(os.getenv("GROQ_API_KEY")),
-                "native": True,
-            }.get(selected_reasoning_provider, False),
-            "reasoning_model": (
-                os.getenv("SARVAM_MODEL", "sarvam-105b")
-                if (os.getenv("UIE_REASONING_PROVIDER") or os.getenv("REASONING_PROVIDER") or "").lower() == "sarvam" or os.getenv("SARVAM_API_KEY")
-                else os.getenv("REASONING_MODEL") or os.getenv("OPENAI_MODEL") or "native"
-            ),
+            "reasoning_configured": provider_configured,
+            "reasoning_model": model,
         },
         "dental_api": True,
     }

@@ -16,6 +16,7 @@ import uuid
 
 from fastapi import Header, HTTPException, Request
 
+from .dental_entitlements import ensure_clinic_entitlement, get_clinic_entitlement
 from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
 
@@ -244,7 +245,9 @@ async def logout_doctor(authorization: str | None) -> None:
             get_dental_store().revoke_session(_hash(token))
 
 
-async def require_doctor(authorization: str | None = Header(default=None)) -> dict:
+async def require_doctor(
+    request: Request, authorization: str | None = Header(default=None)
+) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             401,
@@ -342,6 +345,30 @@ async def require_doctor(authorization: str | None = Header(default=None)) -> di
         raise HTTPException(
             403,
             detail={"code": "DOCTOR_ROLE_REQUIRED", "message": "Doctor role required"},
+        )
+
+    # Existing legacy workspaces without an entitlement row remain untouched.
+    # Newly provisioned workspaces always receive a trial row in the same
+    # transaction as clinic creation. The founding clinic is initialized here
+    # from the protected server-side clinic ID, never from a request field.
+    master_clinic_id = os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip()
+    entitlement = get_clinic_entitlement(clinic_id)
+    if not entitlement and master_clinic_id and clinic_id == master_clinic_id:
+        entitlement = ensure_clinic_entitlement(clinic_id)
+    billing_paths = {
+        "/v1/dental/billing/membership",
+        "/v1/dental/billing/order",
+    }
+    if entitlement and entitlement.get("status") not in {
+        "trialing", "active", "lifetime_free"
+    } and request.url.path not in billing_paths:
+        raise HTTPException(
+            402,
+            detail={
+                "code": "CLINIC_SUBSCRIPTION_REQUIRED",
+                "message": "The clinic demo has ended. Choose a subscription to restore full access.",
+                "entitlement": entitlement,
+            },
         )
     return {
         "id": user_id,

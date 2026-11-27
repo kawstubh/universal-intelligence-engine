@@ -12,6 +12,10 @@ import uuid
 import httpx
 from fastapi import HTTPException
 
+from .dental_entitlements import (
+    activate_paid_entitlement,
+    set_clinic_entitlement_status,
+)
 from .dental_store import get_dental_store
 
 PLANS = [
@@ -192,6 +196,7 @@ def _extract(
     subscription = (payload.get("subscription") or {}).get("entity") or {}
     order_id = (
         payment_link.get("id")
+        or payment.get("payment_link_id")
         or payment.get("order_id")
         or order.get("id")
         or subscription.get("id")
@@ -269,8 +274,52 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
     if existing:
         return {"ok": True, "duplicate": True, "event_id": event_id}
 
-    # Record the verified event before applying entitlement changes. The unique event id
-    # prevents a replay from being applied twice.
+    order_id, payment_id, event_plan, event_clinic, _refund_id = _extract(event)
+    order = _find_order(order_id)
+    order_events = {
+        "payment.captured", "order.paid", "payment_link.paid",
+        "payment.failed", "order.failed", "payment_link.failed",
+        "refund.created", "refund.processed", "payment.refunded",
+    }
+    if event_name in order_events and not order:
+        raise HTTPException(409, "Razorpay event does not match a known clinic order")
+
+    clinic_id = str((order or {}).get("clinic_id") or event_clinic or "")
+    plan_id = (
+        str(event_plan)
+        if event_name.startswith("subscription.") and event_plan
+        else str((order or {}).get("plan_id") or event_plan or "")
+    )
+    if order and event_clinic and str(event_clinic) != str(order["clinic_id"]):
+        raise HTTPException(409, "Razorpay clinic reference does not match the stored order")
+    if (
+        order
+        and event_name in order_events
+        and event_plan
+        and str(event_plan) != str(order["plan_id"])
+    ):
+        raise HTTPException(409, "Razorpay plan reference does not match the stored order")
+
+    if event_name in {"payment.captured", "order.paid", "payment_link.paid"}:
+        _plan(plan_id)
+        payload = event.get("payload") or {}
+        payment = (payload.get("payment") or {}).get("entity") or {}
+        payment_link = (payload.get("payment_link") or {}).get("entity") or {}
+        order_entity = (payload.get("order") or {}).get("entity") or {}
+        paid_entity = payment or payment_link or order_entity
+        amount = paid_entity.get("amount")
+        currency = str(paid_entity.get("currency") or "").upper()
+        if (
+            amount is None
+            or int(amount) != int(order["amount_inr"]) * 100
+            or currency != "INR"
+        ):
+            raise HTTPException(
+                409,
+                "Razorpay amount or currency does not match the stored clinic order",
+            )
+
+    # Record only after signature, local order, tenant and amount checks pass.
     store._execute(
         "INSERT INTO dental_razorpay_events(event_id,event_name,processed_at) VALUES (%s,%s,%s)"
         if store.database_url
@@ -278,44 +327,48 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
         (event_id, event_name, str(int(time.time()))),
     )
 
-    order_id, payment_id, event_plan, event_clinic, _refund_id = _extract(event)
-    order = _find_order(order_id)
-    clinic_id = event_clinic or (order or {}).get("clinic_id")
-    plan_id = event_plan or (order or {}).get("plan_id")
-
     if event_name in {"payment.captured", "order.paid", "payment_link.paid"}:
-        if order and clinic_id and plan_id:
-            _update_order(order_id, "paid", payment_id)
-            _set_membership(clinic_id, plan_id, "active", period_end=_period_end())
+        _update_order(order_id, "paid", payment_id)
+        period_end = _period_end()
+        _set_membership(clinic_id, plan_id, "active", period_end=period_end)
+        activate_paid_entitlement(
+            clinic_id, plan_id, str(order_id), period_end=int(period_end)
+        )
     elif event_name in {"payment.failed", "order.failed", "payment_link.failed"}:
         _update_order(order_id, "failed", payment_id)
-        current = _membership(clinic_id) if clinic_id else None
+        current = _membership(clinic_id)
         current_plan_id = str((current or {}).get("plan_id") or "").strip()
-        if (
-            clinic_id
-            and current
-            and current.get("status") == "active"
-            and current_plan_id
-        ):
+        if current and current.get("status") == "active" and current_plan_id:
+            period_end = current.get("current_period_end")
             _set_membership(
+                clinic_id, current_plan_id, "past_due", period_end=period_end
+            )
+            set_clinic_entitlement_status(
                 clinic_id,
-                current_plan_id,
                 "past_due",
-                period_end=current.get("current_period_end"),
+                plan_id=current_plan_id,
+                period_end=int(period_end) if period_end else None,
             )
     elif event_name in {"refund.created", "refund.processed", "payment.refunded"}:
         _update_order(order_id, "refunded", payment_id)
         if clinic_id and plan_id:
             _set_membership(clinic_id, plan_id, "refunded", period_end=None)
+            set_clinic_entitlement_status(
+                clinic_id, "refunded", plan_id=plan_id, source_order_id=str(order_id)
+            )
     elif event_name in {"subscription.cancelled", "subscription.canceled"}:
         if clinic_id and plan_id:
+            current = _membership(clinic_id)
+            period_end = current.get("current_period_end") if current else None
             _set_membership(
+                clinic_id, plan_id, "cancelled", period_end=period_end
+            )
+            set_clinic_entitlement_status(
                 clinic_id,
-                plan_id,
                 "cancelled",
-                period_end=_membership(clinic_id).get("current_period_end")
-                if _membership(clinic_id)
-                else None,
+                plan_id=plan_id,
+                period_end=int(period_end) if period_end else None,
+                source_order_id=str(order_id or ""),
             )
     elif event_name in {
         "subscription.charged",
@@ -324,23 +377,31 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
     }:
         if clinic_id and plan_id:
             current = _membership(clinic_id)
-            _set_membership(
-                clinic_id,
-                plan_id,
-                "active",
-                period_end=_period_end(
-                    current.get("current_period_end") if current else None
-                ),
+            period_end = _period_end(
+                current.get("current_period_end") if current else None
             )
-    elif event_name in {"subscription.paused"}:
-        if clinic_id and plan_id:
             _set_membership(
+                clinic_id, plan_id, "active", period_end=period_end
+            )
+            activate_paid_entitlement(
                 clinic_id,
                 plan_id,
+                "subscription:" + str(order_id or event_id),
+                period_end=int(period_end),
+            )
+    elif event_name == "subscription.paused":
+        if clinic_id and plan_id:
+            current = _membership(clinic_id)
+            period_end = current.get("current_period_end") if current else None
+            _set_membership(
+                clinic_id, plan_id, "paused", period_end=period_end
+            )
+            set_clinic_entitlement_status(
+                clinic_id,
                 "paused",
-                period_end=_membership(clinic_id).get("current_period_end")
-                if _membership(clinic_id)
-                else None,
+                plan_id=plan_id,
+                period_end=int(period_end) if period_end else None,
+                source_order_id=str(order_id or ""),
             )
     elif (
         event_name in {"subscription.updated", "subscription.plan_changed"}
@@ -348,20 +409,24 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
         and plan_id
     ):
         _plan(plan_id)
+        current = _membership(clinic_id)
+        period_end = (
+            current.get("current_period_end") if current else _period_end()
+        )
         _set_membership(
+            clinic_id, plan_id, "active", period_end=period_end
+        )
+        activate_paid_entitlement(
             clinic_id,
             plan_id,
-            "active",
-            period_end=_membership(clinic_id).get("current_period_end")
-            if _membership(clinic_id)
-            else _period_end(),
+            "subscription:" + str(order_id or event_id),
+            period_end=int(period_end),
         )
 
+    membership = _membership(clinic_id) if clinic_id else None
     return {
         "ok": True,
         "event_id": event_id,
         "event": event_name,
-        "entitlement_status": _membership(clinic_id).get("status")
-        if clinic_id and _membership(clinic_id)
-        else None,
+        "entitlement_status": membership.get("status") if membership else None,
     }

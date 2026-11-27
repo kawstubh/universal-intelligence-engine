@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Sequence
+from collections.abc import Sequence
 
 from .contracts import Evidence, IntelligenceRequest, IntelligenceResponse
 from .providers import _json_request
