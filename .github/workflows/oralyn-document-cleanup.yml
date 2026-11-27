@@ -1,6 +1,13 @@
 name: Oralyn private document quarantine cleanup
 
 on:
+  push:
+    branches: [feat/oralyn-clinic-assistant-rbac]
+    paths:
+      - ".github/workflows/oralyn-document-cleanup.yml"
+      - "src/universal_intelligence_engine/dental_document_cleanup.py"
+      - "src/universal_intelligence_engine/dental_documents.py"
+      - "src/universal_intelligence_engine/dental_store.py"
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
@@ -36,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: feat/oralyn-clinic-assistant-rbac
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
