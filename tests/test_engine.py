@@ -41,3 +41,20 @@ def test_engine_orchestrates():
     assert result.answer["goal"] == "test"
     assert result.metadata["evaluation"]["passed"] is True
     assert learning.events[0]["evidence_count"] == 1
+
+
+class FailingReasoning:
+    def reason(self, request, evidence):
+        raise RuntimeError("simulated upstream provider outage")
+
+
+def test_engine_falls_back_when_external_reasoning_provider_fails():
+    engine = UniversalIntelligenceEngine(Knowledge(), FailingReasoning(), Evaluator(), Learning())
+
+    result = engine.run(IntelligenceRequest(goal="test"))
+
+    assert result.metadata["provider"] == "native-fallback"
+    assert result.metadata["primary_provider"] == "FailingReasoning"
+    assert result.metadata["fallback_used"] is True
+    assert result.metadata["service_degraded"] is True
+    assert "Evidence-supported findings" in result.answer
