@@ -285,7 +285,11 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
         raise HTTPException(409, "Razorpay event does not match a known clinic order")
 
     clinic_id = str((order or {}).get("clinic_id") or event_clinic or "")
-    plan_id = str((order or {}).get("plan_id") or event_plan or "")
+    plan_id = (
+        str(event_plan)
+        if event_name.startswith("subscription.") and event_plan
+        else str((order or {}).get("plan_id") or event_plan or "")
+    )
     if order and event_clinic and str(event_clinic) != str(order["clinic_id"]):
         raise HTTPException(409, "Razorpay clinic reference does not match the stored order")
     if (
