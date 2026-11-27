@@ -32,8 +32,8 @@ from .providers import (
     ProviderRateLimitError,
 )
 from .reasoning import NativeReasoningProvider
-from .service import IntelligenceService
 from .sarvam import SarvamTokenFactoryReasoningProvider
+from .service import IntelligenceService
 
 
 class IntelligenceRunBody(BaseModel):
