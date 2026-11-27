@@ -5,8 +5,9 @@ from pathlib import Path
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine.dental_store import DentalStore
 from universal_intelligence_engine import dental_auth, dental_entitlements
+
+from universal_intelligence_engine.dental_store import DentalStore
 
 
 _REQUIRE_DOCTOR = Depends(dental_auth.require_doctor)
