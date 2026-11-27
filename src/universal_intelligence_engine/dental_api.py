@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import secrets
+import time
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -15,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from .dental_auth import (
@@ -22,6 +24,7 @@ from .dental_auth import (
     login_password,
     logout_doctor,
     require_doctor,
+    require_master_admin,
     switch_doctor_workspace,
 )
 from .dental_billing import create_order as create_membership_order_impl
@@ -262,6 +265,15 @@ class PublicDemoRequestIn(BaseModel):
         if any(character not in "+0123456789 ()-" for character in normalized):
             raise ValueError("Enter a valid contact number")
         return normalized
+
+
+class PublicOwnerActivationIn(BaseModel):
+    token: str = Field(min_length=32, max_length=256)
+    password: str = Field(min_length=12, max_length=256)
+
+
+class ProvisionDemoRequestIn(BaseModel):
+    verification_confirmed: bool = False
 
 
 class ChartEntryIn(BaseModel):
@@ -1022,6 +1034,231 @@ async def create_public_demo_request(body: PublicDemoRequestIn, request: Request
     return {
         "status": "received",
         "message": "Your demo request has been received. Our team will verify your details before activating a 3-day demo.",
+    }
+
+
+@router.post(
+    "/public/owner-activate",
+    status_code=200,
+    openapi_extra={"security": []},
+)
+async def activate_public_clinic_owner(body: PublicOwnerActivationIn, request: Request):
+    store = get_dental_store()
+    enforce_shared_rate_limit(
+        store,
+        scope="owner_activation",
+        client_identity=_public_appointment_client_ip(request),
+        max_attempts=5,
+        window_seconds=900,
+        rate_limited_code="OWNER_ACTIVATION_RATE_LIMITED",
+    )
+    token_hash = hashlib.sha256(body.token.strip().encode("utf-8")).hexdigest()
+    rows = store._execute(
+        "SELECT id,doctor_id,clinic_id,expires_at,used_at FROM dental_owner_activation_tokens WHERE token_hash=%s"
+        if store.database_url
+        else "SELECT id,doctor_id,clinic_id,expires_at,used_at FROM dental_owner_activation_tokens WHERE token_hash=?",
+        (token_hash,),
+    )
+    if not rows or rows[0].get("used_at") is not None or int(rows[0]["expires_at"]) <= int(time.time()):
+        raise HTTPException(410, "Owner activation link is invalid or expired")
+
+    activation = rows[0]
+    with store.transaction() as connection:
+        consumed = store._execute(
+            "UPDATE dental_owner_activation_tokens SET used_at=%s WHERE id=%s AND used_at IS NULL AND expires_at>%s RETURNING id"
+            if store.database_url
+            else "UPDATE dental_owner_activation_tokens SET used_at=? WHERE id=? AND used_at IS NULL AND expires_at>? RETURNING id",
+            (int(time.time()), activation["id"], int(time.time())),
+            connection=connection,
+        )
+        if not consumed:
+            raise HTTPException(410, "Owner activation link has already been used or expired")
+        store._execute(
+            "UPDATE dental_doctors SET password_hash=%s WHERE id=%s AND clinic_id=%s AND active=TRUE"
+            if store.database_url
+            else "UPDATE dental_doctors SET password_hash=? WHERE id=? AND clinic_id=? AND active=1",
+            (
+                hash_password(body.password),
+                activation["doctor_id"],
+                activation["clinic_id"],
+            ),
+            connection=connection,
+        )
+        store.audit(
+            activation["doctor_id"],
+            "owner.account_activated",
+            "doctor",
+            activation["doctor_id"],
+            clinic_id=activation["clinic_id"],
+            connection=connection,
+        )
+    return {"ok": True, "clinic_id": activation["clinic_id"]}
+
+
+@router.get("/master-admin/demo-requests")
+async def master_admin_demo_requests(
+    actor: Annotated[dict, Depends(require_master_admin)],
+):
+    store = get_dental_store()
+    requests = store._execute(
+        "SELECT id,clinic_name,owner_name,email,phone,status,clinic_id,verified_at,created_at,updated_at FROM dental_onboarding_requests WHERE status IN ('pending','verified','provisioned') ORDER BY created_at DESC LIMIT 100"
+    )
+    return {"requests": requests}
+
+
+@router.get("/master-admin/clinics")
+async def master_admin_clinics(
+    actor: Annotated[dict, Depends(require_master_admin)],
+):
+    store = get_dental_store()
+    clinics = store._execute(
+        "SELECT c.id,c.name,c.organisation_id,c.active,e.entitlement_type,e.status AS entitlement_status,e.plan_id,e.trial_started_at,e.trial_ends_at,e.current_period_end FROM dental_clinics c LEFT JOIN dental_clinic_entitlements e ON e.clinic_id=c.id ORDER BY c.created_at DESC LIMIT 500"
+    )
+    return {"clinics": clinics}
+
+
+@router.post("/master-admin/demo-requests/{request_id}/provision", status_code=201)
+async def master_admin_provision_demo_request(
+    request_id: str,
+    body: ProvisionDemoRequestIn,
+    actor: Annotated[dict, Depends(require_master_admin)],
+):
+    if not body.verification_confirmed:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "OWNER_VERIFICATION_REQUIRED",
+                "message": "Verify the clinic owner's contact details before provisioning.",
+            },
+        )
+    store = get_dental_store()
+    rows = store._execute(
+        "SELECT * FROM dental_onboarding_requests WHERE id=%s"
+        if store.database_url
+        else "SELECT * FROM dental_onboarding_requests WHERE id=?",
+        (request_id,),
+    )
+    if not rows:
+        raise HTTPException(404, "Demo request not found")
+    demo = rows[0]
+    if demo["status"] == "provisioned" and demo.get("clinic_id"):
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "already_provisioned",
+                "clinic_id": demo["clinic_id"],
+            },
+        )
+    if demo["status"] == "rejected":
+        raise HTTPException(409, "This demo request has been rejected")
+    if store.doctor_by_email(str(demo["email"]).strip().lower()):
+        raise HTTPException(
+            409,
+            detail={
+                "code": "OWNER_ACCOUNT_EXISTS",
+                "message": "An account already exists for this owner email. Resolve the existing account before provisioning.",
+            },
+        )
+
+    now = int(time.time())
+    organisation_id = secrets.token_hex(16)
+    clinic_id = secrets.token_hex(16)
+    doctor_id = secrets.token_hex(16)
+    activation_token = secrets.token_urlsafe(40)
+    token_hash = hashlib.sha256(activation_token.encode("utf-8")).hexdigest()
+    random_unusable_password = secrets.token_urlsafe(48)
+
+    with store.transaction() as connection:
+        organisation = store.create_organisation(
+            {
+                "id": organisation_id,
+                "name": str(demo["clinic_name"]).strip(),
+                "organisation_type": "clinic",
+            },
+            connection=connection,
+        )
+        workspace = store.create_clinic(
+            {
+                "id": clinic_id,
+                "organisation_id": organisation_id,
+                "name": str(demo["clinic_name"]).strip(),
+                "clinic_type": "clinic",
+            },
+            connection=connection,
+        )
+        owner = store.create_doctor(
+            {
+                "id": doctor_id,
+                "email": str(demo["email"]).strip().lower(),
+                "phone": str(demo["phone"]).strip(),
+                "password_hash": hash_password(random_unusable_password),
+                "role": "owner",
+                "clinic_id": clinic_id,
+            },
+            connection=connection,
+        )
+        store.create_doctor_membership(
+            doctor_id, clinic_id, "owner", connection=connection
+        )
+        entitlement = ensure_clinic_entitlement(clinic_id, connection=connection)
+        store._execute(
+            "INSERT INTO dental_owner_activation_tokens(id,doctor_id,clinic_id,token_hash,expires_at,used_at,created_at) VALUES (%s,%s,%s,%s,%s,NULL,%s)"
+            if store.database_url
+            else "INSERT INTO dental_owner_activation_tokens(id,doctor_id,clinic_id,token_hash,expires_at,used_at,created_at) VALUES (?,?,?,?,?,NULL,?)",
+            (
+                secrets.token_hex(16),
+                doctor_id,
+                clinic_id,
+                token_hash,
+                now + 24 * 60 * 60,
+                now,
+            ),
+            connection=connection,
+        )
+        update_sql = (
+            "UPDATE dental_onboarding_requests SET status='provisioned',clinic_id=%s,verified_at=COALESCE(verified_at,%s),updated_at=%s WHERE id=%s AND status IN ('pending','verified')"
+            if store.database_url
+            else "UPDATE dental_onboarding_requests SET status='provisioned',clinic_id=?,verified_at=COALESCE(verified_at,?),updated_at=? WHERE id=? AND status IN ('pending','verified')"
+        )
+        store._execute(
+            update_sql,
+            (clinic_id, now, now, request_id),
+            connection=connection,
+        )
+        store.audit(
+            actor["id"],
+            "clinic.demo_provisioned",
+            "clinic",
+            clinic_id,
+            clinic_id=clinic_id,
+            connection=connection,
+        )
+        store.audit(
+            actor["id"],
+            "clinic.owner_activation_issued",
+            "doctor",
+            doctor_id,
+            clinic_id=clinic_id,
+            connection=connection,
+        )
+
+    return {
+        "status": "provisioned",
+        "organisation_id": organisation["id"],
+        "clinic_id": workspace["id"],
+        "owner_email": owner["email"],
+        "trial_started_at": entitlement.get("trial_started_at"),
+        "trial_ends_at": entitlement.get("trial_ends_at"),
+        "activation_token": activation_token,
+        "activation_expires_at": now + 24 * 60 * 60,
+        "activation_path": "/owner-activate",
+        "activation_url": (
+            os.getenv("ORALYN_PUBLIC_APP_URL", "").strip().rstrip("/")
+            + "/owner-activate?token="
+            + activation_token
+            if os.getenv("ORALYN_PUBLIC_APP_URL", "").strip()
+            else None
+        ),
     }
 
 

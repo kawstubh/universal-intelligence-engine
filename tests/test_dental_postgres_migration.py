@@ -45,7 +45,7 @@ def test_postgres_migrations_backfill_workspaces_without_touching_clinical_rows(
         monkeypatch.delenv("DENTAL_SQLITE_PATH", raising=False)
         config = Config(str(ROOT / "alembic.ini"))
         assert ScriptDirectory.from_config(config).get_heads() == [
-            "0017_clinic_trial_entitlements"
+            "0018_owner_activation_tokens"
         ]
         command.upgrade(config, "0005_password_auth")
 

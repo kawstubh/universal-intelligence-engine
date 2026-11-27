@@ -4,15 +4,18 @@ on:
   push:
     branches:
       - feat/oralyn-48h-release-integration-20261127
+      - feat/oralyn-master-admin-onboarding-20261127
   pull_request:
     branches:
       - feat/oralyn-clinic-assistant-rbac
     paths:
       - "src/universal_intelligence_engine/dental_*.py"
       - "alembic/versions/0017_clinic_trial_entitlements.py"
+      - "alembic/versions/0018_owner_activation_tokens.py"
       - "tests/test_dental_entitlements.py"
       - "tests/test_dental_entitlement_auth_gate.py"
       - "tests/test_dental_public_demo_requests.py"
+      - "tests/test_dental_master_admin_onboarding.py"
       - ".github/workflows/oralyn-48h-integration.yml"
 
 permissions:
@@ -34,6 +37,7 @@ jobs:
         run: |
           ruff check \
             alembic/versions/0017_clinic_trial_entitlements.py \
+            alembic/versions/0018_owner_activation_tokens.py \
             src/universal_intelligence_engine/dental_api.py \
             src/universal_intelligence_engine/dental_auth.py \
             src/universal_intelligence_engine/dental_assistant.py \
@@ -41,6 +45,7 @@ jobs:
             src/universal_intelligence_engine/dental_entitlements.py \
             tests/test_dental_entitlements.py \
             tests/test_dental_entitlement_auth_gate.py \
-            tests/test_dental_public_demo_requests.py
+            tests/test_dental_public_demo_requests.py \
+            tests/test_dental_master_admin_onboarding.py
       - name: Run backend regression and migration tests
         run: pytest -q
