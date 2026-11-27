@@ -9,6 +9,9 @@ from universal_intelligence_engine import dental_auth, dental_entitlements
 from universal_intelligence_engine.dental_store import DentalStore
 
 
+_REQUIRE_DOCTOR = Depends(dental_auth.require_doctor)
+
+
 def test_expired_trial_blocks_clinic_routes_but_allows_billing_reactivation(tmp_path, monkeypatch):
     now = 1_800_000_000
     database_path = tmp_path / "entitlement-auth.sqlite3"
@@ -54,7 +57,7 @@ def test_expired_trial_blocks_clinic_routes_but_allows_billing_reactivation(tmp_
     app = FastAPI()
 
     @app.get("/v1/dental/patients")
-    async def protected_patients(actor=Depends(dental_auth.require_doctor)):
+    async def protected_patients(actor=_REQUIRE_DOCTOR):
         return {"clinic_id": actor["clinic_id"]}
 
     @app.get("/v1/dental/billing/membership")
