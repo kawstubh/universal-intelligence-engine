@@ -193,6 +193,7 @@ def _extract(
     subscription = (payload.get("subscription") or {}).get("entity") or {}
     order_id = (
         payment_link.get("id")
+        or payment.get("payment_link_id")
         or payment.get("order_id")
         or order.get("id")
         or subscription.get("id")
@@ -293,7 +294,8 @@ def handle_webhook(raw_body: bytes, signature: str) -> dict:
         payload = event.get("payload") or {}
         payment = (payload.get("payment") or {}).get("entity") or {}
         payment_link = (payload.get("payment_link") or {}).get("entity") or {}
-        paid_entity = payment or payment_link
+        order_entity = (payload.get("order") or {}).get("entity") or {}
+        paid_entity = payment or payment_link or order_entity
         amount = paid_entity.get("amount")
         currency = str(paid_entity.get("currency") or "").upper()
         if amount is None or int(amount) != int(order["amount_inr"]) * 100 or currency != "INR":
