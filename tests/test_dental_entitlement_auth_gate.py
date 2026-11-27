@@ -5,8 +5,8 @@ from pathlib import Path
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from universal_intelligence_engine import dental_auth, dental_entitlements
 from universal_intelligence_engine.dental_store import DentalStore
+from universal_intelligence_engine import dental_auth, dental_entitlements
 
 
 _REQUIRE_DOCTOR = Depends(dental_auth.require_doctor)
@@ -61,7 +61,7 @@ def test_expired_trial_blocks_clinic_routes_but_allows_billing_reactivation(tmp_
         return {"clinic_id": actor["clinic_id"]}
 
     @app.get("/v1/dental/billing/membership")
-    async def billing_membership(actor=Depends(dental_auth.require_doctor)):
+    async def billing_membership(actor=_REQUIRE_DOCTOR):
         return {"clinic_id": actor["clinic_id"]}
 
     client = TestClient(app)
