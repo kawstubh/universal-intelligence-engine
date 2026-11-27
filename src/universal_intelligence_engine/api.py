@@ -300,6 +300,7 @@ def readiness() -> dict[str, Any]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    selected_reasoning_provider = (os.getenv("UIE_REASONING_PROVIDER") or os.getenv("REASONING_PROVIDER") or ("sarvam" if os.getenv("SARVAM_API_KEY") else "openai" if os.getenv("OPENAI_API_KEY") else "native")).strip().lower()
     return {
         "status": "ok",
         "engine": "universal-intelligence-engine",
@@ -316,6 +317,17 @@ def health() -> dict[str, Any]:
                 else (os.getenv("UIE_REASONING_PROVIDER") or os.getenv("REASONING_PROVIDER") or "openai").lower()
                 if os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY")
                 else "native"
+            ),
+            "reasoning_configured": (
+                bool(os.getenv("SARVAM_API_KEY"))
+                if (selected_reasoning_provider == "sarvam"
+                else bool(os.getenv("GEMINI_API_KEY"))
+                if selected_reasoning_provider == "gemini"
+                else bool(os.getenv("GROQ_API_KEY"))
+                if selected_reasoning_provider == "groq"
+                else bool(os.getenv("OPENAI_API_KEY"))
+                if selected_reasoning_provider == "openai"
+                else True
             ),
             "reasoning_model": (
                 os.getenv("SARVAM_MODEL", "sarvam-105b")
