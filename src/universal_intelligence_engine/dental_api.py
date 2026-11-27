@@ -166,7 +166,7 @@ class PublicAppointmentIn(BaseModel):
         "Smile Makeover",
         "TMJ & Jaw Pain Treatment",
         "Other dental concern",
-    ] = "Dental Check-up & Consultation"
+    ]
     intelligence_request: Literal[False] = False
     website: str = Field(default="", max_length=200)
 
