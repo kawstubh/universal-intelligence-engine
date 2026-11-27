@@ -79,7 +79,7 @@ def ensure_clinic_entitlement(clinic_id: str, *, connection=None) -> dict:
     insert_sql = (
         "INSERT INTO dental_clinic_entitlements(id,clinic_id,entitlement_type,status,plan_id,trial_started_at,trial_ends_at,current_period_end,source_order_id,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,NULL,NULL,%s,%s) ON CONFLICT (clinic_id) DO NOTHING"
         if _is_postgres(store)
-        else "INSERT INTO dental_clinic_entitlements(id,clinic_id,entitlement_type,status,plan_id,trial_started_at,trial_ends_at,current_period_end,source_order_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,?,?) ON CONFLICT(clinic_id) DO NOTHING"
+        else "INSERT INTO dental_clinic_entitlements(id,clinic_id,entitlement_type,status,plan_id,trial_started_at,trial_ends_at,current_period_end,source_order_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,NULL,NULL,?,?) ON CONFLICT(clinic_id) DO NOTHING"
     )
     store._execute(
         insert_sql,
