@@ -42,7 +42,7 @@ def upgrade() -> None:
                 name="ck_dental_clinic_entitlement_type",
             ),
             sa.CheckConstraint(
-                "status IN ('trialing','active','past_due','cancelled','expired','paused','lifetime_free')",
+                "status IN ('trialing','active','past_due','cancelled','expired','paused','refunded','lifetime_free')",
                 name="ck_dental_clinic_entitlement_status",
             ),
             sa.CheckConstraint(
