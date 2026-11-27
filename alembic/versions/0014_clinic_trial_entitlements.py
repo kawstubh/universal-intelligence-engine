@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy import inspect
+
+from alembic import op
 
 revision = "0014_clinic_trial_entitlements"
 down_revision = "0013_public_booking_idempotency"
