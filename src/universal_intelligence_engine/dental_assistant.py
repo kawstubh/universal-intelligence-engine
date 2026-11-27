@@ -16,8 +16,8 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .dental_entitlements import ensure_clinic_entitlement, get_clinic_entitlement
 from .dental_auth import hash_password, require_doctor, verify_password
+from .dental_entitlements import ensure_clinic_entitlement, get_clinic_entitlement
 from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
 
