@@ -16,9 +16,9 @@ import uuid
 
 from fastapi import Header, HTTPException, Request
 
+from .dental_entitlements import ensure_clinic_entitlement, get_clinic_entitlement
 from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
-from .dental_entitlements import ensure_clinic_entitlement, get_clinic_entitlement
 
 SESSION_TTL = 60 * 60 * 24 * 30
 _SCRYPT_N = 2**14
