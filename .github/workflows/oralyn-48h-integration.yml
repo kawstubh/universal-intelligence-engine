@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/oralyn-48h-release-integration-20261127
+      - feat/oralyn-master-admin-onboarding-20261127
   pull_request:
     branches:
       - feat/oralyn-clinic-assistant-rbac
