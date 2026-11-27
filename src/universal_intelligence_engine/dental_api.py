@@ -27,6 +27,7 @@ from .dental_auth import (
 from .dental_billing import create_order as create_membership_order_impl
 from .dental_billing import handle_webhook as handle_membership_webhook
 from .dental_billing import plans as membership_plans
+from .dental_entitlements import ensure_clinic_entitlement, get_clinic_entitlement
 from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
@@ -274,15 +275,18 @@ async def get_membership(doctor: Annotated[dict, Depends(require_doctor)]):
     clinic_id = doctor.get("clinic_id", "dr-pranali")
     master = clinic_id == os.getenv("DENTAL_MASTER_CLINIC_ID", "").strip()
     if master:
+        entitlement = ensure_clinic_entitlement(clinic_id)
         return {
             "clinic_id": clinic_id,
-            "plan_id": "master",
+            "plan_id": "founding",
             "name": "Dr. Pranali Master",
-            "status": "active",
+            "status": "lifetime_free",
             "price_inr": 0,
             "period": "forever",
             "master": True,
+            "entitlement": entitlement,
         }
+    entitlement = get_clinic_entitlement(clinic_id)
     store = get_dental_store()
     rows = store._execute(
         "SELECT * FROM dental_memberships WHERE clinic_id=%s ORDER BY created_at DESC LIMIT 1"
@@ -293,6 +297,7 @@ async def get_membership(doctor: Annotated[dict, Depends(require_doctor)]):
     return {
         "clinic_id": clinic_id,
         "membership": rows[0] if rows else None,
+        "entitlement": entitlement,
         "master": False,
     }
 
@@ -456,6 +461,7 @@ async def create_organisation(
         membership = store.create_doctor_membership(
             actor["id"], clinic_id, "owner", connection=connection
         )
+        entitlement = ensure_clinic_entitlement(clinic_id, connection=connection)
         store.audit(
             actor["id"],
             "organisation.created",
@@ -513,6 +519,7 @@ async def create_organisation_workspace(
         membership = store.create_doctor_membership(
             actor["id"], workspace["id"], actor["role"], connection=connection
         )
+        entitlement = ensure_clinic_entitlement(workspace["id"], connection=connection)
         store.audit(
             actor["id"],
             "workspace.created",
