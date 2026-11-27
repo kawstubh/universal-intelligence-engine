@@ -1009,7 +1009,7 @@ async def create_public_demo_request(body: PublicDemoRequestIn, request: Request
             (request_key_hash,),
         )
         if not existing:
-            raise exc
+            raise
         return {
             "status": "already_received",
             "message": "This demo request has already been received. Our team will contact you.",
