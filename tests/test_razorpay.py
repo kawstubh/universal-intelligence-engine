@@ -44,8 +44,11 @@ def _event(
     clinic_id="clinic-a",
     payment_id="pay_test_1",
 ):
+    amount = 999900 if plan_id == "enterprise" else 499900
     entity = {
         "id": order_id,
+        "amount": amount,
+        "currency": "INR",
         "notes": {"clinic_id": clinic_id, "plan_id": plan_id},
         "payments": [{"payment_id": payment_id}],
     }
@@ -54,10 +57,19 @@ def _event(
         "event": event_name,
         "payload": {
             "payment_link": {"entity": entity},
-            "payment": {"entity": {"id": payment_id, "order_id": order_id}},
+            "payment": {
+                "entity": {
+                    "id": payment_id,
+                    "order_id": order_id,
+                    "amount": amount,
+                    "currency": "INR",
+                }
+            },
             "order": {
                 "entity": {
                     "id": order_id,
+                    "amount": amount,
+                    "currency": "INR",
                     "notes": {"clinic_id": clinic_id, "plan_id": plan_id},
                 }
             },
