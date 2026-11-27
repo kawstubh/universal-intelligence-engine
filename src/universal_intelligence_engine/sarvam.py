@@ -28,8 +28,11 @@ class SarvamTokenFactoryReasoningProvider:
         self.base_url = (base_url or os.getenv(
             "SARVAM_BASE_URL", "https://api.sarvam.ai/v2"
         )).rstrip("/")
-        configured_tokens = max_tokens or int(os.getenv("SARVAM_MAX_TOKENS", "512"))
-        self.max_tokens = max(64, min(configured_tokens, 2048))
+        # Sarvam-105B reasoning tokens count against max_tokens. 512 can be consumed
+        # before any user-visible answer is generated. 4096 is the documented
+        # Starter-tier completion budget.
+        configured_tokens = max_tokens or int(os.getenv("SARVAM_MAX_TOKENS", "4096"))
+        self.max_tokens = max(256, min(configured_tokens, 4096))
 
     def reason(
         self,
@@ -82,6 +85,40 @@ class SarvamTokenFactoryReasoningProvider:
             answer = "\n".join(
                 str(part.get("text", "")) for part in answer if isinstance(part, dict)
             ).strip()
+
+        # Sarvam documents that reasoning tokens count against max_tokens. If
+        # reasoning consumed the first budget and finish_reason is "length",
+        # retry once with thinking disabled to reserve tokens for the answer.
+        choice = choices[0] if isinstance(choices, list) and choices else {}
+        if (
+            (not isinstance(answer, str) or not answer.strip())
+            and isinstance(choice, dict)
+            and choice.get("finish_reason") == "length"
+        ):
+            data = _json_request(
+                f"{self.base_url}/chat/completions",
+                method="POST",
+                headers={"api-subscription-key": self.api_key},
+                payload={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "max_tokens": self.max_tokens,
+                    "temperature": 0.2,
+                    "reasoning_effort": None,
+                },
+                timeout=float(os.getenv("SARVAM_TIMEOUT_SECONDS", "90")),
+            )
+            choices = data.get("choices")
+            message = choices[0].get("message", {}) if isinstance(choices, list) and choices else {}
+            answer = message.get("content") if isinstance(message, dict) else None
+            if isinstance(answer, list):
+                answer = "\n".join(
+                    str(part.get("text", "")) for part in answer if isinstance(part, dict)
+                ).strip()
+
         if not isinstance(answer, str) or not answer.strip():
             choice = choices[0] if isinstance(choices, list) and choices else {}
             message = choice.get("message", {}) if isinstance(choice, dict) else {}
