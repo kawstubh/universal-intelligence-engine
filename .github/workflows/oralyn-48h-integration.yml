@@ -35,6 +35,7 @@ jobs:
           ruff check \
             src/universal_intelligence_engine/dental_api.py \
             src/universal_intelligence_engine/dental_auth.py \
+            src/universal_intelligence_engine/dental_assistant.py \
             src/universal_intelligence_engine/dental_billing.py \
             src/universal_intelligence_engine/dental_entitlements.py \
             tests/test_dental_entitlements.py \
