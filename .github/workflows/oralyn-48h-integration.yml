@@ -1,0 +1,44 @@
+name: Oralyn 48-hour integration checks
+
+on:
+  push:
+    branches:
+      - feat/oralyn-48h-release-integration-20261127
+  pull_request:
+    branches:
+      - feat/oralyn-clinic-assistant-rbac
+    paths:
+      - "src/universal_intelligence_engine/dental_*.py"
+      - "alembic/versions/0014_clinic_trial_entitlements.py"
+      - "tests/test_dental_entitlements.py"
+      - "tests/test_dental_entitlement_auth_gate.py"
+      - "tests/test_dental_public_demo_requests.py"
+      - ".github/workflows/oralyn-48h-integration.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package and test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Lint changed backend modules
+        run: |
+          ruff check \
+            src/universal_intelligence_engine/dental_api.py \
+            src/universal_intelligence_engine/dental_auth.py \
+            src/universal_intelligence_engine/dental_billing.py \
+            src/universal_intelligence_engine/dental_entitlements.py \
+            tests/test_dental_entitlements.py \
+            tests/test_dental_entitlement_auth_gate.py \
+            tests/test_dental_public_demo_requests.py
+      - name: Run backend regression and migration tests
+        run: pytest -q
