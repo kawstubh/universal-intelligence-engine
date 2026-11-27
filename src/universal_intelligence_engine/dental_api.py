@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from .dental_auth import (
@@ -1141,10 +1142,13 @@ async def master_admin_provision_demo_request(
         raise HTTPException(404, "Demo request not found")
     demo = rows[0]
     if demo["status"] == "provisioned" and demo.get("clinic_id"):
-        return {
-            "status": "already_provisioned",
-            "clinic_id": demo["clinic_id"],
-        }
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "already_provisioned",
+                "clinic_id": demo["clinic_id"],
+            },
+        )
     if demo["status"] == "rejected":
         raise HTTPException(409, "This demo request has been rejected")
     if store.doctor_by_email(str(demo["email"]).strip().lower()):
