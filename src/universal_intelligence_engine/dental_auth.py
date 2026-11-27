@@ -426,3 +426,29 @@ async def switch_doctor_workspace(
         },
         "workspaces": workspaces,
     }
+
+
+
+async def require_master_admin(
+    request: Request, authorization: str | None = Header(default=None)
+) -> dict:
+    """Require a separately configured platform-admin identity; fail closed."""
+    expected_email = os.getenv("ORALYN_MASTER_ADMIN_EMAIL", "").strip().lower()
+    if not expected_email:
+        raise HTTPException(
+            503,
+            detail={
+                "code": "MASTER_ADMIN_NOT_CONFIGURED",
+                "message": "Oralyn Master Admin access is not configured.",
+            },
+        )
+    actor = await require_doctor(request, authorization)
+    if str(actor.get("email") or "").strip().lower() != expected_email:
+        raise HTTPException(
+            403,
+            detail={
+                "code": "MASTER_ADMIN_REQUIRED",
+                "message": "Oralyn Master Admin access is required.",
+            },
+        )
+    return actor
