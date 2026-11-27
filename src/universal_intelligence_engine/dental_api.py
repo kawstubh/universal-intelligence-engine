@@ -1000,7 +1000,7 @@ async def create_public_demo_request(body: PublicDemoRequestIn, request: Request
                 now,
             ),
         )
-    except Exception as exc:
+    except Exception:
         # A concurrent retry may win the unique idempotency constraint.
         existing = store._execute(
             "SELECT id FROM dental_onboarding_requests WHERE request_key_hash=%s"
