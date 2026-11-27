@@ -1,0 +1,73 @@
+name: Oralyn private document quarantine cleanup
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Delete eligible expired quarantine objects (requires repository variable ORALYN_DOCUMENT_CLEANUP_APPLY_ENABLED=true)"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oralyn-private-document-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Bounded private quarantine cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.ORALYN_CLEANUP_DATABASE_URL }}
+      DENTAL_SQLITE_PATH: ""
+      DENTAL_DOCUMENTS_S3_ENDPOINT: ${{ secrets.ORALYN_DOCUMENTS_S3_ENDPOINT }}
+      DENTAL_DOCUMENTS_S3_REGION: ${{ vars.ORALYN_DOCUMENTS_S3_REGION }}
+      DENTAL_DOCUMENTS_S3_BUCKET: ${{ vars.ORALYN_DOCUMENTS_S3_BUCKET }}
+      DENTAL_DOCUMENTS_S3_ACCESS_KEY_ID: ${{ secrets.ORALYN_DOCUMENTS_S3_ACCESS_KEY_ID }}
+      DENTAL_DOCUMENTS_S3_SECRET_ACCESS_KEY: ${{ secrets.ORALYN_DOCUMENTS_S3_SECRET_ACCESS_KEY }}
+      DENTAL_DOCUMENTS_STORAGE_PRIVATE: ${{ vars.ORALYN_DOCUMENTS_STORAGE_PRIVATE }}
+      DENTAL_DOCUMENTS_CLEANUP_ENABLED: ${{ vars.ORALYN_DOCUMENTS_CLEANUP_ENABLED }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/oralyn-clinic-assistant-rbac
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install backend
+        run: python -m pip install .
+      - name: Validate private cleanup configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DATABASE_URL DENTAL_DOCUMENTS_S3_ENDPOINT DENTAL_DOCUMENTS_S3_BUCKET DENTAL_DOCUMENTS_S3_ACCESS_KEY_ID DENTAL_DOCUMENTS_S3_SECRET_ACCESS_KEY; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Required repository secret/variable is missing: ${name}"
+              exit 1
+            fi
+          done
+          if [[ "${DENTAL_DOCUMENTS_STORAGE_PRIVATE,,}" != "true" ]]; then
+            echo "::error::ORALYN_DOCUMENTS_STORAGE_PRIVATE must be true."
+            exit 1
+          fi
+          if [[ "${DENTAL_DOCUMENTS_CLEANUP_ENABLED,,}" != "true" ]]; then
+            echo "::error::ORALYN_DOCUMENTS_CLEANUP_ENABLED must be true."
+            exit 1
+          fi
+      - name: Run read-only cleanup preview
+        run: python -m universal_intelligence_engine.dental_document_cleanup --min-age-hours 24 --limit 100
+      - name: Apply cleanup only when explicitly authorized
+        if: github.event_name == 'workflow_dispatch' && inputs.apply == true && vars.ORALYN_DOCUMENT_CLEANUP_APPLY_ENABLED == 'true'
+        run: python -m universal_intelligence_engine.dental_document_cleanup --apply --min-age-hours 24 --limit 100
+      - name: Refuse unapproved destructive execution
+        if: github.event_name == 'workflow_dispatch' && inputs.apply == true && vars.ORALYN_DOCUMENT_CLEANUP_APPLY_ENABLED != 'true'
+        run: |
+          echo "::error::Apply was requested but ORALYN_DOCUMENT_CLEANUP_APPLY_ENABLED is not true. No objects were deleted."
+          exit 1
