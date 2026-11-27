@@ -12,7 +12,10 @@ import uuid
 import httpx
 from fastapi import HTTPException
 
-from .dental_entitlements import activate_paid_entitlement, set_clinic_entitlement_status
+from .dental_entitlements import (
+    activate_paid_entitlement,
+    set_clinic_entitlement_status,
+)
 from .dental_store import get_dental_store
 
 PLANS = [
