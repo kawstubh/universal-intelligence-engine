@@ -461,7 +461,7 @@ async def create_organisation(
         membership = store.create_doctor_membership(
             actor["id"], clinic_id, "owner", connection=connection
         )
-        entitlement = ensure_clinic_entitlement(clinic_id, connection=connection)
+        ensure_clinic_entitlement(clinic_id, connection=connection)
         store.audit(
             actor["id"],
             "organisation.created",
@@ -519,7 +519,7 @@ async def create_organisation_workspace(
         membership = store.create_doctor_membership(
             actor["id"], workspace["id"], actor["role"], connection=connection
         )
-        entitlement = ensure_clinic_entitlement(workspace["id"], connection=connection)
+        ensure_clinic_entitlement(workspace["id"], connection=connection)
         store.audit(
             actor["id"],
             "workspace.created",
