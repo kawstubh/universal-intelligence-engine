@@ -6,6 +6,7 @@ from .knowledge import rank_evidence
 from .persistent_memory import PersistentMemoryEngine
 from .reasoning import NativeReasoningProvider, UIEReasoningCoordinator
 from .runtime import SenseActRuntime
+from .planner import AdaptivePlanner, topological_steps, validate_plan
 
 
 class UniversalIntelligenceEngine:
@@ -25,6 +26,7 @@ class UniversalIntelligenceEngine:
         self.lesson_memory = lesson_memory
         self.algorithm = algorithm or AdaptiveReasoningCore()
         self.runtime = runtime or SenseActRuntime()
+        self.planner = AdaptivePlanner(max_steps=8)
 
     def observe_url(self, url: str):
         """Observe an external HTTP resource through UIE eyes."""
@@ -35,6 +37,24 @@ class UniversalIntelligenceEngine:
         return self.runtime.execute_http(**kwargs)
 
     def run(self, request: IntelligenceRequest) -> IntelligenceResponse:
+        # The planner is now part of every live request. Its graph is validated
+        # before any provider is called; execution stages below map to the
+        # engine-owned research/reason/verify pipeline. Consequential actions
+        # remain outside this path and require the governed tool runtime.
+        plan = self.planner.build(request.goal, request.context)
+        validate_plan(plan, allowed_capabilities={"research", "reason", "verify", "act"})
+        ordered_plan = topological_steps(plan)
+        execution_graph = {
+            "planner": "adaptive-native",
+            "plan_version": "0.1.0",
+            "steps": [
+                {"id": step.id, "capability": step.capability,
+                 "depends_on": list(step.depends_on),
+                 "requires_approval": step.requires_approval,
+                 "status": "pending"}
+                for step in ordered_plan
+            ],
+        }
         # Only an explicitly selected domain can recall lessons; never infer a
         # clinical/domain scope from untrusted free text. Only reviewed lessons
         # are injected into the separate, provenance-labelled context field.
@@ -67,7 +87,7 @@ class UniversalIntelligenceEngine:
                 language=request.language, constraints=request.constraints,
             )
         raw_evidence = tuple(self.knowledge.search(request))
-        fused_evidence = tuple(rank_evidence(raw_evidence))
+        for step in execution_graph["steps"]:\n            if step["id"] == "research":\n                step["status"] = "completed"\n                step["result"] = {"evidence_count": len(raw_evidence)}\n        fused_evidence = tuple(rank_evidence(raw_evidence))
         decision = self.algorithm.decide(request, fused_evidence)
         evidence = decision.evidence
         primary_provider = self.reasoning.__class__.__name__
@@ -99,8 +119,7 @@ class UniversalIntelligenceEngine:
                 confidence=response.confidence,
                 metadata=fallback_metadata,
             )
-        evaluation = self.evaluator.evaluate(response) if self.evaluator else None
-
+        for step in execution_graph["steps"]:\n            if step["id"] == "reason":\n                step["status"] = "completed"\n                step["result"] = {"provider": response.metadata.get("provider", "unknown")}\n        evaluation = self.evaluator.evaluate(response) if self.evaluator else None\n        for step in execution_graph["steps"]:\n            if step["id"] == "verify":\n                step["status"] = "completed" if evaluation is None or evaluation.get("passed") else "needs_review"\n                step["result"] = dict(evaluation or {"status": "evaluator_not_configured"})\n            elif step["id"] == "act":\n                step["status"] = "approval_required"\n
         if self.learning_store is not None:
             evaluation_map = dict(evaluation or {})
             reward = float(evaluation_map.get("score", 0.0) or 0.0)
@@ -134,6 +153,7 @@ class UniversalIntelligenceEngine:
             "decision_confidence": decision.confidence,
             "decision_signals": decision.signals,
             "decision_trace": list(decision.trace),
+            "execution_graph": execution_graph,
             "reviewed_lessons_recalled": len(recalled_lessons),
             "applied_lesson_ids": [item["id"] for item in recalled_lessons],
         })
