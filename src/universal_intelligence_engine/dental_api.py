@@ -28,6 +28,7 @@ from .dental_billing import create_order as create_membership_order_impl
 from .dental_billing import handle_webhook as handle_membership_webhook
 from .dental_billing import plans as membership_plans
 from .dental_entitlements import ensure_clinic_entitlement, get_clinic_entitlement
+from .dental_inventory import router as inventory_router
 from .dental_rate_limit import enforce_shared_rate_limit
 from .dental_store import get_dental_store
 from .scano_adapter import get_scano_adapter
@@ -216,7 +217,7 @@ class PublicAppointmentIn(BaseModel):
             or local_time.microsecond != 0
         ):
             raise ValueError(
-                "Choose an available clinic slot: 10 AM–2 PM or 5 PM–9 PM"
+                "Choose an available clinic slot: 10 AMâ€“2 PM or 5 PMâ€“9 PM"
             )
 
         normalized = value.astimezone(UTC)
@@ -1188,7 +1189,7 @@ async def create_public_appointment(body: PublicAppointmentIn, request: Request)
     }
 
 
-@router.post("/public/appointments/lookup")
+@router.post("/public/appointments/lookup", openapi_extra={"security": []})
 async def lookup_public_appointment(body: PublicAppointmentLookupIn, request: Request):
     """Return minimal booking status after matching its receipt and phone fingerprint."""
     _check_public_appointment_rate_limit(_public_appointment_client_ip(request))
@@ -1504,3 +1505,6 @@ async def run_dental_intelligence(
         store.record_ai(body.patient_id, body.goal, result, clinic_id)
     store.audit(actor.get("id"), "run", "dental_intelligence", body.patient_id, clinic_id=clinic_id)
     return result
+
+
+router.include_router(inventory_router)
