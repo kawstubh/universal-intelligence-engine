@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import hmac
 import ipaddress
 import json
@@ -1252,6 +1253,13 @@ async def master_admin_provision_demo_request(
         "activation_token": activation_token,
         "activation_expires_at": now + 24 * 60 * 60,
         "activation_path": "/owner-activate",
+        "activation_url": (
+            os.getenv("ORALYN_PUBLIC_APP_URL", "").strip().rstrip("/")
+            + "/owner-activate?token="
+            + activation_token
+            if os.getenv("ORALYN_PUBLIC_APP_URL", "").strip()
+            else None
+        ),
     }
 
 
