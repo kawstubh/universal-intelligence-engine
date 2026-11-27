@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import hmac
 import ipaddress
 import json
