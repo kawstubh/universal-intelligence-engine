@@ -126,3 +126,31 @@ def require_entitled(clinic_id: str) -> dict:
             },
         )
     return entitlement
+
+
+def set_clinic_entitlement_status(
+    clinic_id: str,
+    status: str,
+    *,
+    plan_id: str | None = None,
+    period_end: int | None = None,
+    source_order_id: str | None = None,
+) -> dict:
+    """Apply a verified subscription lifecycle status without altering the founding clinic."""
+    if status not in {"past_due", "cancelled", "expired", "paused", "refunded"}:
+        raise HTTPException(400, "Unsupported clinic entitlement status")
+    store = get_dental_store()
+    current = ensure_clinic_entitlement(clinic_id)
+    if current.get("entitlement_type") == "founding_free":
+        return current
+    now = str(int(time.time()))
+    sql = (
+        "UPDATE dental_clinic_entitlements SET status=%s,plan_id=COALESCE(%s,plan_id),current_period_end=COALESCE(%s,current_period_end),source_order_id=COALESCE(%s,source_order_id),updated_at=%s WHERE clinic_id=%s"
+        if _is_postgres(store)
+        else "UPDATE dental_clinic_entitlements SET status=?,plan_id=COALESCE(?,plan_id),current_period_end=COALESCE(?,current_period_end),source_order_id=COALESCE(?,source_order_id),updated_at=? WHERE clinic_id=?"
+    )
+    store._execute(
+        sql,
+        (status, plan_id, period_end, source_order_id, now, clinic_id),
+    )
+    return get_clinic_entitlement(clinic_id) or {}
