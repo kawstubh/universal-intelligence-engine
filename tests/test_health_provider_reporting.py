@@ -39,3 +39,14 @@ def test_health_reports_configured_reasoning_provider(monkeypatch):
     assert providers["reasoning_model"] == "test-model"
     assert providers["knowledge"] is True
     assert providers["knowledge_provider"] == "wikipedia+europe-pmc-public-api"
+
+
+def test_health_reports_missing_explicit_sarvam_provider_as_unavailable(monkeypatch):
+    monkeypatch.setenv("UIE_REASONING_PROVIDER", "sarvam")
+    monkeypatch.delenv("SARVAM_API_KEY", raising=False)
+
+    providers = api.health()["providers"]
+
+    assert providers["reasoning"] is False
+    assert providers["reasoning_configured"] is False
+    assert providers["reasoning_provider"] == "sarvam-token-factory"
