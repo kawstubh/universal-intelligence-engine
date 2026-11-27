@@ -344,7 +344,7 @@ def health() -> dict[str, Any]:
         "version": app.version,
         "providers": {
             "knowledge": True,
-            "reasoning": True,
+            "reasoning": provider_configured,
             "knowledge_provider": "wikipedia+europe-pmc-public-api",
             "knowledge_mode": "best-effort-public-sources",
             "knowledge_limitations": "Not broad web search; evidence may be empty if public sources are unavailable or return no results.",
