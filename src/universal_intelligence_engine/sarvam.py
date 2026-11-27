@@ -83,7 +83,24 @@ class SarvamTokenFactoryReasoningProvider:
                 str(part.get("text", "")) for part in answer if isinstance(part, dict)
             ).strip()
         if not isinstance(answer, str) or not answer.strip():
-            raise RuntimeError("Sarvam returned no completion text")
+            choice = choices[0] if isinstance(choices, list) and choices else {}
+            message = choice.get("message", {}) if isinstance(choice, dict) else {}
+            diagnostics = {
+                "response_keys": sorted(data.keys()),
+                "choices_type": type(choices).__name__,
+                "choices_count": len(choices) if isinstance(choices, list) else None,
+                "choice_keys": sorted(choice.keys()) if isinstance(choice, dict) else [],
+                "message_keys": sorted(message.keys()) if isinstance(message, dict) else [],
+                "content_type": type(message.get("content")).__name__ if isinstance(message, dict) else None,
+                "content_is_empty": not bool(message.get("content")) if isinstance(message, dict) else None,
+                "reasoning_content_present": bool(message.get("reasoning_content")) if isinstance(message, dict) else False,
+                "finish_reason": choice.get("finish_reason") if isinstance(choice, dict) else None,
+                "provider_error_present": bool(data.get("error")),
+            }
+            raise RuntimeError(
+                "Sarvam returned no completion text; safe response diagnostics: "
+                + json.dumps(diagnostics, sort_keys=True)
+            )
 
         return IntelligenceResponse(
             answer=answer.strip(),
