@@ -90,7 +90,8 @@ class UniversalIntelligenceEngine:
         for step in execution_graph["steps"]:
             if step["id"] == "research":
                 step["status"] = "completed"
-                step["result"] = {"evidence_count": len(raw_evidence)}\n        fused_evidence = tuple(rank_evidence(raw_evidence))
+                step["result"] = {"evidence_count": len(raw_evidence)}
+        fused_evidence = tuple(rank_evidence(raw_evidence))
         decision = self.algorithm.decide(request, fused_evidence)
         evidence = decision.evidence
         primary_provider = self.reasoning.__class__.__name__
@@ -132,7 +133,8 @@ class UniversalIntelligenceEngine:
                 step["status"] = "completed" if evaluation is None or evaluation.get("passed") else "needs_review"
                 step["result"] = dict(evaluation or {"status": "evaluator_not_configured"})
             elif step["id"] == "act":
-                step["status"] = "approval_required"\n
+                step["status"] = "approval_required"
+
         if self.learning_store is not None:
             evaluation_map = dict(evaluation or {})
             reward = float(evaluation_map.get("score", 0.0) or 0.0)
