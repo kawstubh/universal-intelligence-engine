@@ -233,6 +233,7 @@ def _doctor_only_openapi():
         ("post", "/v1/dental/assistant/auth/login"),
         ("post", "/v1/dental/public/appointments"),
         ("post", "/v1/dental/public/demo-requests"),
+        ("post", "/v1/dental/public/owner-activate"),
         ("get", "/v1/dental/billing/plans"),
         ("post", "/v1/dental/billing/razorpay/webhook"),
     }
